@@ -85,6 +85,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "naming-screen/",
     "field-effect/",
     "party-menu/",
+    "pc-wallpaper/",
 ];
 
 /// The text printer's page-prompt arrows (light, then dark), by id:
@@ -278,6 +279,41 @@ const PARTY_MENU_IDS: [&str; 14] = [
     "party-menu/raw/cancel_button",
 ];
 
+/// The twelve non-default standard PC wallpapers, by the byte a save file
+/// stores and the stem their pack ids use, named independently of the checkout
+/// extractor, the profile and the typed accessor. `pc-wallpaper/` is a
+/// complete prefix, but a wallpaper both backends drop together would pass it.
+const PC_WALLPAPERS: [(u8, &str); 12] = [
+    (4, "crag"),
+    (5, "volcano"),
+    (6, "snow"),
+    (7, "cave"),
+    (8, "beach"),
+    (9, "seafloor"),
+    (10, "river"),
+    (11, "sky"),
+    (12, "polkadot"),
+    (13, "pokecenter"),
+    (14, "machine"),
+    (15, "plain"),
+];
+
+/// The four pack ids of each pinned wallpaper: sheet, tilemap, frame palette
+/// and background palette.
+fn pc_wallpaper_ids() -> Vec<String> {
+    PC_WALLPAPERS
+        .iter()
+        .flat_map(|(_, stem)| {
+            [
+                format!("pc-wallpaper/{stem}/tiles"),
+                format!("pc-wallpaper/{stem}/tilemap"),
+                format!("pc-wallpaper/{stem}/palette/frame"),
+                format!("pc-wallpaper/{stem}/palette/background"),
+            ]
+        })
+        .collect()
+}
+
 /// The Birch-speech portraits: the front image and palette of Brendan and of
 /// May. Named by id so portraits both backends drop together still fail.
 const TRAINER_PORTRAIT_IDS: [&str; 4] = [
@@ -424,6 +460,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .chain(TRAINER_BATTLER_IDS.into_iter().map(str::to_owned))
         .chain(DOWN_ARROW_IDS.into_iter().map(str::to_owned))
         .chain(PARTY_MENU_IDS.into_iter().map(str::to_owned))
+        .chain(pc_wallpaper_ids())
         .collect();
     differences.extend(missing_from_either(&pinned, &imported, &checkout));
 
@@ -1022,6 +1059,154 @@ fn the_party_menu_profile_roots_are_the_pinned_ids() {
     ] {
         assert_eq!(map(&format!("party-menu/raw/{id}")), (Raw, len), "{id}");
     }
+}
+
+/// Every non-default wallpaper resolves through the typed accessor from both
+/// packs, and the two are equal entry for entry. The accessor validates the
+/// sheet, tilemap words and palettes, so a ROM import that wrote a payload the
+/// reader refuses fails here as well as in the byte comparison.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_pc_wallpapers_are_equal_from_the_rom_and_the_checkout() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-pc-wallpaper-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+    let imported = AssetPack::load(&imported_path);
+    let _ = std::fs::remove_file(&imported_path);
+    let imported = imported.expect("the imported pack loads");
+    let checkout = AssetPack::load(&checkout_path).expect("the checkout pack loads");
+
+    for (raw, stem) in PC_WALLPAPERS {
+        let ours = imported
+            .pc_wallpaper(raw)
+            .unwrap_or_else(|err| panic!("the imported {stem}: {err}"));
+        let theirs = checkout
+            .pc_wallpaper(raw)
+            .unwrap_or_else(|err| panic!("the checkout {stem}: {err}"));
+        for handle in [&ours, &theirs] {
+            assert_eq!((handle.id.index(), handle.id.stem()), (raw, stem));
+        }
+        let (a, b) = (&ours.tiles, &theirs.tiles);
+        assert_eq!(
+            (a.width, a.height, a.bit_depth),
+            (b.width, b.height, b.bit_depth),
+            "{stem}: sheet shape"
+        );
+        assert!(a.pixels == b.pixels, "{stem}: sheet pixels differ");
+        assert!(ours.tilemap == theirs.tilemap, "{stem}: tilemap differs");
+        assert!(
+            ours.entries().eq(theirs.entries()),
+            "{stem}: tilemap entries differ"
+        );
+        for (slot, (a, b)) in ours.palettes.iter().zip(&theirs.palettes).enumerate() {
+            assert_eq!(
+                (a.color_count, b.color_count),
+                (16, 16),
+                "{stem}: bank {slot}"
+            );
+            assert!(
+                a.colors().eq(b.colors()),
+                "{stem}: bank {slot} colours differ"
+            );
+        }
+    }
+    eprintln!("twelve PC wallpapers equal through both backends");
+}
+
+/// The profile's wallpaper roots are exactly the twelve pinned wallpapers, each
+/// in its own `sWallpapers` row with the encodings and shapes upstream stores,
+/// so the complete `pc-wallpaper/` prefix cannot pass by both backends
+/// dropping the same wallpaper.
+#[test]
+fn the_pc_wallpaper_profile_roots_are_the_pinned_wallpapers() {
+    use rom_import::Encoding::{Lz77, Raw};
+    let roots = &rom_import::EMERALD_US_REV0.roots.pc_wallpaper;
+    assert_eq!(roots.wallpapers.len(), PC_WALLPAPERS.len());
+    for (paper, (raw, stem)) in roots.wallpapers.iter().zip(PC_WALLPAPERS) {
+        assert_eq!(paper.wallpaper, raw, "{stem}");
+        assert_eq!(paper.tiles.id, format!("pc-wallpaper/{stem}/tiles"));
+        assert_eq!(paper.tilemap.id, format!("pc-wallpaper/{stem}/tilemap"));
+        assert_eq!(
+            paper.frame_palette.id,
+            format!("pc-wallpaper/{stem}/palette/frame")
+        );
+        assert_eq!(
+            paper.background_palette.id,
+            format!("pc-wallpaper/{stem}/palette/background")
+        );
+        let tiles = &paper.tiles;
+        assert_eq!(
+            (
+                tiles.encoding,
+                tiles.width,
+                tiles.rom_bit_depth,
+                tiles.pack_bit_depth
+            ),
+            (Lz77, 8, 4, 4),
+            "{stem}"
+        );
+        assert_eq!(tiles.height % 8, 0, "{stem}");
+        assert!((1..=tiles.height / 8).contains(&tiles.tile_count), "{stem}");
+        assert_eq!(
+            (paper.tilemap.encoding, paper.tilemap.len),
+            (Lz77, 20 * 18 * 2)
+        );
+        for bank in [&paper.frame_palette, &paper.background_palette] {
+            assert_eq!((bank.encoding, bank.color_count), (Raw, 16), "{stem}");
+        }
+        assert_eq!(
+            paper.background_palette.addr.raw(),
+            paper.frame_palette.addr.raw() + 32,
+            "{stem}"
+        );
+    }
+    for id in pc_wallpaper_ids() {
+        assert!(is_claimed_complete(&id), "{id}");
+    }
+}
+
+/// The wallpaper pin reports a record dropped by either backend, and by both.
+#[test]
+fn a_pc_wallpaper_dropped_by_either_backend_or_both_is_reported() {
+    let ids = pc_wallpaper_ids();
+    assert_eq!(ids.len(), 48);
+    let pack_without = |dropped: &[&str]| {
+        let mut writer = pack_format::PackWriter::new();
+        for id in ids.iter().filter(|id| !dropped.contains(&id.as_str())) {
+            writer.push(pack_format::raw_entry(id.clone(), vec![0]));
+        }
+        index(&writer.finish().expect("a valid pack"), "a synthetic pack")
+    };
+    let missing = |imported: &[&str], checkout: &[&str]| {
+        missing_from_either(&ids, &pack_without(imported), &pack_without(checkout))
+    };
+    let polkadot = "pc-wallpaper/polkadot/tilemap";
+    assert!(missing(&[], &[]).is_empty());
+    assert_eq!(
+        missing(&[polkadot], &[]),
+        [format!("{polkadot}: the ROM backend wrote no such entry")]
+    );
+    assert_eq!(
+        missing(&[], &[polkadot]),
+        [format!("{polkadot}: the checkout pack wrote no such entry")]
+    );
+    assert_eq!(missing(&[polkadot], &[polkadot]).len(), 2);
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is

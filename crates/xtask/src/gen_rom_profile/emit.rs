@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+mod pc_wallpaper;
 mod poke_ball;
 
 use rom_import::Encoding;
@@ -80,6 +81,7 @@ use crate::roots::{{
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
 }};
+use crate::roots::{{PcWallpaperRoot, PcWallpaperRoots}};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
 use crate::roots::{{TrainerFrontRoot, TrainerFrontRoots}};
 
@@ -149,6 +151,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
 
     battler_roots(&mut out, &plan.battlers);
     poke_ball::poke_ball_roots(&mut out, &plan.poke_ball);
+    pc_wallpaper::pc_wallpaper_roots(&mut out, &plan.pc_wallpaper);
 
     trainer_front_roots(&mut out, &plan.trainer_front);
 
@@ -1353,6 +1356,7 @@ mod bag_field_tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "one plan field per root family")]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
         let plan = ProfilePlan {
@@ -1421,6 +1425,7 @@ mod bag_field_tests {
             opening_scene: scene_plan(),
             evolution_scene: evolution_plan(),
             poke_ball: super::poke_ball::tests::plan(),
+            pc_wallpaper: super::pc_wallpaper::tests::plan(),
             battle_interface: interface_plan(),
             naming_screen: naming_plan(),
             party_menu: party_menu_plan(),
@@ -1432,6 +1437,10 @@ mod bag_field_tests {
         assert_evolution_roots(&module);
         assert!(
             module.contains("    poke_ball: PokeBallRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("    pc_wallpaper: PcWallpaperRoots {"),
             "{module}"
         );
         assert_interface_roots(&module);

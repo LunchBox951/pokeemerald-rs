@@ -44,6 +44,7 @@ mod opening_scene;
 mod pack_source;
 mod palettes;
 mod party_menu;
+mod pc_wallpaper;
 mod plan;
 mod poke_ball;
 mod search;
@@ -190,6 +191,7 @@ fn locate_profile(
         party_menu: party_menu::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
         poke_ball: poke_ball::locate(ctx, lines)?,
+        pc_wallpaper: pc_wallpaper::locate(ctx, lines)?,
         trainer_front,
         trainer_battlers,
     })

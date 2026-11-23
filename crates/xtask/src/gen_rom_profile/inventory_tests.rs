@@ -9,15 +9,16 @@ use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
     field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
-    opening_scene, party_menu, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
+    opening_scene, party_menu, pc_wallpaper, poke_ball, sprites, starter_chooser, text_window,
+    tilesets, title,
 };
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
     healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids,
-    party_menu_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
-    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, GENERAL_1_PALETTE_ID,
-    INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS, TALL_GRASS_IMAGE_ID,
-    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    party_menu_ids, pc_wallpaper_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids,
+    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
+    GENERAL_1_PALETTE_ID, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS,
+    TALL_GRASS_IMAGE_ID, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -63,6 +64,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(healthbox_element_ids())
         .chain(healthbox_frame_ids())
         .chain(poke_ball_ids())
+        .chain(pc_wallpaper_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -107,6 +109,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             party_menu::locate(ctx, &mut report).map(|_| ())
         } else if domain == "interface" {
             interface::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "pc_wallpaper" {
+            pc_wallpaper::locate(ctx, &mut report).map(|_| ())
         } else if domain == "poke_ball" {
             poke_ball::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
@@ -170,6 +174,7 @@ fn the_fixed_inventory_ids_are_unique() {
         naming_screen_ids(),
         party_menu_ids(),
         poke_ball_ids(),
+        pc_wallpaper_ids(),
         trainer_battler_ids(),
     ] {
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
@@ -921,5 +926,13 @@ fn a_pack_missing_a_poke_ball_entry_is_refused() {
     for id in poke_ball_ids() {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "poke_ball");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_pc_wallpaper_entry_is_refused() {
+    for id in pc_wallpaper_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "pc_wallpaper");
     }
 }

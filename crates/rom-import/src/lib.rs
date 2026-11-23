@@ -51,6 +51,7 @@
 //!   evolution scene's background and sparkle (`evolution-scene/*`), the
 //!   battle textbox with the two menu text palettes (`battle-interface/*`), the
 //!   naming screen's sheets, palettes and tilemaps (`naming-screen/*`), the
+//!   twelve non-default PC wallpapers (`pc-wallpaper/*`, behind `sWallpapers`), the
 //!   Brendan and May trainer front pictures (`trainer-pic/*`, behind
 //!   `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`) and trainer
 //!   battlers (`trainer/*`: the same front pictures again, the uncompressed
@@ -141,6 +142,7 @@ pub use roots::{
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
     VoicegroupRoot,
 };
+pub use roots::{PcWallpaperRoot, PcWallpaperRoots};
 pub use roots::{TrainerBackRoot, TrainerBattlerRoots};
 pub use roots::{TrainerFrontRoot, TrainerFrontRoots};
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
