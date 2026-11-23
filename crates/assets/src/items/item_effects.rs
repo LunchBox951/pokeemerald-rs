@@ -148,7 +148,9 @@ impl ItemEffect {
     /// Argument bytes sit in flag order from [`ITEM_EFFECT_ARG_START`]. The
     /// scan tests overlapping bits rather than looking up one flag's argument:
     /// once the item sets the queried bit, it returns the first counted flag at
-    /// or below that bit, so several queries can return the same offset.
+    /// or below that bit, so several queries can return the same offset. The
+    /// exception is `ITEM4_REVIVE`: the scan clears it while it handles
+    /// `ITEM4_HEAL_HP`, so that query matches nothing.
     /// Counting a flag advances the offset but does not mean the flag has an
     /// argument byte: `PP_MAX` is counted without one, and the PP Max item's
     /// three argument bytes belong to the three friendship flags.
