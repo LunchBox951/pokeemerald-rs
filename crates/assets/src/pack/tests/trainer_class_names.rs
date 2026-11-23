@@ -371,9 +371,8 @@ fn accessor_valid_missing_wrong_kind_and_malformed() {
     ));
 }
 
-/// A pack stamped with the version before the class table landed (#3229's
-/// extractor writes version 14 without `trainer-class-name/table`) is refused
-/// at load as stale, not accepted and failed at lookup.
+/// A version-14 pack has no `trainer-class-name/table`, so it is refused at
+/// load as stale, not accepted and failed at lookup.
 #[test]
 fn a_pack_from_before_the_class_table_is_refused_on_load() {
     const PREVIOUS_FORMAT_VERSION: u32 = 14;
