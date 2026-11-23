@@ -987,7 +987,7 @@ impl BattlePokemon {
     /// other status zeroes it.
     ///
     /// The toxic residual must not call this: it advances only the battle
-    /// copy's count ([`BattlePokemon::advance_toxic_turns`]).
+    /// copy's count (`BattlePokemon::advance_toxic_turns`).
     ///
     /// # Panics
     ///

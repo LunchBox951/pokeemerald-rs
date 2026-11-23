@@ -152,7 +152,7 @@ pub(super) fn front_tile(player: &PlayerState, runtime: &MapRuntime<'_>) -> Opti
 /// Returns the visible object one tile in front of the player.
 ///
 /// `runtime` must be bound to the map containing `player`. The tile and elevation are
-/// [`front_tile`]'s.
+/// `front_tile`'s.
 #[must_use]
 pub fn facing_object_event<'a>(
     player: &PlayerState,

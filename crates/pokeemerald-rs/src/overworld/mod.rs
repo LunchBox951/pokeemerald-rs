@@ -42,9 +42,9 @@
 //! # Field effects
 //!
 //! The scene owns the tall-grass effects of the player and the object events
-//! ([`grass`]): the phase starts them as either steps onto or is placed on tall
+//! (`grass`): the phase starts them as either steps onto or is placed on tall
 //! grass, and advances them
-//! once a frame ([`OverworldScene::advance_tall_grass`]); composing only draws
+//! once a frame (`OverworldScene::advance_tall_grass`); composing only draws
 //! them, as OBJs beside the player and the object events.
 //!
 //! # Border fallback

@@ -15,7 +15,7 @@
 //! scene in it -- a clean, no-panic diagnostic naming what to run. See
 //! [`title`]'s module docs.
 //!
-//! [`import_rom`](crate::import_rom) (S-4, Discussion #71 policy C) is the
+//! [`import_rom`](mod@crate::import_rom) (S-4, Discussion #71 policy C) is the
 //! other half of that: the binary's `--import-rom <path>` flag
 //! reads the player's own Pokemon Emerald (US) ROM through the `rom-import`
 //! crate and writes the pack where `pack_format` resolves it, atomically.
@@ -44,14 +44,14 @@
 //! handoff from a rolled species/level to a real `battle::Battle` lives in
 //! `flow::wild_encounter`, headless for now — there is no battle scene yet.
 //!
-//! [`game_save`](crate::game_save) closes the loop (I-6): the overworld's live `SaveBlock1`/`SaveBlock2` are written
+//! `game_save` closes the loop (I-6): the overworld's live `SaveBlock1`/`SaveBlock2` are written
 //! to a real save file when the player saves, and read back at boot so the
 //! main menu can offer `CONTINUE` — upstream's
 //! `LoadGameSave`/`TrySavingData` pair, over `engine::save`'s existing
 //! sector serialization. The write is reached the way upstream reaches it:
 //! `START` in the overworld opens the field
-//! [`start_menu`](crate::start_menu), whose `SAVE` action runs
-//! `src/start_menu.c`'s confirm/overwrite chain. [`party`](crate::party)
+//! `start_menu`, whose `SAVE` action runs
+//! `src/start_menu.c`'s confirm/overwrite chain. `party`
 //! is the `gPlayerParty` <-> `SaveBlock1::playerParty` encoder that save
 //! and continue are bracketed by, so a continued session fights with the
 //! mon that was saved. Saving a *loaded* mon merges rather than rebuilds:
@@ -89,7 +89,7 @@
 //! otherwise-identical `FirstBattle` -> `Overworld` transition produced by
 //! an aborted fight.
 //!
-//! [`flow::route103_rival`] is the Route 103 rival battle's own
+//! `flow::route103_rival` is the Route 103 rival battle's own
 //! `BATTLE_TYPE_TRAINER` construction and headless driver. In production,
 //! facing the rival's object event on
 //! Route 103 and pressing A (`Route103_EventScript_Rival`, recognized by

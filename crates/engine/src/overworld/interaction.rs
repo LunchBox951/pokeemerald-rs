@@ -50,7 +50,7 @@ pub enum InteractionTarget {
 /// bases the save already holds: facing a secret-base entrance whose base is among them selects no
 /// background event, so the metatile stage runs next (`TrySetCurSecretBase` fails,
 /// `secret_base.c:681-689`; `field_control_avatar.c:354-361`). Every stage queries the tile in front
-/// of the player at the elevation [`front_tile`] derives, and reads the metatile behavior of that
+/// of the player at the elevation `front_tile` derives, and reads the metatile behavior of that
 /// front tile, not the tile the player stands on (`field_control_avatar.c:170-172`). An object
 /// whose script is null is selected by position but has nothing to run, so selection falls
 /// through to the background-event stage without trying a counter's far side.
