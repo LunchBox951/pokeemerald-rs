@@ -361,7 +361,7 @@ fn an_object_walked_out_of_view_survives_on_its_initial_tile_then_is_removed_and
 
 #[test]
 fn movement_types_without_a_callback_yet_stay_inert() {
-    let mut rig = rig_with(MovementType::WanderAround);
+    let mut rig = rig_with(MovementType::WalkSequenceUpRightLeftDown);
     rig.collection
         .get_mut(1)
         .unwrap()

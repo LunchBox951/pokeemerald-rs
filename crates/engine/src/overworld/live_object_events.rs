@@ -370,6 +370,9 @@ impl ObjectEventCollection {
                 type_func_id: 0,
                 delay: 0,
                 scheduled: entry.state.movement_type(),
+                sequence_index: 0,
+                range_x: 0,
+                range_y: 0,
             };
         }
     }
@@ -809,6 +812,7 @@ mod tests {
                     frozen: false,
                     player_dashing: false,
                     terrain: terrain.runtime(),
+                    connected_maps: &crate::overworld::NoConnectedMaps,
                     player_previous_position: player,
                     player_elevation: crate::overworld::object_event_harness::FLOOR_ELEVATION,
                 },
