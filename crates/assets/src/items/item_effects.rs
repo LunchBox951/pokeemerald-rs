@@ -145,11 +145,23 @@ impl ItemEffect {
     /// starts in [`Self::bytes`], following upstream's scan
     /// (`pokemon.c:5324-5434`).
     ///
-    /// Argument bytes are laid out in flag order, one per set flag that takes
-    /// one, starting at [`ITEM_EFFECT_ARG_START`]. A query on a flag field
-    /// 0 to 3, or on `ITEM4_EVO_STONE` or `ITEM5_FRIENDSHIP_HIGH`, yields 0.
-    /// A query that matches no argument yields the offset just past the last
-    /// counted argument, so callers must check the flag themselves.
+    /// Argument bytes sit in flag order from [`ITEM_EFFECT_ARG_START`]. The
+    /// scan tests overlapping bits rather than looking up one flag's argument:
+    /// once the item sets the queried bit, it returns the first counted flag at
+    /// or below that bit, so several queries can return the same offset. The
+    /// exception is a flag the scan clears, `ITEM4_PP_UP` up front and
+    /// `ITEM4_REVIVE` at `ITEM4_HEAL_HP`: afterwards that query matches nothing.
+    /// Counting a flag advances the offset but does not mean the flag has an
+    /// argument byte: `PP_MAX` is counted without one, and the PP Max item's
+    /// three argument bytes belong to the three friendship flags.
+    ///
+    /// The result is 0 for fields 0 to 3, or when the scan first reaches a set
+    /// `ITEM4_EVO_STONE` or `ITEM5_FRIENDSHIP_HIGH` bit in the queried field,
+    /// whether or not the queried bit is set. Otherwise a query that matches
+    /// nothing yields [`ITEM_EFFECT_ARG_START`] plus the number of flags the
+    /// scan counted, which can pass the end of the effect. A caller cannot
+    /// read the result as the queried flag's argument and must check the flag
+    /// itself.
     #[must_use]
     pub fn param_offset(&self, effect_byte: usize, effect_bit: u8) -> usize {
         let mut effect_bit = effect_bit;
@@ -442,8 +454,10 @@ impl Default for ItemEffectTable {
 #[cfg(test)]
 mod tests {
     use super::{
-        ItemEffect, ItemEffectSlot, ItemEffectTable, ITEM3_STATUS_ALL, ITEM4_EVO_STONE,
-        ITEM4_HEAL_HP, ITEM4_REVIVE, ITEM5_EV_DEF, ITEM5_FRIENDSHIP_MID, ITEM_EFFECT_SLOTS,
+        neg, ItemEffect, ItemEffectSlot, ItemEffectTable, ITEM3_STATUS_ALL, ITEM4_EVO_STONE,
+        ITEM4_HEAL_HP, ITEM4_PP_UP, ITEM4_REVIVE, ITEM5_EV_DEF, ITEM5_FRIENDSHIP_ALL,
+        ITEM5_FRIENDSHIP_HIGH, ITEM5_FRIENDSHIP_LOW, ITEM5_FRIENDSHIP_MID, ITEM5_PP_MAX,
+        ITEM_EFFECT_SLOTS,
     };
     use crate::error::AssetError;
     use crate::items::{ItemId, ItemTable};
@@ -591,8 +605,50 @@ mod tests {
         assert_eq!(hp_up.param_offset(4, 0x01), 6);
         assert_eq!(hp_up.heal_hp_param_offset(), 9);
         assert_eq!(effect(ItemId::IRON).param_offset(5, ITEM5_EV_DEF), 6);
+    }
+
+    #[test]
+    fn overlapping_friendship_queries_all_return_the_low_argument_offset() {
         let energy_powder = effect(ItemId::ENERGY_POWDER);
+        assert_eq!(energy_powder.bytes()[5], ITEM5_FRIENDSHIP_ALL);
+        assert_eq!(energy_powder.param_offset(5, ITEM5_FRIENDSHIP_LOW), 7);
         assert_eq!(energy_powder.param_offset(5, ITEM5_FRIENDSHIP_MID), 7);
+        assert_eq!(energy_powder.param_offset(5, ITEM5_FRIENDSHIP_HIGH), 7);
+        assert_eq!(energy_powder.arguments()[1..], [neg(5), neg(5), neg(10)]);
+    }
+
+    #[test]
+    fn scan_returns_zero_on_reaching_a_set_high_friendship_bit() {
+        let high_only = ItemEffect::new(&[0, 0, 0, 0, 0, ITEM5_FRIENDSHIP_HIGH, 1]);
+        assert_eq!(high_only.param_offset(5, ITEM5_FRIENDSHIP_HIGH), 0);
+        assert_eq!(high_only.param_offset(5, ITEM5_FRIENDSHIP_LOW), 0);
+        let energy_powder = effect(ItemId::ENERGY_POWDER);
+        assert_eq!(energy_powder.param_offset(5, ITEM5_EV_DEF), 0);
+    }
+
+    #[test]
+    fn pp_max_query_matches_the_counted_pp_max_flag() {
+        let pp_max = effect(ItemId::PP_MAX);
+        assert_eq!(pp_max.bytes()[4], 0);
+        assert_eq!(pp_max.bytes()[5], ITEM5_PP_MAX | ITEM5_FRIENDSHIP_ALL);
+        assert_eq!(pp_max.arguments(), [5, 3, 2]);
+        assert_eq!(pp_max.param_offset(5, ITEM5_PP_MAX), 6);
+        assert_eq!(pp_max.param_offset(5, ITEM5_FRIENDSHIP_LOW), 6);
+    }
+
+    #[test]
+    fn revive_bit_does_not_match_its_own_query() {
+        let revive = effect(ItemId::REVIVE);
+        assert_eq!(revive.param_offset(4, ITEM4_HEAL_HP), 6);
+        assert_eq!(revive.param_offset(4, ITEM4_REVIVE), 7);
+    }
+
+    #[test]
+    fn pp_up_bit_does_not_match_its_own_query() {
+        assert_eq!(effect(ItemId::PP_UP).param_offset(4, ITEM4_PP_UP), 8);
+        let pp_up_and_heal = ItemEffect::new(&[0, 0, 0, 0, ITEM4_PP_UP | ITEM4_HEAL_HP, 0, 20]);
+        assert_eq!(pp_up_and_heal.param_offset(4, ITEM4_HEAL_HP), 6);
+        assert_eq!(pp_up_and_heal.param_offset(4, ITEM4_PP_UP), 7);
     }
 
     #[test]
