@@ -27,7 +27,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this crate, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the eleven pipelines
+//! one of the battle scripts this crate reproduces — the twelve pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script |
@@ -43,6 +43,7 @@
 //! | [`confuse`] | `BattleScript_EffectConfuse` ([`confuse::is_confuse_effect`]) |
 //! | [`leech_seed`] | `BattleScript_EffectLeechSeed` ([`leech_seed::is_leech_seed_effect`]) |
 //! | [`rollout`] | `BattleScript_EffectRollout` ([`rollout::is_rollout_effect`]) |
+//! | `battle::execute::yawn` | `BattleScript_EffectYawn` |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -154,9 +155,9 @@
 //! multiply, in the real damage path and the trainer AI's estimate alike.
 //! [`ability::guts_attack`] and [`ability::marvel_scale_defense`] read
 //! primary status the same way, applied inside
-//! [`pokemon::BattlePokemon::attacking_stat`] and
-//! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
-//! them. [`ability::burn_halves_damage`] feeds the hit pipeline's,
+//! [`pokemon::BattlePokemon::damage_attacking_stat`] and
+//! [`pokemon::BattlePokemon::damage_defending_stat`] so every damage path
+//! inherits them, after the earned-badge stat boost ([`badge_boosts`]). [`ability::burn_halves_damage`] feeds the hit pipeline's,
 //! the trainer AI estimate's and the forced-replacement selector's
 //! `attacker_burned` input, as does the confusion self-hit's: a burned attacker's physical damage halves unless
 //! it has Guts (`pokeemerald/src/pokemon.c:3262`-`:3264`), and
@@ -217,7 +218,9 @@
 //! battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
-//! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Run
+//! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Speed Boost
+//! (its end-turn stage in `Battle::residual_effects`), Color Change (the
+//! on-damage seam, `battle::execute::color_change`), Run
 //! Away, Shadow Tag,
 //! Arena Trap, and Magnet Pull ([`escape::ensure_admissible`], the
 //! wild-battle Run selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),
@@ -236,7 +239,7 @@
 //! and the secondary Speed drop) —
 //! the effect of any held item but Oran Berry's end-turn heal (a mon carries
 //! one, and [`ensure_held_item_playable`] refuses every other item that has
-//! an effect), every primary status but [`status1::Status1::Paralysed`],
+//! an effect, except the Cleanse Tag, which has none in battle), every primary status but [`status1::Status1::Paralysed`],
 //! [`status1::Status1::Poisoned`], [`status1::Status1::BadPoisoned`],
 //! [`status1::Status1::Burned`],
 //! [`status1::Status1::Frozen`], and
@@ -255,13 +258,14 @@
 //! Tempo and Shield Dust — never a primary status — for a confusion
 //! landing, and Leech Seed's defender against Liquid Ooze, whose inverted
 //! drain is unmodelled) —
-//! and the move effects the eleven
+//! and the move effects the twelve
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`],
 //! [`secondary::EFFECT_SPEED_DOWN_HIT`], [`secondary::EFFECT_ACCURACY_DOWN_HIT`]
-//! and [`secondary::EFFECT_THAW_HIT`] are the five resolved; the other 26
-//! are not, including
+//! and [`secondary::EFFECT_THAW_HIT`] and the two non-Minimized flinch
+//! wrappers ([`secondary::is_flinch_hit_effect`]) are the seven resolved; the
+//! other 24 are not, including
 //! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
 //! `EFFECT_RECOIL` for any move but Struggle (Take Down and
 //! Submission stay refused), OHKO, Counter, Bide and the rest of the end-of-turn
@@ -275,6 +279,7 @@
 pub mod ability;
 pub mod accuracy;
 pub mod attract;
+pub mod badge_boosts;
 pub mod battle;
 pub mod confuse;
 pub mod critical;
@@ -312,6 +317,7 @@ pub use ability::{inverts_drain, pinch_boosts_power, LIQUID_OOZE, OVERGROW};
 pub use attract::{
     draws_love_immobility, is_attract_effect, resolve_attract_move, AttractOutcome, EFFECT_ATTRACT,
 };
+pub use badge_boosts::BadgeBoosts;
 pub use battle::admission::ensure_participant_admissible;
 pub use battle::held_item::ensure_held_item_playable;
 pub use battle::trainer::{
@@ -354,9 +360,9 @@ pub use rollout::{
     is_rollout_effect, next_attempt, RolloutAttempt, EFFECT_ROLLOUT, SERIES_ATTEMPTS,
 };
 pub use secondary::{
-    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect,
-    is_speed_down_hit_effect, is_thaw_hit_effect, spend_effect_chance_draw, SecondaryApplication,
-    Trampoline, EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
+    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_flinch_hit_effect, is_poison_hit_effect,
+    is_secondary_effect, is_speed_down_hit_effect, is_thaw_hit_effect, spend_effect_chance_draw,
+    SecondaryApplication, Trampoline, EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
 };
 pub use stat_change::{
     is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,

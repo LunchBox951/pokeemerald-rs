@@ -45,11 +45,14 @@ fn fail_restore_of(level: &Path) -> rustix::io::Result<CapabilitySets> {
     Ok(held)
 }
 
-/// Creates `a/b` under `mask`, a umask taking the owner's write and
-/// search, with `b`'s owner-access restore failing for real, and rolls back
-/// what creation returned: the error, `b` recorded last with both pins and
-/// still at the masked mode, and `a` with its access restored. Both are
-/// removed, `b` without any capture, with nothing left beside them.
+/// Creates `a/b` under `mask`, a umask taking the owner's search, with
+/// `b`'s owner-access restore failing for real, and rolls back what
+/// creation returned: the error, `b` recorded last with both pins and still
+/// at the masked mode, and `a` with its access restored. Both are removed,
+/// `b` without any capture, with nothing left beside them.
+///
+/// Rollback runs with the restore still failing as it did, so root, too,
+/// meets a `b` its owner can neither list nor be granted the bits to list.
 fn assert_failed_restore_is_rolled_back(label: &'static str, mask: u32) {
     std::thread::spawn(move || {
         let dir = TempDir::new(label);
@@ -71,13 +74,13 @@ fn assert_failed_restore_is_rolled_back(label: &'static str, mask: u32) {
             },
             &mut || None,
         );
-        match induced.unwrap() {
-            Ok(held) => rustix::thread::set_capabilities(None, held).unwrap(),
+        let held = match induced.unwrap() {
+            Ok(held) => held,
             Err(refused) => {
                 rustix::process::umask(previous);
                 panic!("failure boundary not exercised: unshare(CLONE_FILES) refused ({refused})");
             }
-        }
+        };
         let Err((created, source)) = result else {
             panic!("creation succeeded with the owner-access restore failing");
         };
@@ -114,6 +117,7 @@ fn assert_failed_restore_is_rolled_back(label: &'static str, mask: u32) {
         // does to the quarantine made for `a` is not what this covers.
         rustix::process::umask(previous);
         let stages = super::rollback_stages(&created);
+        rustix::thread::set_capabilities(None, held).unwrap();
 
         assert!(!level.exists(), "the level whose restore failed was left");
         assert_eq!(entry_names(&dir.path), Vec::<String>::new());
@@ -121,7 +125,7 @@ fn assert_failed_restore_is_rolled_back(label: &'static str, mask: u32) {
         // captured; `a` was second, through the quarantine.
         assert!(
             stages.iter().all(|&(taken, _)| taken == 2),
-            "the level without owner write was moved into a quarantine: {stages:?}"
+            "the level its owner cannot list or move was moved into a quarantine: {stages:?}"
         );
     })
     .join()
@@ -146,4 +150,17 @@ fn a_level_left_owner_read_only_by_a_failed_restore_is_removed_with_its_ancestor
         return;
     }
     assert_failed_restore_is_rolled_back("restore-failed-0400", 0o377);
+}
+
+#[test]
+fn a_level_left_owner_write_only_by_a_failed_restore_is_removed_with_its_ancestors_silently() {
+    // `b` keeps the write a rename into the quarantine needs, but its owner
+    // can neither list it nor be granted the bits to: it is unlinked in
+    // place, which removes it only because it is empty.
+    if super::assert_silent(
+        "import_rom::created_dirs::tests::permissions::failed_restore::a_level_left_owner_write_only_by_a_failed_restore_is_removed_with_its_ancestors_silently",
+    ) {
+        return;
+    }
+    assert_failed_restore_is_rolled_back("restore-failed-0200", 0o577);
 }
