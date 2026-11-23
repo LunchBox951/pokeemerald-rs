@@ -37,6 +37,7 @@ pub(crate) mod layouts;
 pub(crate) mod naming_screen;
 pub(crate) mod opening_scene;
 pub(crate) mod party_menu;
+pub(crate) mod pc_wallpaper;
 pub(crate) mod poke_ball;
 pub(crate) mod song;
 pub(crate) mod sprites;
@@ -84,6 +85,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     naming_screen::write,
     party_menu::write,
     poke_ball::write,
+    pc_wallpaper::write,
     trainer_front::write,
     trainer_battlers::write,
 ];

@@ -6,11 +6,12 @@
 //! the raw byte and resolves only the twelve identities of
 //! [`PcWallpaperId::ALL`]; the four default styles, Walda's wallpaper and every
 //! other byte fail with [`PackError::UnsupportedPcWallpaper`] before the pack is
-//! read. The pack ids stay in this module. Checkout extraction emits these
-//! entries; supported-ROM import does not yet, so a ROM-imported pack fails
-//! with [`PackError::UnknownAsset`] and no art is ever substituted. Every
-//! lookup re-validates shapes, since a hand-built or corrupt pack can bypass
-//! extraction.
+//! read. The pack ids stay in this module. Checkout extraction and
+//! supported-ROM import both emit these entries and apply this module's
+//! tilemap checks, so neither publishes one a lookup refuses; a pack without
+//! them fails with [`PackError::UnknownAsset`] and no art is ever substituted.
+//! Every lookup re-validates shapes, since a hand-built or corrupt pack can
+//! bypass either.
 //!
 //! # Tilemap words
 //!

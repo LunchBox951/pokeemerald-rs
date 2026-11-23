@@ -29,8 +29,10 @@
 
 use crate::reader::GbaPtr;
 
+mod pc_wallpaper;
 mod poke_ball;
 
+pub use pc_wallpaper::{PcWallpaperRoot, PcWallpaperRoots};
 pub use poke_ball::{PokeBallRoot, PokeBallRoots};
 
 /// How a root's bytes sit in the ROM.
@@ -757,6 +759,8 @@ pub struct Roots {
     pub battlers: BattlerRoots,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallRoots,
+    /// The non-default standard PC wallpapers.
+    pub pc_wallpaper: PcWallpaperRoots,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontRoots,
     /// The Brendan and May trainer battlers.
@@ -816,6 +820,7 @@ impl Roots {
         party_menu: PartyMenuRoots::NONE,
         battlers: BattlerRoots::NONE,
         poke_ball: PokeBallRoots::NONE,
+        pc_wallpaper: PcWallpaperRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
         trainer_battlers: TrainerBattlerRoots::NONE,
     };
@@ -856,6 +861,12 @@ impl Roots {
                     .iter()
                     .flat_map(|ball| [&ball.sheet, &ball.open_sheet]),
             )
+            .chain(
+                self.pc_wallpaper
+                    .wallpapers
+                    .iter()
+                    .map(|paper| &paper.tiles),
+            )
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.front))
             .chain(
                 self.trainer_battlers
@@ -891,6 +902,12 @@ impl Roots {
                     .flat_map(|battler| [&battler.normal, &battler.shiny]),
             )
             .chain(self.poke_ball.poke_ball.iter().map(|ball| &ball.palette))
+            .chain(
+                self.pc_wallpaper
+                    .wallpapers
+                    .iter()
+                    .flat_map(|paper| [&paper.frame_palette, &paper.background_palette]),
+            )
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.palette))
             .chain(
                 self.trainer_battlers

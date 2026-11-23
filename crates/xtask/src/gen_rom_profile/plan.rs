@@ -570,6 +570,30 @@ pub struct PokeBallPlan {
     pub open_sheet: ImagePlan,
 }
 
+/// One non-default standard wallpaper's roots, owned.
+#[derive(Debug, Clone)]
+pub struct PcWallpaperRecordPlan {
+    /// The `WALLPAPER_*` value, the record's row in `sWallpapers`.
+    pub wallpaper: u8,
+    /// The sheet the row's `tiles` points at.
+    pub tiles: ImagePlan,
+    /// The tilemap the row's `tilemap` points at.
+    pub tilemap: BlobPlan,
+    /// The first palette the row's `palettes` points at.
+    pub frame_palette: PalettePlan,
+    /// The palette 32 bytes after it.
+    pub background_palette: PalettePlan,
+}
+
+/// The non-default standard PC wallpapers, owned.
+#[derive(Debug, Clone)]
+pub struct PcWallpaperPlan {
+    /// `sWallpapers`.
+    pub table: u32,
+    /// Crag to Plain, in row order.
+    pub wallpapers: Vec<PcWallpaperRecordPlan>,
+}
+
 /// One trainer front picture's roots, owned.
 #[derive(Debug, Clone)]
 pub struct TrainerFrontPicPlan {
@@ -700,6 +724,8 @@ pub struct ProfilePlan {
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallPlan,
+    /// The non-default standard PC wallpapers.
+    pub pc_wallpaper: PcWallpaperPlan,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontPlan,
     /// The Brendan and May trainer battlers.

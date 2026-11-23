@@ -20178,6 +20178,14 @@
       "status": "pending"
     },
     "graphics/pokemon_storage": {
+      "artifacts": {
+        "non-default-standard-wallpapers": {
+          "reason": "graphics/pokemon_storage/wallpapers/{crag,volcano,snow,cave,beach,seafloor,river,sky,polkadot,pokecenter,machine,plain}/{frame.png,bg.png,tilemap.bin} are the sources of sWallpapers entries 4-15 (src/data/wallpapers.h:55-148). Extraction concatenates the frame's -num_tiles-cut tiles before the background's (graphics_file_rules.mk WALLPAPERGFXDIR rules), keeps tilemap.bin as is and takes the two palettes from the PLTE of frame.png and bg.png. Supported-ROM import (crates/rom-import/src/domains/pc_wallpaper.rs) reads the same LZ77 tiles, LZ77 tilemaps and raw palette pairs through the generated profile and the sWallpapers rows, and the equivalence gate compares both packs entry for entry. The default wallpapers' directories, the Walda wallpapers and the unrelated storage graphics stay pending, so the parent stays pending.",
+          "rust_target": "crates/xtask/src/extract/pc_wallpaper.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -31482,10 +31490,10 @@
     "src/data/wallpapers.h": {
       "artifacts": {
         "non-default-standard-wallpapers": {
-          "reason": "src/data/wallpapers.h:179-197 sWallpapers entries 4-15 (Crag through Plain) are modelled as the closed PcWallpaperId manifest in upstream order, with the typed tiles, tilemap and [frame, background] palette payload AssetPack::pc_wallpaper returns for them (LoadWallpaperGfx and DrawWallpaper, src/pokemon_storage_system.c:5357-5387 and :5423-5439): tilemap words keep tile index, flips and palette bank, validated against the sheet and the pair. Checkout extraction fills the records: the tile sheet is the frame's then the background's -num_tiles-cut tiles (graphics_file_rules.mk WALLPAPERGFXDIR rules), the tilemap is tilemap.bin and the palettes are the PLTE of frame.png and bg.png. STUBBED because supported-ROM import of the tile, tilemap and palette bytes is deferred, so a ROM-imported pack holds no wallpaper entries and the accessor reports the missing entry. The four default wallpapers (IDs 0-3), Walda's wallpaper and every runtime consumer are not modelled. The parent header stays pending.",
+          "reason": "src/data/wallpapers.h:55-148 and :179-196 define sWallpapers entries 4-15 (Crag through Plain): per wallpaper an LZ77 tile stream, an LZ77 tilemap stream and a raw frame/background palette pair, selected by a {tiles, tilemap, palettes} row. PcWallpaperId and AssetPack::pc_wallpaper model them as the typed 4bpp sheet (the frame's then the background's -num_tiles-cut tiles, one 8-pixel-wide strip), the 20x18 tilemap with tile index, flips and palette bank, and the [frame, background] palettes, validated against the sheet and the pair (LoadWallpaperGfx and DrawWallpaper, src/pokemon_storage_system.c:5357-5387 and :5423-5439). Checkout extraction (crates/xtask/src/extract/pc_wallpaper.rs) and supported-ROM import (crates/rom-import/src/domains/pc_wallpaper.rs, behind sWallpapers) both fill all 48 pc-wallpaper/ entries and apply the accessor's tilemap checks; crates/rom-import/tests/equivalence.rs pins the twelve identities independently of both builders and compares the typed payloads entry for entry. The four default wallpapers (IDs 0-3), Walda's wallpaper, the box title colours and every runtime consumer are not modelled. The parent header stays pending.",
           "rust_target": "crates/assets/src/pack/pc_wallpaper.rs",
           "spec": "S-4",
-          "status": "stubbed"
+          "status": "ported"
         }
       },
       "category": "code.header",
