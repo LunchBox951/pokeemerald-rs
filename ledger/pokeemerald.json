@@ -32438,6 +32438,14 @@
       "status": "pending"
     },
     "src/field_specials.c": {
+      "artifacts": {
+        "CountSSTidalStep": {
+          "reason": "field_specials.c:288-294. EventData::count_ss_tidal_step: while FLAG_SYS_CRUISE_MODE (0x88D, flags.h:1403) is set, adds the u16 delta to VAR_CRUISE_STEP_COUNT (0x404A, vars.h:94) with u16 wraparound and returns whether the count has reached SS_TIDAL_MAX_STEPS (205, field_specials.h:27); with the flag clear the counter is untouched and it returns false. No RNG. Pending, not modelled: the walking caller (field_control_avatar.c:597-603), the arrival script, ship movement and presentation; SetSSTidalFlag and ResetSSTidalFlag are separate.",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
