@@ -486,6 +486,7 @@ impl OverworldPhase {
         // The runtime borrow ends here: the drain mutates the party and may
         // white the player out.
         let poison_step = poison_step_map_type(&runtime, landed, door_warp);
+        self.increment_rematch_step_counter(landed, door_warp);
         // Ahead of the poison gate: `UpdateFriendshipStepCounter` takes every landing the
         // step scripts reach (`field_control_avatar.c:536-545`).
         self.update_friendship_step_counter(landed, door_warp);

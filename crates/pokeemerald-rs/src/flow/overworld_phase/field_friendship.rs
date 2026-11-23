@@ -28,12 +28,7 @@ impl OverworldPhase {
         landed: Option<TilePos>,
         door_warp: Option<WarpTrigger>,
     ) {
-        // A coord event (`landed` withheld) or a door-shaped warp claims the
-        // step before `TryStartStepCountScript` (`:483-490`).
-        if landed.is_none() || door_warp.is_some() {
-            return;
-        }
-        if self.map_id == assets::MapId("MAP_UNION_ROOM") {
+        if !self.step_count_script_reached(landed, door_warp) {
             return;
         }
         let counter = self
@@ -50,6 +45,16 @@ impl OverworldPhase {
         if counter == 0 {
             self.adjust_party_friendship_walking();
         }
+    }
+
+    /// Whether a landing reaches `TryStartStepCountScript`
+    /// (`field_control_avatar.c:483-490,536-541`).
+    pub(super) fn step_count_script_reached(
+        &self,
+        landed: Option<TilePos>,
+        door_warp: Option<WarpTrigger>,
+    ) -> bool {
+        landed.is_some() && door_warp.is_none() && self.map_id != assets::MapId("MAP_UNION_ROOM")
     }
 
     /// `AdjustFriendship(FRIENDSHIP_EVENT_WALKING)` on all six saved slots,

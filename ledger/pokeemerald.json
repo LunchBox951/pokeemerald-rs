@@ -22206,6 +22206,12 @@
           "rust_target": "crates/engine/src/save/block.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "TrainerRematchStepCounterLayout": {
+          "reason": "global.h:1013-1018. SaveBlock1 stores the unencrypted little-endian trainerRematchStepCounter at 0x9C8 (0xA30 objectEvents - 2 padding - 100 trainerRematches - 2); patching writes only those two bytes and preserves the unused bytes and the rematch array beside it.",
+          "rust_target": "crates/engine/src/save/block.rs",
+          "spec": "S-5",
+          "status": "rewritten"
         }
       },
       "category": "code.header",
@@ -29584,6 +29590,12 @@
           "rust_target": "crates/pokeemerald-rs/src/flow/npc_trainer_battle.rs",
           "spec": "I-5",
           "status": "stubbed"
+        },
+        "IncrementRematchStepCounter": {
+          "reason": "battle_setup.c:1776-1803; field_control_avatar.c:536-545. Counts any five of the eight badge flags and advances the saved u16 counter on landings that reach the step-count script, clamping values at or above 255 to 255 with no RNG. Rematch selection (TryUpdateRandomTrainerRematches/UpdateRandomTrainerRematches), the counter reset after a selection, Pokenav presentation and trainer-party changes remain unimplemented.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/rematch_steps.rs",
+          "spec": "S-5",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
