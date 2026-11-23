@@ -145,7 +145,9 @@ fn palette_candidates(ctx: &Context<'_>) -> Result<Vec<Vec<u32>>, GenRomProfileE
     for id in &ids {
         needles.push(ctx.pack.get(id)?.palette_payload(id)?.0.to_vec());
     }
-    let hits = ctx.lz77.find_all(&needles);
+    // The species table names one copy, and a capped search keeps only the
+    // lowest offsets: stray copies below it would discard the referenced one.
+    let hits = ctx.lz77.find_all_uncapped(&needles);
     ids.iter()
         .zip(&hits)
         .map(|(id, offsets)| {
@@ -496,6 +498,22 @@ mod tests {
                 .find(|line| line.id == BATTLERS[0].normal_id())
                 .expect("a report line");
             assert_eq!(line.resolution, Resolution::StructDerived);
+        });
+    }
+
+    #[test]
+    fn a_palette_with_many_stray_copies_still_takes_the_copy_its_table_row_names() {
+        // Sixteen unreferenced copies sit below the one the table names.
+        let mut bytes = rom(0);
+        let stream = lz77_literals(&colour_bytes(2));
+        for copy in 0..16usize {
+            let at = STRAY as usize + copy * 0x40;
+            bytes[at..at + stream.len()].copy_from_slice(&stream);
+        }
+        with_context("battlers-many-strays", &bytes, entries(), |ctx| {
+            let mut report = Vec::new();
+            let plan = locate(ctx, &mut report).expect("located");
+            assert_eq!(plan.species[0].normal.addr, 0x0800_0000 + art_at(0, 2));
         });
     }
 

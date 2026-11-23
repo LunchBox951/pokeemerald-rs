@@ -6,10 +6,11 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::fs::Dir;
 
 use super::super::CreatedDirectory;
+use super::occupied::ModeLeft;
 use super::quarantine::{
     open_quarantine, open_quarantine_vouched_by, remove_quarantine, remove_quarantine_held_as,
 };
-use super::report::{held_standing_as, report_moved_away};
+use super::report::{held_standing_as, report_moved_away, Standing};
 use super::restore::{holds_this_level, take_back_into, take_back_into_revalidating};
 use super::{CaptureStage, Outcome};
 
@@ -169,4 +170,39 @@ pub(in super::super) fn take_back_level_with_hooks(
     let taken = take_back_into(&quarantine, parent, dir, &mut |_, _| {}) == Outcome::Taken;
     remove_quarantine(&quarantine, before_removal);
     taken
+}
+
+#[cfg(test)]
+/// Reports that `dir`'s mode could not be put back to `found`, with
+/// `error`, while its held original is still linked but `/proc` cannot say
+/// where, as [`super::warn_mode_left`] would after rollback left it.
+pub(in super::super) fn warn_mode_left_unlocated(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    found: rustix::fs::Mode,
+    error: std::io::Error,
+) {
+    let mode_left = Some(ModeLeft { found, error });
+    super::report_mode_left(parent, dir, mode_left, false, Standing::Linked(None));
+}
+
+#[cfg(test)]
+/// [`warn_mode_left_unlocated`] with the held original's examination
+/// failing with `err` instead.
+pub(in super::super) fn warn_mode_left_held_stat_failing(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    found: rustix::fs::Mode,
+    error: std::io::Error,
+    err: rustix::io::Errno,
+) {
+    let own = dir.own.as_deref().expect("the level is held open");
+    let mode_left = Some(ModeLeft { found, error });
+    super::report_mode_left(
+        parent,
+        dir,
+        mode_left,
+        false,
+        held_standing_as(Err(err), own.as_fd()),
+    );
 }
