@@ -102,6 +102,7 @@ const SAND_ATTACK: MoveId = MoveId::SAND_ATTACK;
 const FIRE_SPIN: MoveId = MoveId::FIRE_SPIN;
 const QUICK_ATTACK: MoveId = MoveId::QUICK_ATTACK;
 const SLASH: MoveId = MoveId::SLASH;
+const VITAL_THROW: MoveId = MoveId::VITAL_THROW;
 /// `MOVE_MEGA_KICK` (`include/constants/moves.h:25`): a plain-hit Normal
 /// move with far more power than Tackle's.
 const MEGA_KICK: MoveId = MoveId::MEGA_KICK;
@@ -1458,9 +1459,9 @@ fn a_healthy_player_reserve_survives_a_trainer_battle_lead_faint_and_is_itself_e
     rng.assert_exhausted();
 }
 
-/// `AI_CheckViability` routes `EFFECT_HIGH_CRITICAL` — an otherwise ordinary
-/// hit script ([`battle::is_ordinary_hit_effect`]) — to `AI_CV_HighCrit`
-/// (`data/battle_ai_scripts.s:1449`), an unmodelled branch that draws RNG;
+/// `AI_CheckViability` routes `EFFECT_VITAL_THROW` — an otherwise ordinary
+/// hit script ([`battle::is_ordinary_hit_effect`]) — to `AI_CV_VitalThrow`
+/// (`data/battle_ai_scripts.s:708`), an unmodelled branch that draws RNG;
 /// admitting it would desynchronise the shared stream rather than merely
 /// mis-score it.
 #[test]
@@ -1468,15 +1469,15 @@ fn an_unscoreable_party_moveset_is_rejected_before_any_draw() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
     assert!(
-        battle::is_ordinary_hit_effect(dex.move_data(SLASH).unwrap().effect),
-        "Slash must be executable, or this test proves nothing"
+        battle::is_ordinary_hit_effect(dex.move_data(VITAL_THROW).unwrap().effect),
+        "Vital Throw must be executable, or this test proves nothing"
     );
-    let party = vec![max_iv_mon(&dex, TORCHIC, 34, vec![SCRATCH, SLASH])];
+    let party = vec![max_iv_mon(&dex, TORCHIC, 34, vec![SCRATCH, VITAL_THROW])];
 
     let mut rng = SequenceRng::new([]);
     let error =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap_err();
-    assert_eq!(error, BattleError::UnscoreableMoveEffect(SLASH));
+    assert_eq!(error, BattleError::UnscoreableMoveEffect(VITAL_THROW));
 }
 
 /// `TRAINER_GRUNT_AQUA_HIDEOUT_1` scores with `AI_SCRIPT_CHECK_BAD_MOVE` alone
@@ -1523,11 +1524,22 @@ fn a_check_bad_move_only_trainer_scores_slash_with_four_damage_draws_and_a_tie_b
 fn the_same_party_is_refused_for_a_check_viability_trainer_before_any_draw() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, MEOWTH, 50, vec![GROWL]);
-    let enemy = max_iv_mon(&dex, TORCHIC, 34, vec![SCRATCH, SLASH]);
+    let enemy = max_iv_mon(&dex, TORCHIC, 34, vec![SCRATCH, VITAL_THROW]);
     let mut rng = SequenceRng::new([]);
     let error =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap_err();
-    assert_eq!(error, BattleError::UnscoreableMoveEffect(SLASH));
+    assert_eq!(error, BattleError::UnscoreableMoveEffect(VITAL_THROW));
+}
+
+/// `AI_CV_HighCrit` is ported, so a `CHECK_VIABILITY` trainer admits Slash.
+#[test]
+fn a_high_critical_party_is_admitted_for_a_check_viability_trainer() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MEOWTH, 50, vec![GROWL]);
+    let enemy = max_iv_mon(&dex, TORCHIC, 34, vec![SCRATCH, SLASH]);
+    let mut rng = SequenceRng::new(script(&[MAX_CONSTRUCTION_SEED]));
+    Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap();
+    assert_eq!(rng.draws(), 1);
 }
 
 /// `BattleAI_DoAIProcessing` skips a zero-PP slot before its script runs, so

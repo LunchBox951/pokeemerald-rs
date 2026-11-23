@@ -78,6 +78,7 @@ const ALWAYS_HIT_ACCURACY_IMMEDIATE_STAGE: i8 = -4;
 const ALWAYS_HIT_EVASION_RANDOM_STAGE: i8 = 2;
 const ALWAYS_HIT_ACCURACY_RANDOM_STAGE: i8 = -2;
 const ALWAYS_HIT_BONUS_THRESHOLD: u16 = 100;
+const HIGH_CRITICAL_ROLL_THRESHOLD: u16 = 128;
 
 const AI_EFFECTIVENESS_QUARTER: u32 = 10;
 const AI_EFFECTIVENESS_QUARTER_WITH_STAB: u32 = 15;
@@ -145,12 +146,9 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
 ];
 
 /// Rows whose `AI_CheckViability` branch is not ported
-/// (`data/battle_ai_scripts.s:686,706,708`).
-const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 3] = [
-    MoveEffect::HIGH_CRITICAL,
-    MoveEffect::SPEED_DOWN_HIT,
-    MoveEffect::VITAL_THROW,
-];
+/// (`data/battle_ai_scripts.s:706,708`).
+const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 2] =
+    [MoveEffect::SPEED_DOWN_HIT, MoveEffect::VITAL_THROW];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -1083,6 +1081,9 @@ fn score_viability(
         ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ABSORB) => {
             score_drain_viability(dex, scores, slot, move_id, user, target, rng)?;
         }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::HIGH_CRITICAL) => {
+            score_high_critical_viability(dex, scores, slot, move_id, user, target, rng)?;
+        }
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
         | ScoreableEffect::FocusEnergy
@@ -1158,6 +1159,48 @@ fn score_drain_viability(
     );
     if resisted && random_roll_is_at_least(rng, RESISTED_DRAIN_PENALTY_THRESHOLD) {
         scores.adjust(slot, RESISTED_DRAIN_PENALTY);
+    }
+    Ok(())
+}
+
+/// `AI_CV_HighCrit` (`data/battle_ai_scripts.s:1449`-`:1460`). Immunity takes
+/// the neutral path: the handler tests no x0 class.
+fn score_high_critical_viability(
+    dex: &Dex,
+    scores: &mut MoveScores,
+    slot: usize,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> Result<(), BattleError> {
+    let effectiveness = ai_type_effectiveness(dex, move_id, user, target)?;
+    let resisted = matches!(
+        effectiveness,
+        Some(
+            AI_EFFECTIVENESS_HALF
+                | AI_EFFECTIVENESS_HALF_WITH_STAB
+                | AI_EFFECTIVENESS_QUARTER
+                | AI_EFFECTIVENESS_QUARTER_WITH_STAB
+        )
+    );
+    let super_effective = matches!(
+        effectiveness,
+        Some(
+            AI_EFFECTIVENESS_SUPER
+                | AI_EFFECTIVENESS_SUPER_WITH_STAB
+                | AI_EFFECTIVENESS_QUADRUPLE
+                | AI_EFFECTIVENESS_QUADRUPLE_WITH_STAB
+        )
+    );
+    if resisted {
+        return Ok(());
+    }
+    if !super_effective && !random_roll_is_at_least(rng, HIGH_CRITICAL_ROLL_THRESHOLD) {
+        return Ok(());
+    }
+    if random_roll_is_at_least(rng, HIGH_CRITICAL_ROLL_THRESHOLD) {
+        scores.adjust(slot, SLIGHTLY_ENCOURAGE);
     }
     Ok(())
 }
@@ -2507,6 +2550,8 @@ mod attract_tests;
 mod charge_tests;
 #[cfg(test)]
 mod drain_viability_tests;
+#[cfg(test)]
+mod high_critical_viability_tests;
 #[cfg(test)]
 mod leech_seed_tests;
 #[cfg(test)]

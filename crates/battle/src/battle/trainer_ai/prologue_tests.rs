@@ -251,7 +251,7 @@ fn admission_is_flag_aware() {
             "{move_id:?}"
         );
     }
-    for move_id in [MoveId::SLASH, MoveId::MUD_SHOT, MoveId::VITAL_THROW] {
+    for move_id in [MoveId::MUD_SHOT, MoveId::VITAL_THROW] {
         assert_eq!(
             ensure_scoreable(&dex, move_id, only_cbm.union(AiFlags::CHECK_VIABILITY)),
             Err(BattleError::UnscoreableMoveEffect(move_id))
@@ -318,7 +318,7 @@ fn admission_is_flag_aware() {
 
 #[test]
 fn chooser_refuses_an_unported_branch_before_any_draw() {
-    let enemy = mon(TREECKO, &[MoveId::SLASH, MoveId::POUND]);
+    let enemy = mon(TREECKO, &[MoveId::MUD_SHOT, MoveId::POUND]);
     let player = mon(MUDKIP, &[MoveId::POUND]);
     let mut rng = draws();
     let refused = choose_trainer_action(
@@ -331,7 +331,7 @@ fn chooser_refuses_an_unported_branch_before_any_draw() {
     );
     assert_eq!(
         refused,
-        Err(BattleError::UnscoreableMoveEffect(MoveId::SLASH))
+        Err(BattleError::UnscoreableMoveEffect(MoveId::MUD_SHOT))
     );
     assert_eq!(rng.draws(), 0);
 }
