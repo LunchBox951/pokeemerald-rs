@@ -164,10 +164,11 @@ pub(super) fn text_tokens(source: &str) -> Vec<Token> {
     tokens
 }
 
-/// The rival's class name as `gTrainerClassNames` stores it: the `PK` and `MN`
-/// glyph bytes, then ` TRAINER` (`src/data/text/trainer_class_names.h:52`).
+/// A class name shaped like the rival's in `gTrainerClassNames`: the `PK` and
+/// `MN` glyph bytes, a space, then made-up letters (`ZQXJVKW`), not the
+/// game's text.
 pub(super) const RIVAL_CLASS: [u8; 11] = [
-    0x53, 0x54, 0x00, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
+    0x53, 0x54, 0x00, 0xD4, 0xCB, 0xD2, 0xC4, 0xD0, 0xC5, 0xD1, 0xFF,
 ];
 
 /// The rival's class name decoded to tokens, terminator removed.

@@ -18,16 +18,18 @@ use crate::roots::Roots;
 /// Where the array is planted; unaligned on purpose.
 const TABLE: usize = 0x2001;
 
-/// The rival's name: `{PKMN} TRAINER` (`53 54` are the `PK` and `MN` glyphs).
+/// A `{PKMN}`-glyph name shaped like the rival's: the `PK` and `MN` glyphs
+/// (`53 54`), a space, then made-up letters (`ZQXJVKW`), not the game's text.
 const RIVAL: [u8; 11] = [
-    0x53, 0x54, 0x00, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
+    0x53, 0x54, 0x00, 0xD4, 0xCB, 0xD2, 0xC4, 0xD0, 0xC5, 0xD1, 0xFF,
 ];
 
 fn at(off: usize) -> GbaPtr {
     GbaPtr::at(ROM_BASE + u32::try_from(off).expect("a fixture offset fits in u32"))
 }
 
-/// A distinct stream per class, with the rival's name where upstream has it.
+/// A distinct stream per class, with the shared `{PKMN}`-glyph name at the
+/// four classes that share one upstream.
 fn stream_of(id: usize) -> Vec<u8> {
     match id {
         0 | 1 | 50 | 65 => RIVAL.to_vec(),
@@ -102,7 +104,7 @@ fn a_planted_array_yields_the_canonical_table() {
             "{class:?}"
         );
     }
-    // The rival decodes to the `PK` and `MN` glyphs, then ` TRAINER`; the
+    // The rival decodes to the `PK` and `MN` glyphs and the rest of its row; the
     // padding after the name is gone.
     assert_eq!(table.name(TrainerClass::RIVAL), Some(&RIVAL[..]));
     // The classes sharing a display name keep separate records.

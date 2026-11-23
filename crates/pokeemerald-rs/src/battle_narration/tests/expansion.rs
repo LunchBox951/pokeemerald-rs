@@ -231,10 +231,10 @@ fn the_rival_class_keeps_its_glyph_tokens_through_expansion() {
             Token::Symbol(Symbol::Pk),
             Token::Symbol(Symbol::Mn),
             Token::Char(' '),
-            Token::Char('T')
+            Token::Char('Z')
         ]
     );
-    assert_eq!(render(&tokens), "{PK}{MN} TRAINER BEN!");
+    assert_eq!(render(&tokens), "{PK}{MN} ZQXJVKW BEN!");
     // The name and punctuation after the class survive, and the class holds
     // no terminator of its own.
     assert_eq!(tokens.iter().filter(|t| **t == Token::End).count(), 1);

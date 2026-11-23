@@ -382,48 +382,34 @@ fn class_names_are_extracted_from_the_real_checkout() {
     super::super::extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = AssetPack::load(&path).unwrap();
     let table = pack.trainer_class_names().unwrap();
-    // Spelled by hand through `charmap.txt`: `{PKMN}` is `53 54`, `é` is `1B`.
-    // "{PKMN} TRAINER$"
-    let rival = [
-        0x53, 0x54, 0x00, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
-    ];
-    for class in [
-        TrainerClass::PKMN_TRAINER_1,
-        TrainerClass::PKMN_TRAINER_2,
-        TrainerClass::RIVAL,
-        TrainerClass::RS_PROTAG,
+    // Checked by shape, not spelled out, so no game text is committed: the
+    // classes sharing a name upstream share one stream, every other class has
+    // its own, the `{PKMN}` classes begin with the `PK` and `MN` glyphs
+    // (`53 54`), and every stream ends in `EOS` within its 13-byte row.
+    let names: Vec<&[u8]> = TrainerClass::all()
+        .map(|class| table.name(class).unwrap())
+        .collect();
+    for group in [
+        &[
+            TrainerClass::PKMN_TRAINER_1,
+            TrainerClass::PKMN_TRAINER_2,
+            TrainerClass::RIVAL,
+            TrainerClass::RS_PROTAG,
+        ][..],
+        &[TrainerClass::COOLTRAINER, TrainerClass::COOLTRAINER_2],
+        &[TrainerClass::TUBER_F, TrainerClass::TUBER_M],
     ] {
-        assert_eq!(table.name(class), Some(&rival[..]), "{class:?}");
+        for class in group {
+            assert_eq!(table.name(*class), table.name(group[0]), "{class:?}");
+        }
     }
-    // "HIKER$"
-    assert_eq!(
-        table.name(TrainerClass::HIKER),
-        Some(&[0xC2, 0xC3, 0xC5, 0xBF, 0xCC, 0xFF][..])
-    );
-    // "COOLTRAINER$" twice, as two separate classes.
-    let cooltrainer = [
-        0xBD, 0xC9, 0xC9, 0xC6, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
-    ];
-    assert_eq!(
-        table.name(TrainerClass::COOLTRAINER),
-        Some(&cooltrainer[..])
-    );
-    assert_eq!(
-        table.name(TrainerClass::COOLTRAINER_2),
-        Some(&cooltrainer[..])
-    );
-    // "SWIMMER♂$" and "SWIMMER♀$" end in `B5` and `B6`; "POKéFAN$" holds `1B`.
-    assert_eq!(
-        table.name(TrainerClass::SWIMMER_M).unwrap()[7..],
-        [0xB5, 0xFF]
-    );
-    assert_eq!(
-        table.name(TrainerClass::SWIMMER_F).unwrap()[7..],
-        [0xB6, 0xFF]
-    );
-    assert_eq!(table.name(TrainerClass::POKEFAN).unwrap()[3], 0x1B);
-    // "PARASOL LADY$" fills its 13-byte row with no padding.
-    assert_eq!(table.name(TrainerClass::PARASOL_LADY).unwrap().len(), 13);
+    let distinct: std::collections::HashSet<&[u8]> = names.iter().copied().collect();
+    assert_eq!(distinct.len(), 66 - 3 - 1 - 1);
+    assert_eq!(table.name(TrainerClass::RIVAL).unwrap()[..2], [0x53, 0x54]);
+    for (class, name) in TrainerClass::all().zip(&names) {
+        assert_eq!(name.last(), Some(&0xFF), "{class:?}");
+        assert!(name.len() <= 13, "{class:?}");
+    }
     let _ = std::fs::remove_file(path);
 }
 

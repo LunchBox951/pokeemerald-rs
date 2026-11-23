@@ -2,7 +2,8 @@
 //!
 //! The fixture plants the whole 858-byte fixed-width array and builds the pack
 //! entry the extractor would write for it. The array repeats names (the four
-//! `{PKMN} TRAINER` classes, `COOLTRAINER`, `TUBER`), so the locator has to
+//! `{PKMN}`-glyph classes, the two of 5 and 48, the two of 18 and 19, as
+//! upstream does, spelled with made-up letters), so the locator has to
 //! find the array as a whole. Each failure test breaks one fact: a missing,
 //! duplicated, or altered array, a malformed or surplus pack entry.
 
@@ -20,18 +21,20 @@ const PACK_ID: &str = rom_import::TRAINER_CLASS_NAME_PACK_ID;
 const TABLE: usize = 0x2001;
 const COPY: usize = 0x6000;
 
-/// The rival's name: `{PKMN} TRAINER`.
+/// A `{PKMN}`-glyph name shaped like the rival's: the `PK` and `MN` glyphs
+/// (`53 54`), a space, then made-up letters (`ZQXJVKW`), not the game's text.
 const RIVAL: [u8; 11] = [
-    0x53, 0x54, 0x00, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
+    0x53, 0x54, 0x00, 0xD4, 0xCB, 0xD2, 0xC4, 0xD0, 0xC5, 0xD1, 0xFF,
 ];
 
 fn stream_of(id: usize) -> Vec<u8> {
     match id {
         0 | 1 | 50 | 65 => RIVAL.to_vec(),
+        // Made-up names, shared where upstream shares one.
         5 | 48 => vec![
-            0xBD, 0xC9, 0xC9, 0xC6, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
+            0xD4, 0xD4, 0xCB, 0xCB, 0xD2, 0xD2, 0xC4, 0xC4, 0xD0, 0xD0, 0xC5, 0xFF,
         ],
-        18 | 19 => vec![0xCE, 0xCF, 0xBC, 0xBF, 0xCC, 0xFF],
+        18 | 19 => vec![0xD1, 0xD4, 0xCB, 0xD1, 0xD4, 0xFF],
         _ => vec![0xA1 + u8::try_from(id).unwrap(), 0xBB, 0xFF],
     }
 }

@@ -8,9 +8,10 @@ use crate::{
 
 const TABLE_PACK_ID: &str = "trainer-class-name/table";
 
-/// The rival's name: `{PKMN} TRAINER` (`53 54` are the `PK` and `MN` glyphs).
+/// A `{PKMN}`-glyph name shaped like the rival's: the `PK` and `MN` glyphs
+/// (`53 54`), a space, then made-up letters (`ZQXJVKW`), not the game's text.
 const RIVAL: [u8; 11] = [
-    0x53, 0x54, 0x00, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
+    0x53, 0x54, 0x00, 0xD4, 0xCB, 0xD2, 0xC4, 0xD0, 0xC5, 0xD1, 0xFF,
 ];
 
 /// A distinct stream per ID, so a lookup that returns the wrong record fails:

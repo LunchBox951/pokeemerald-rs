@@ -49,7 +49,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use assets::audio::{CRY_TABLE_LEN, CRY_TABLE_PACK_ID};
-use assets::{AssetPack, CryTable, SampleId, Song, VoiceEntry, VoiceGroup};
+use assets::{
+    AssetPack, CryTable, SampleId, Song, TrainerClass, TrainerClassNameTable,
+    TrainerDefeatSpeechContext, TrainerDefeatSpeechTable, VoiceEntry, VoiceGroup,
+};
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
 use rom_import::{
     FIELD_MESSAGE_PACK_ID, TRAINER_CLASS_NAME_PACK_ID, TRAINER_DEFEAT_SPEECH_PACK_ID,
@@ -311,164 +314,262 @@ const FIELD_MESSAGE_TABLE: [u8; 28] = [
     0xE2, 0xE8, 0xD9, 0xD8, 0xB0, 0xFB, 0xFE, 0xFF,
 ];
 
-/// Each `Route103_Text_*Defeated` string as both backends must write it, in
-/// `TrainerDefeatSpeechContext::ALL` order, spelled by hand through
-/// `charmap.txt`: `…` is `B0`, `\n` is `FE`, `{PLAYER}` is `FD 01`, `{KUN}` is
-/// `FD 05`, and the `$` is `EOS` (`FF`). The Amy, Liv, and rematch speeches are
-/// four distinct strings of the one `TRAINER_AMY_AND_LIV_1`.
-const TRAINER_DEFEAT_SPEECHES: [&[u8]; 14] = [
-    // Route103_Text_DaisyDefeated
-    &[
-        0xD3, 0xE3, 0xE9, 0x00, 0xEB, 0xD9, 0xE6, 0xD9, 0xE2, 0xB4, 0xE8, 0x00, 0xE0, 0xD9, 0xD8,
-        0x00, 0xD5, 0xE7, 0xE8, 0xE6, 0xD5, 0xED, 0x00, 0xD6, 0xED, 0x00, 0xE3, 0xE9, 0xE6, 0x00,
-        0xD5, 0xE6, 0xE3, 0xE1, 0xD5, 0xB0, 0xFF,
-    ],
-    // Route103_Text_AmyDefeated
-    &[
-        0xBB, 0xC7, 0xD3, 0xF0, 0x00, 0xCF, 0xDC, 0xAE, 0xE3, 0xDC, 0xB8, 0x00, 0xEB, 0xD9, 0x00,
-        0xE0, 0xE3, 0xE7, 0xE8, 0xAD, 0xFF,
-    ],
-    // Route103_Text_LivDefeated
-    &[
-        0xC6, 0xC3, 0xD0, 0xF0, 0x00, 0xC9, 0xDC, 0xB8, 0x00, 0xEB, 0xD9, 0x00, 0xE0, 0xE3, 0xE7,
-        0xE8, 0xB8, 0x00, 0xD6, 0xDD, 0xDB, 0x00, 0xE7, 0xDD, 0xE7, 0xE8, 0xD9, 0xE6, 0xB0, 0xFF,
-    ],
-    // Route103_Text_AmyRematchDefeated
-    &[
-        0xBB, 0xC7, 0xD3, 0xF0, 0x00, 0xBB, 0xEB, 0xEB, 0xB8, 0x00, 0xD6, 0xE3, 0xE3, 0xAB, 0xFE,
-        0xD1, 0xD9, 0x00, 0xD7, 0xE3, 0xE9, 0xE0, 0xD8, 0xE2, 0xB4, 0xE8, 0x00, 0xEB, 0xDD, 0xE2,
-        0x00, 0xD5, 0xDB, 0xD5, 0xDD, 0xE2, 0xB0, 0xFF,
-    ],
-    // Route103_Text_LivRematchDefeated
-    &[
-        0xC6, 0xC3, 0xD0, 0xF0, 0x00, 0xBB, 0xEB, 0xEB, 0xEB, 0xB8, 0x00, 0xEB, 0xD9, 0x00, 0xE0,
-        0xE3, 0xE7, 0xE8, 0x00, 0xD5, 0xDB, 0xD5, 0xDD, 0xE2, 0xB0, 0xFE, 0xBC, 0xDD, 0xDB, 0x00,
-        0xE7, 0xDD, 0xE7, 0xE8, 0xD9, 0xE6, 0xB0, 0xFF,
-    ],
-    // Route103_Text_AndrewDefeated
-    &[
-        0xC1, 0xD5, 0xDC, 0xAB, 0x00, 0xC6, 0xE3, 0xE7, 0xE8, 0x00, 0xDD, 0xE8, 0xAB, 0xFE, 0xC3,
-        0xB4, 0xE1, 0x00, 0xD9, 0xEA, 0xD9, 0xE2, 0x00, 0xE1, 0xE3, 0xE6, 0xD9, 0x00, 0xD5, 0xE2,
-        0xE2, 0xE3, 0xED, 0xD9, 0xD8, 0x00, 0xE2, 0xE3, 0xEB, 0xAB, 0xFF,
-    ],
-    // Route103_Text_MiguelDefeated
-    &[
-        0xC9, 0xDC, 0xB8, 0x00, 0xE1, 0xED, 0x00, 0xDB, 0xE3, 0xE7, 0xDC, 0xAB, 0xFE, 0xC7, 0xED,
-        0x00, 0xD8, 0xD5, 0xE6, 0xE0, 0xDD, 0xE2, 0xDB, 0x00, 0xCA, 0xC9, 0xC5, 0x1B, 0xC7, 0xC9,
-        0xC8, 0xAB, 0xFF,
-    ],
-    // Route103_Text_MiguelRematchDefeated
-    &[
-        0xC9, 0xDC, 0xAB, 0xFE, 0xC7, 0xED, 0x00, 0xD8, 0xD5, 0xE6, 0xE0, 0xDD, 0xE2, 0xDB, 0x00,
-        0xCA, 0xC9, 0xC5, 0x1B, 0xC7, 0xC9, 0xC8, 0xAB, 0xFF,
-    ],
-    // Route103_Text_PeteDefeated
-    &[
-        0xC9, 0xDC, 0xB8, 0x00, 0xE8, 0xDC, 0xD5, 0xE8, 0xB4, 0xE7, 0x00, 0xDB, 0xE3, 0xE3, 0xD8,
-        0x00, 0xDB, 0xE3, 0xDD, 0xE2, 0xDB, 0xAB, 0xFF,
-    ],
-    // Route103_Text_IsabelleDefeated
-    &[0xC1, 0xE6, 0xE3, 0xD5, 0xE2, 0xB0, 0xFF],
-    // Route103_Text_RhettDefeated
-    &[
-        0xD1, 0xDC, 0xE3, 0xD5, 0xAB, 0xFE, 0xCE, 0xDC, 0xD9, 0x00, 0xDF, 0xDD, 0xD8, 0x00, 0xD7,
-        0xD5, 0xE2, 0x00, 0xE6, 0xE3, 0xD7, 0xDF, 0xAB, 0xFF,
-    ],
-    // Route103_Text_MarcosDefeated
-    &[
-        0xC7, 0xED, 0x00, 0xE3, 0xE2, 0xD9, 0xAE, 0xE1, 0xD5, 0xE2, 0x00, 0xE7, 0xDC, 0xE3, 0xEB,
-        0x00, 0xDD, 0xE7, 0x00, 0xE6, 0xE9, 0xDD, 0xE2, 0xD9, 0xD8, 0xB0, 0xFF,
-    ],
-    // Route103_Text_MayDefeated
-    &[
-        0xD1, 0xE3, 0xEB, 0xAB, 0x00, 0xCE, 0xDC, 0xD5, 0xE8, 0xB4, 0xE7, 0x00, 0xDB, 0xE6, 0xD9,
-        0xD5, 0xE8, 0xAB, 0xFE, 0xFD, 0x01, 0xFD, 0x05, 0xB8, 0x00, 0xED, 0xE3, 0xE9, 0xB4, 0xE6,
-        0xD9, 0x00, 0xE4, 0xE6, 0xD9, 0xE8, 0xE8, 0xED, 0x00, 0xDB, 0xE3, 0xE3, 0xD8, 0xAB, 0xFF,
-    ],
-    // Route103_Text_BrendanDefeated
-    &[
-        0xC2, 0xE9, 0xDC, 0xB8, 0x00, 0xFD, 0x01, 0xB8, 0x00, 0xED, 0xE3, 0xE9, 0xB4, 0xE6, 0xD9,
-        0x00, 0xE2, 0xE3, 0xE8, 0x00, 0xE8, 0xE3, 0xE3, 0x00, 0xE7, 0xDC, 0xD5, 0xD6, 0xD6, 0xED,
-        0xAD, 0xFF,
-    ],
+/// The `Route103_Text_*Defeated` labels in `TrainerDefeatSpeechContext::ALL`
+/// order. Labels only: the expected strings are read at test time from the
+/// contributor's own checkout, so no game text is committed here.
+const TRAINER_DEFEAT_SPEECH_LABELS: [&str; 14] = [
+    "Route103_Text_DaisyDefeated",
+    "Route103_Text_AmyDefeated",
+    "Route103_Text_LivDefeated",
+    "Route103_Text_AmyRematchDefeated",
+    "Route103_Text_LivRematchDefeated",
+    "Route103_Text_AndrewDefeated",
+    "Route103_Text_MiguelDefeated",
+    "Route103_Text_MiguelRematchDefeated",
+    "Route103_Text_PeteDefeated",
+    "Route103_Text_IsabelleDefeated",
+    "Route103_Text_RhettDefeated",
+    "Route103_Text_MarcosDefeated",
+    "Route103_Text_MayDefeated",
+    "Route103_Text_BrendanDefeated",
 ];
 
-#[test]
-fn the_class_name_pin_spells_the_upstream_names_through_the_charmap() {
-    let table = expected_trainer_class_name_table();
-    // Header, 66 records of 6 bytes, and 674 bytes of streams.
-    assert_eq!(table.len(), 8 + 66 * 6 + 674);
-    let rival = [
-        0x53, 0x54, 0x00, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
-    ];
-    assert_eq!(class_name_stream("{PKMN} TRAINER"), rival);
-    assert_eq!(
-        class_name_stream("COOLTRAINER"),
-        [0xBD, 0xC9, 0xC9, 0xC6, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF]
-    );
-    assert_eq!(
-        class_name_stream("HIKER"),
-        [0xC2, 0xC3, 0xC5, 0xBF, 0xCC, 0xFF]
-    );
-    assert_eq!(class_name_stream("POKéFAN")[3], 0x1B);
-    assert_eq!(class_name_stream("SWIMMER♂")[7..], [0xB5, 0xFF]);
-    assert_eq!(class_name_stream("SWIMMER♀")[7..], [0xB6, 0xFF]);
-    // Twelve glyphs and the `EOS` fill the 13-byte row exactly.
-    assert_eq!(class_name_stream("PARASOL LADY").len(), 13);
-    for index in [0, 1, 50, 65] {
-        assert_eq!(class_name_stream(TRAINER_CLASS_NAMES[index]), rival);
-    }
-    assert_eq!(TRAINER_CLASS_NAMES[5], TRAINER_CLASS_NAMES[48]);
-    assert_eq!(TRAINER_CLASS_NAMES[18], TRAINER_CLASS_NAMES[19]);
-    assert!(TRAINER_CLASS_NAMES
-        .iter()
-        .all(|name| class_name_stream(name).len() <= 13));
+/// The upstream files the reference speeches are read from, relative to the
+/// checkout: the shared trainer text, then Route 103's script-local text.
+const TRAINER_DEFEAT_SPEECH_SOURCES: [&str; 2] =
+    ["data/text/trainers.inc", "data/maps/Route103/scripts.inc"];
+
+/// Class indices that share one display name upstream: the four
+/// `{PKMN}`-glyph classes, the two `COOLTRAINER` classes, and the two `TUBER`
+/// classes. Every other class has a name of its own.
+const SHARED_CLASS_NAMES: [&[u16]; 3] = [&[0, 1, 50, 65], &[5, 48], &[18, 19]];
+
+/// Synthetic class names honouring [`SHARED_CLASS_NAMES`]; not game text.
+fn synthetic_class_names() -> Vec<String> {
+    (0u16..66)
+        .map(|index| match index {
+            0 | 1 | 50 | 65 => "{PKMN} QZ".to_owned(),
+            48 => "ZAF".to_owned(),
+            19 => "ZAS".to_owned(),
+            _ => {
+                let letter = |n: u16| char::from(b'A' + u8::try_from(n).expect("a letter"));
+                format!("Z{}{}", letter(index / 26), letter(index % 26))
+            }
+        })
+        .collect()
 }
 
-/// A pack holding just the class-name entry with `payload`, or none.
-fn class_name_pack(payload: Option<Vec<u8>>) -> (Vec<u8>, BTreeMap<String, DirectoryEntry>) {
+/// A synthetic class-name payload, spelled through [`spell`]; not game text.
+fn synthetic_class_name_table() -> Vec<u8> {
+    let streams: Vec<Vec<u8>> = synthetic_class_names()
+        .iter()
+        .map(|name| {
+            let mut stream = spell(name).expect("synthetic names spell");
+            stream.push(0xFF);
+            stream
+        })
+        .collect();
+    record_table(*b"TCLN", &streams)
+}
+
+/// A synthetic speech payload: distinct made-up lines, with `{PLAYER}` and
+/// `{KUN}` where May's and Brendan's speeches carry them; not game text.
+fn synthetic_speech_table() -> Vec<u8> {
+    let streams: Vec<Vec<u8>> = (0..14)
+        .map(|index| {
+            let text = match index {
+                12 => "Zz!\\n{PLAYER}{KUN}, zz.$".to_owned(),
+                13 => "Zz, {PLAYER}, zz.$".to_owned(),
+                _ => format!("Zz {}…$", "z".repeat(index + 1)),
+            };
+            spell(&text).expect("synthetic speeches spell")
+        })
+        .collect();
+    record_table(*b"TDFS", &streams)
+}
+
+#[test]
+fn the_hand_charmap_spells_glyphs_controls_and_placeholders() {
+    assert_eq!(spell("Az"), Ok(vec![0xBB, 0xEE]));
+    assert_eq!(
+        spell("{PKMN} é♂♀"),
+        Ok(vec![0x53, 0x54, 0x00, 0x1B, 0xB5, 0xB6])
+    );
+    assert_eq!(
+        spell("!?.-…'\",:"),
+        Ok(vec![0xAB, 0xAC, 0xAD, 0xAE, 0xB0, 0xB4, 0xB2, 0xB8, 0xF0])
+    );
+    assert_eq!(spell("0 9"), Ok(vec![0xA1, 0x00, 0xAA]));
+    assert_eq!(
+        spell("\\n\\p\\l{PLAYER}{KUN}$"),
+        Ok(vec![0xFE, 0xFB, 0xFA, 0xFD, 0x01, 0xFD, 0x05, 0xFF])
+    );
+    assert!(spell("{RIVAL}").is_err());
+    assert!(spell("~").is_err());
+}
+
+#[test]
+fn reference_class_names_are_read_by_define_not_by_row_order() {
+    let constants = "\
+#define TRAINER_CLASS_ZERO 0x0  // Unused
+#define TRAINER_CLASS_ONE  1
+#define TRAINER_ENCOUNTER_MUSIC_MALE 0
+";
+    let names = "\
+const u8 gTrainerClassNames[][13] = {
+    [TRAINER_CLASS_ONE] = _(\"Zb\"),
+    [TRAINER_CLASS_ZERO] = _(\"{PKMN} Za\"),
+};
+";
+    let streams = reference_class_name_streams(constants, names, 2).unwrap();
+    assert_eq!(
+        streams,
+        [
+            vec![0x53, 0x54, 0x00, 0xD4, 0xD5, 0xFF],
+            vec![0xD4, 0xD6, 0xFF]
+        ]
+    );
+    // A missing row, an unknown designator, and an unspellable name all fail.
+    assert!(reference_class_name_streams(constants, names, 3).is_err());
+    let unknown = names.replace("[TRAINER_CLASS_ONE]", "[TRAINER_CLASS_TWO]");
+    assert!(reference_class_name_streams(constants, &unknown, 2).is_err());
+    let unspellable = names.replace("Zb", "Z~");
+    assert!(reference_class_name_streams(constants, &unspellable, 2).is_err());
+}
+
+#[test]
+fn reference_speeches_are_read_by_label_across_continued_strings() {
+    let first = "\
+Other_Text:
+\t.string \"Zq$\"
+
+Want_A:
+\t.string \"Za!\\n\"
+\t.string \"{PLAYER}…$\"
+";
+    let second = "Want_B::\n\t.string \"Zb.$\"\n";
+    assert_eq!(
+        reference_speech(&[first, second], "Want_A"),
+        Ok(vec![0xD4, 0xD5, 0xAB, 0xFE, 0xFD, 0x01, 0xB0, 0xFF])
+    );
+    assert_eq!(
+        reference_speech(&[first, second], "Want_B"),
+        Ok(vec![0xD4, 0xD6, 0xAD, 0xFF])
+    );
+    // A label defined nowhere, or twice, and a string never closed all fail.
+    assert!(reference_speech(&[first, second], "Want_C").is_err());
+    assert!(reference_speech(&[first, first], "Want_A").is_err());
+    let open = "Want_A:\n\t.string \"Za\"\n";
+    assert!(reference_speech(&[open], "Want_A").is_err());
+}
+
+#[test]
+fn the_structural_checks_accept_the_synthetic_tables_and_catch_merges() {
+    assert_eq!(class_name_structure(&synthetic_class_name_table()), Ok(()));
+    assert_eq!(speech_structure(&synthetic_speech_table()), Ok(()));
+    // Two classes that upstream keeps apart given one name.
+    let mut names = synthetic_class_names();
+    names[3] = names[2].clone();
+    let streams: Vec<Vec<u8>> = names
+        .iter()
+        .map(|name| {
+            let mut stream = spell(name).unwrap();
+            stream.push(0xFF);
+            stream
+        })
+        .collect();
+    assert!(class_name_structure(&record_table(*b"TCLN", &streams)).is_err());
+    assert!(class_name_structure(b"TCLN").is_err());
+    assert!(speech_structure(&synthetic_class_name_table()).is_err());
+}
+
+/// A pack holding just `id` with `payload`, or none.
+fn single_entry_pack(
+    id: &str,
+    payload: Option<Vec<u8>>,
+) -> (Vec<u8>, BTreeMap<String, DirectoryEntry>) {
     let mut writer = pack_format::PackWriter::new();
     if let Some(payload) = payload {
-        writer.push(pack_format::raw_entry(
-            TRAINER_CLASS_NAME_PACK_ID.to_owned(),
-            payload,
-        ));
+        writer.push(pack_format::raw_entry(id.to_owned(), payload));
     }
     let bytes = writer.finish().expect("a valid pack");
     let entries = index(&bytes, "the fixture pack");
     (bytes, entries)
 }
 
-#[test]
-fn the_class_name_pin_catches_an_absent_corrupt_or_identically_wrong_entry() {
-    let good = expected_trainer_class_name_table();
-    let (good_bytes, good_index) = class_name_pack(Some(good.clone()));
-    let (none_bytes, none_index) = class_name_pack(None);
-    let mut wrong = good.clone();
-    // A class name both backends could drop together: the last glyph of record 66.
-    let last = wrong.len() - 2;
-    wrong[last] ^= 0x01;
-    let (wrong_bytes, wrong_index) = class_name_pack(Some(wrong));
+type PackDifferences = fn(
+    (&[u8], &BTreeMap<String, DirectoryEntry>),
+    (&[u8], &BTreeMap<String, DirectoryEntry>),
+    &Result<Vec<u8>, String>,
+) -> Vec<String>;
 
-    assert!(
-        trainer_class_name_differences((&good_bytes, &good_index), (&good_bytes, &good_index))
-            .is_empty()
-    );
-    let one_absent =
-        trainer_class_name_differences((&none_bytes, &none_index), (&good_bytes, &good_index));
-    assert_eq!(one_absent.len(), 1, "{one_absent:?}");
-    assert!(one_absent[0].contains("the ROM backend wrote no such entry"));
-    let both_absent =
-        trainer_class_name_differences((&none_bytes, &none_index), (&none_bytes, &none_index));
-    assert_eq!(both_absent.len(), 2, "{both_absent:?}");
-    let one_corrupt =
-        trainer_class_name_differences((&good_bytes, &good_index), (&wrong_bytes, &wrong_index));
-    assert_eq!(one_corrupt.len(), 1, "{one_corrupt:?}");
-    assert!(one_corrupt[0].contains("the checkout pack"));
-    // Equal packs are not enough: both wrong the same way still fails twice.
-    let both_wrong =
-        trainer_class_name_differences((&wrong_bytes, &wrong_index), (&wrong_bytes, &wrong_index));
-    assert_eq!(both_wrong.len(), 2, "{both_wrong:?}");
+#[test]
+fn the_reference_checks_catch_an_absent_corrupt_or_identically_wrong_entry() {
+    let cases: [(&str, Vec<u8>, PackDifferences); 2] = [
+        (
+            TRAINER_CLASS_NAME_PACK_ID,
+            synthetic_class_name_table(),
+            trainer_class_name_differences,
+        ),
+        (
+            TRAINER_DEFEAT_SPEECH_PACK_ID,
+            synthetic_speech_table(),
+            trainer_defeat_speech_differences,
+        ),
+    ];
+    for (id, good, differences) in cases {
+        let reference = Ok(good.clone());
+        let (good_bytes, good_index) = single_entry_pack(id, Some(good.clone()));
+        let (none_bytes, none_index) = single_entry_pack(id, None);
+        let mut wrong = good.clone();
+        // A glyph both backends could misencode together: the last record's
+        // last glyph, still a well-formed stream.
+        let last = wrong.len() - 2;
+        wrong[last] ^= 0x01;
+        let (wrong_bytes, wrong_index) = single_entry_pack(id, Some(wrong));
+
+        let same = differences(
+            (&good_bytes, &good_index),
+            (&good_bytes, &good_index),
+            &reference,
+        );
+        assert!(same.is_empty(), "{id}: {same:?}");
+        let one_absent = differences(
+            (&none_bytes, &none_index),
+            (&good_bytes, &good_index),
+            &reference,
+        );
+        assert_eq!(one_absent.len(), 1, "{id}: {one_absent:?}");
+        assert!(one_absent[0].contains("the ROM backend wrote no such entry"));
+        let both_absent = differences(
+            (&none_bytes, &none_index),
+            (&none_bytes, &none_index),
+            &reference,
+        );
+        assert_eq!(both_absent.len(), 2, "{id}: {both_absent:?}");
+        let one_corrupt = differences(
+            (&good_bytes, &good_index),
+            (&wrong_bytes, &wrong_index),
+            &reference,
+        );
+        assert_eq!(one_corrupt.len(), 1, "{id}: {one_corrupt:?}");
+        assert!(one_corrupt[0].contains("the checkout pack"));
+        // Equal packs are not enough: both wrong the same way still fails twice.
+        let both_wrong = differences(
+            (&wrong_bytes, &wrong_index),
+            (&wrong_bytes, &wrong_index),
+            &reference,
+        );
+        assert_eq!(both_wrong.len(), 2, "{id}: {both_wrong:?}");
+        // No reference checkout fails closed rather than skipping the check.
+        let unread = differences(
+            (&good_bytes, &good_index),
+            (&good_bytes, &good_index),
+            &Err("no checkout".to_owned()),
+        );
+        assert_eq!(unread.len(), 1, "{id}: {unread:?}");
+        assert!(unread[0].contains("no checkout"));
+    }
 }
 
 /// Ids the two backends are known and accepted to disagree on, each with
@@ -596,14 +697,19 @@ fn the_rom_backend_matches_the_checkout_pack() {
         (&checkout_bytes, &checkout),
     ));
 
+    // Pinned against strings read from the local checkout, so a record both
+    // backends drop or misencode together still fails.
+    let reference = reference_checkout();
     differences.extend(trainer_defeat_speech_differences(
         (&rom_bytes, &imported),
         (&checkout_bytes, &checkout),
+        &reference_trainer_defeat_speech_table(&reference),
     ));
 
     differences.extend(trainer_class_name_differences(
         (&rom_bytes, &imported),
         (&checkout_bytes, &checkout),
+        &reference_trainer_class_name_table(&reference),
     ));
 
     for difference in &differences {
@@ -1319,166 +1425,175 @@ fn field_message_differences(
     differences
 }
 
-/// Each `gTrainerClassNames` row as both backends must write it, in
-/// `TrainerClass` index order, spelled from `src/data/text/trainer_class_names.h`.
-/// `{PKMN}` is the two glyph tokens `PK` and `MN`; `é`, `♂`, and `♀` are glyphs of
-/// their own. The four `{PKMN} TRAINER` classes, the two `COOLTRAINER`s, and the
-/// two `TUBER`s are separate records with equal names.
-const TRAINER_CLASS_NAMES: [&str; 66] = [
-    "{PKMN} TRAINER",
-    "{PKMN} TRAINER",
-    "HIKER",
-    "TEAM AQUA",
-    "{PKMN} BREEDER",
-    "COOLTRAINER",
-    "BIRD KEEPER",
-    "COLLECTOR",
-    "SWIMMER♂",
-    "TEAM MAGMA",
-    "EXPERT",
-    "AQUA ADMIN",
-    "BLACK BELT",
-    "AQUA LEADER",
-    "HEX MANIAC",
-    "AROMA LADY",
-    "RUIN MANIAC",
-    "INTERVIEWER",
-    "TUBER",
-    "TUBER",
-    "LADY",
-    "BEAUTY",
-    "RICH BOY",
-    "POKéMANIAC",
-    "GUITARIST",
-    "KINDLER",
-    "CAMPER",
-    "PICNICKER",
-    "BUG MANIAC",
-    "PSYCHIC",
-    "GENTLEMAN",
-    "ELITE FOUR",
-    "LEADER",
-    "SCHOOL KID",
-    "SR. AND JR.",
-    "WINSTRATE",
-    "POKéFAN",
-    "YOUNGSTER",
-    "CHAMPION",
-    "FISHERMAN",
-    "TRIATHLETE",
-    "DRAGON TAMER",
-    "NINJA BOY",
-    "BATTLE GIRL",
-    "PARASOL LADY",
-    "SWIMMER♀",
-    "TWINS",
-    "SAILOR",
-    "COOLTRAINER",
-    "MAGMA ADMIN",
-    "{PKMN} TRAINER",
-    "BUG CATCHER",
-    "{PKMN} RANGER",
-    "MAGMA LEADER",
-    "LASS",
-    "YOUNG COUPLE",
-    "OLD COUPLE",
-    "SIS AND BRO",
-    "SALON MAIDEN",
-    "DOME ACE",
-    "PALACE MAVEN",
-    "ARENA TYCOON",
-    "FACTORY HEAD",
-    "PIKE QUEEN",
-    "PYRAMID KING",
-    "{PKMN} TRAINER",
-];
+/// The `pokeemerald/` checkout `cargo xtask extract` reads, at the repo root.
+fn reference_checkout() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("crates/rom-import is always two levels under the repo root")
+        .join("pokeemerald")
+}
 
-/// A class name through the charmap, spelled here so no code under test
-/// vouches for it: space is `00`, `.` is `AD`, `A`..`Z` start at `BB`, `a`..`z`
-/// at `D5`, `é` is `1B`, `♂` is `B5`, `♀` is `B6`, `{PKMN}` is `53 54`, and the
-/// string ends in `EOS` (`FF`).
-fn class_name_stream(name: &str) -> Vec<u8> {
+fn read_reference(checkout: &Path, relative: &str) -> Result<String, String> {
+    let path = checkout.join(relative);
+    std::fs::read_to_string(&path)
+        .map_err(|err| format!("reading {} failed: {err}", path.display()))
+}
+
+/// Upstream text through the charmap, spelled here so no code under test
+/// vouches for it. Covers what the class names and Route 103 defeat speeches
+/// use: space `00`, `A`..`Z` from `BB`, `a`..`z` from `D5`, digits from `A1`,
+/// the punctuation below, `é` `1B`, `♂` `B5`, `♀` `B6`, `{PKMN}` `53 54`,
+/// `{PLAYER}` `FD 01`, `{KUN}` `FD 05`, `\n` `FE`, `\p` `FB`, `\l` `FA`, and
+/// `$` (`EOS`) `FF`.
+fn spell(text: &str) -> Result<Vec<u8>, String> {
+    const MULTI: [(&str, &[u8]); 6] = [
+        ("{PKMN}", &[0x53, 0x54]),
+        ("{PLAYER}", &[0xFD, 0x01]),
+        ("{KUN}", &[0xFD, 0x05]),
+        ("\\n", &[0xFE]),
+        ("\\p", &[0xFB]),
+        ("\\l", &[0xFA]),
+    ];
     let mut out = Vec::new();
-    let mut rest = name;
-    while let Some(c) = rest.chars().next() {
-        if let Some(after) = rest.strip_prefix("{PKMN}") {
-            out.extend_from_slice(&[0x53, 0x54]);
-            rest = after;
-            continue;
+    let mut rest = text;
+    'outer: while let Some(c) = rest.chars().next() {
+        for (token, bytes) in MULTI {
+            if let Some(after) = rest.strip_prefix(token) {
+                out.extend_from_slice(bytes);
+                rest = after;
+                continue 'outer;
+            }
         }
+        let offset = |base: char| u8::try_from(u32::from(c) - u32::from(base)).expect("in range");
         out.push(match c {
             ' ' => 0x00,
-            '.' => 0xAD,
             'é' => 0x1B,
+            '0'..='9' => 0xA1 + offset('0'),
+            '!' => 0xAB,
+            '?' => 0xAC,
+            '.' => 0xAD,
+            '-' => 0xAE,
+            '…' => 0xB0,
+            '"' => 0xB2,
+            '\'' => 0xB4,
             '♂' => 0xB5,
             '♀' => 0xB6,
-            'A'..='Z' => 0xBB + u8::try_from(u32::from(c) - u32::from('A')).expect("a letter"),
-            'a'..='z' => 0xD5 + u8::try_from(u32::from(c) - u32::from('a')).expect("a letter"),
-            other => panic!("`{other}` has no spelling in the class-name pin"),
+            ',' => 0xB8,
+            'A'..='Z' => 0xBB + offset('A'),
+            'a'..='z' => 0xD5 + offset('a'),
+            ':' => 0xF0,
+            '$' => 0xFF,
+            other => return Err(format!("`{other}` in {text:?} has no hand spelling")),
         });
         rest = &rest[c.len_utf8()..];
     }
-    out.push(0xFF);
-    out
+    Ok(out)
 }
 
-/// The `trainer-class-name/table` payload both backends must write: the
-/// header, then one record per class in index order. Built here from
-/// [`TRAINER_CLASS_NAMES`] rather than by the schema encoder, so an encoder
-/// both backends share cannot vouch for itself.
-fn expected_trainer_class_name_table() -> Vec<u8> {
-    let count = u16::try_from(TRAINER_CLASS_NAMES.len()).expect("sixty-six records");
-    let mut table = b"TCLN".to_vec();
-    table.extend_from_slice(&1u16.to_le_bytes());
-    table.extend_from_slice(&count.to_le_bytes());
-    for (id, name) in (0u16..).zip(TRAINER_CLASS_NAMES) {
-        table.extend_from_slice(&id.to_le_bytes());
-        let stream = class_name_stream(name);
-        let len = u32::try_from(stream.len()).expect("a stream fits in u32");
-        table.extend_from_slice(&len.to_le_bytes());
-        table.extend_from_slice(&stream);
-    }
-    table
-}
-
-/// The `trainer-class-name/table` pin applied to each backend's pack, given as
-/// `(bytes, index)` pairs: named by id and bytes so a class both backends
-/// drop, merge, reorder, or misencode together still fails.
-fn trainer_class_name_differences(
-    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
-    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
-) -> Vec<String> {
-    let expected = expected_trainer_class_name_table();
-    let mut differences = Vec::new();
-    for (what, (bytes, entries)) in [
-        ("the ROM backend", imported),
-        ("the checkout pack", checkout),
-    ] {
-        let Some(entry) = entries.get(TRAINER_CLASS_NAME_PACK_ID) else {
-            differences.push(format!(
-                "{TRAINER_CLASS_NAME_PACK_ID}: {what} wrote no such entry"
-            ));
+/// `count` class-name streams (`EOS` appended) in index order, from the
+/// `TRAINER_CLASS_*` defines and the `[TRAINER_CLASS_*] = _("…")` rows, read
+/// line by line rather than by the extractor's tokenizer.
+fn reference_class_name_streams(
+    constants: &str,
+    names: &str,
+    count: usize,
+) -> Result<Vec<Vec<u8>>, String> {
+    let mut indices = BTreeMap::new();
+    for line in constants.lines() {
+        let mut words = line.split_whitespace();
+        if words.next() != Some("#define") {
+            continue;
+        }
+        let (Some(symbol), Some(value)) = (words.next(), words.next()) else {
             continue;
         };
-        if bytes[entry.offset..entry.offset + entry.length] != expected[..] {
-            differences.push(format!(
-                "{TRAINER_CLASS_NAME_PACK_ID}: {what} wrote a payload other than the sixty-six trainer class names"
-            ));
+        if !symbol.starts_with("TRAINER_CLASS_") {
+            continue;
+        }
+        let value = match value.strip_prefix("0x") {
+            Some(hex) => usize::from_str_radix(hex, 16),
+            None => value.parse(),
+        }
+        .map_err(|_| format!("`{symbol}` has no literal index"))?;
+        indices.insert(symbol.to_owned(), value);
+    }
+    let mut streams = vec![None; count];
+    for line in names.lines() {
+        let Some((designator, value)) = line.trim().split_once("] = _(\"") else {
+            continue;
+        };
+        let symbol = designator.trim_start_matches('[');
+        let name = value
+            .strip_suffix("\"),")
+            .or_else(|| value.strip_suffix("\")"))
+            .ok_or_else(|| format!("`{symbol}` row is not one literal"))?;
+        let index = *indices
+            .get(symbol)
+            .ok_or_else(|| format!("`{symbol}` has no define"))?;
+        let slot = streams
+            .get_mut(index)
+            .ok_or_else(|| format!("`{symbol}` is {index}, outside {count} classes"))?;
+        let mut stream = spell(name)?;
+        stream.push(0xFF);
+        if slot.replace(stream).is_some() {
+            return Err(format!("class {index} has two rows"));
         }
     }
-    differences
+    streams
+        .into_iter()
+        .enumerate()
+        .map(|(index, stream)| stream.ok_or_else(|| format!("class {index} has no row")))
+        .collect()
 }
 
-/// The `trainer-defeat-speech/table` payload both backends must write: the
-/// header, then one record per speech in ID order. Built here from
-/// [`TRAINER_DEFEAT_SPEECHES`] rather than by the schema encoder, so an encoder
-/// both backends share cannot vouch for itself.
-fn expected_trainer_defeat_speech_table() -> Vec<u8> {
-    let count = u16::try_from(TRAINER_DEFEAT_SPEECHES.len()).expect("fourteen records");
-    let mut table = b"TDFS".to_vec();
+/// The text of the one `label:` (or `label::`) across `sources`: its
+/// consecutive `.string` lines through the one ending in `$`, spelled.
+fn reference_speech(sources: &[&str], label: &str) -> Result<Vec<u8>, String> {
+    let mut found = None;
+    for source in sources {
+        let mut lines = source.lines();
+        while let Some(line) = lines.next() {
+            let line = line.trim_end();
+            if line != format!("{label}:") && line != format!("{label}::") {
+                continue;
+            }
+            if found.is_some() {
+                return Err(format!("`{label}` is defined twice"));
+            }
+            let mut text = String::new();
+            for line in lines.by_ref() {
+                let Some(literal) = line
+                    .trim()
+                    .strip_prefix(".string \"")
+                    .and_then(|rest| rest.strip_suffix('"'))
+                else {
+                    break;
+                };
+                text.push_str(literal);
+                if literal.ends_with('$') {
+                    break;
+                }
+            }
+            if !text.ends_with('$') {
+                return Err(format!("`{label}` has no `$`-terminated string"));
+            }
+            found = Some(spell(&text)?);
+        }
+    }
+    found.ok_or_else(|| format!("`{label}` is defined in no source"))
+}
+
+/// A `magic`, schema 1, record-count header, then one `id`, `byte_len`,
+/// `bytes` record per stream in index order: the layout both the `TCLN` and
+/// `TDFS` codecs document, built here so a shared encoder cannot vouch for
+/// itself.
+fn record_table(magic: [u8; 4], streams: &[Vec<u8>]) -> Vec<u8> {
+    let mut table = magic.to_vec();
     table.extend_from_slice(&1u16.to_le_bytes());
+    let count = u16::try_from(streams.len()).expect("a u16 record count");
     table.extend_from_slice(&count.to_le_bytes());
-    for (id, stream) in (0u16..).zip(TRAINER_DEFEAT_SPEECHES) {
+    for (id, stream) in (0u16..).zip(streams) {
         table.extend_from_slice(&id.to_le_bytes());
         let len = u32::try_from(stream.len()).expect("a stream fits in u32");
         table.extend_from_slice(&len.to_le_bytes());
@@ -1487,37 +1602,156 @@ fn expected_trainer_defeat_speech_table() -> Vec<u8> {
     table
 }
 
-/// The `trainer-defeat-speech/table` pin applied to each backend's pack, given
-/// as `(bytes, index)` pairs: named by id and bytes so a speech both backends
-/// drop, merge, or misencode together still fails.
-fn trainer_defeat_speech_differences(
+/// The `trainer-class-name/table` payload derived from the local checkout.
+fn reference_trainer_class_name_table(checkout: &Path) -> Result<Vec<u8>, String> {
+    let constants = read_reference(checkout, "include/constants/trainers.h")?;
+    let names = read_reference(checkout, "src/data/text/trainer_class_names.h")?;
+    let streams = reference_class_name_streams(&constants, &names, 66)?;
+    Ok(record_table(*b"TCLN", &streams))
+}
+
+/// The `trainer-defeat-speech/table` payload derived from the local checkout.
+fn reference_trainer_defeat_speech_table(checkout: &Path) -> Result<Vec<u8>, String> {
+    let sources = TRAINER_DEFEAT_SPEECH_SOURCES
+        .iter()
+        .map(|relative| read_reference(checkout, relative))
+        .collect::<Result<Vec<_>, _>>()?;
+    let sources: Vec<&str> = sources.iter().map(String::as_str).collect();
+    let streams = TRAINER_DEFEAT_SPEECH_LABELS
+        .iter()
+        .map(|label| reference_speech(&sources, label))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(record_table(*b"TDFS", &streams))
+}
+
+/// Invariants of the class-name payload that carry no game text: it decodes,
+/// covers every class, keeps [`SHARED_CLASS_NAMES`] equal and every other
+/// class distinct, and the shared `{PKMN}` name begins with the two glyphs.
+fn class_name_structure(payload: &[u8]) -> Result<(), String> {
+    let table = TrainerClassNameTable::decode(payload).map_err(|err| err.to_string())?;
+    let names: Vec<&[u8]> = TrainerClass::all()
+        .map(|class| {
+            table
+                .name(class)
+                .ok_or(format!("class {} has no name", class.0))
+        })
+        .collect::<Result<_, _>>()?;
+    if names.len() != 66 {
+        return Err(format!("{} classes, not 66", names.len()));
+    }
+    for group in SHARED_CLASS_NAMES {
+        let first = names[usize::from(group[0])];
+        if group
+            .iter()
+            .any(|&index| names[usize::from(index)] != first)
+        {
+            return Err(format!("classes {group:?} do not share one name"));
+        }
+    }
+    if !names[0].starts_with(&[0x53, 0x54]) {
+        return Err("class 0 does not begin with the `PK` and `MN` glyphs".to_owned());
+    }
+    let distinct: BTreeSet<&[u8]> = names.iter().copied().collect();
+    let shared: usize = SHARED_CLASS_NAMES.iter().map(|group| group.len() - 1).sum();
+    if distinct.len() != names.len() - shared {
+        return Err(format!(
+            "{} distinct names, expected {}",
+            distinct.len(),
+            names.len() - shared
+        ));
+    }
+    Ok(())
+}
+
+/// Invariants of the speech payload that carry no game text: it decodes, the
+/// four `TRAINER_AMY_AND_LIV_1` contexts are four different strings, and the
+/// rivals keep `{PLAYER}` (`FD 01`), May also `{KUN}` (`FD 05`), as tokens.
+fn speech_structure(payload: &[u8]) -> Result<(), String> {
+    let table = TrainerDefeatSpeechTable::decode(payload).map_err(|err| err.to_string())?;
+    let speeches: Vec<&[u8]> = TrainerDefeatSpeechContext::ALL
+        .iter()
+        .map(|&context| table.speech(context))
+        .collect();
+    let shared: BTreeSet<&[u8]> = speeches[1..=4].iter().copied().collect();
+    if shared.len() != 4 {
+        return Err("the Amy and Liv speeches are not four strings".to_owned());
+    }
+    let has = |speech: &[u8], token: [u8; 2]| speech.windows(2).any(|pair| pair == token);
+    if !has(speeches[12], [0xFD, 0x01]) || !has(speeches[12], [0xFD, 0x05]) {
+        return Err("May's speech lost `{PLAYER}` or `{KUN}`".to_owned());
+    }
+    if !has(speeches[13], [0xFD, 0x01]) {
+        return Err("Brendan's speech lost `{PLAYER}`".to_owned());
+    }
+    Ok(())
+}
+
+/// Each backend's `id` payload checked against `reference`, derived from the
+/// local checkout, and against `structure`: named by id and bytes so a
+/// record both backends drop, merge, reorder, or misencode together still
+/// fails. An unreadable reference fails closed.
+fn reference_differences(
+    id: &str,
     imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
     checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    reference: &Result<Vec<u8>, String>,
+    structure: fn(&[u8]) -> Result<(), String>,
 ) -> Vec<String> {
-    let expected = expected_trainer_defeat_speech_table();
-    assert_eq!(
-        expected.len(),
-        8 + 14 * 6 + 420,
-        "the pin spells all 14 speeches"
-    );
+    let reference = match reference {
+        Ok(reference) => reference,
+        Err(problem) => {
+            return vec![format!(
+                "{id}: no reference from the local checkout ({problem})"
+            )]
+        }
+    };
     let mut differences = Vec::new();
     for (what, (bytes, entries)) in [
         ("the ROM backend", imported),
         ("the checkout pack", checkout),
     ] {
-        let Some(entry) = entries.get(TRAINER_DEFEAT_SPEECH_PACK_ID) else {
-            differences.push(format!(
-                "{TRAINER_DEFEAT_SPEECH_PACK_ID}: {what} wrote no such entry"
-            ));
+        let Some(entry) = entries.get(id) else {
+            differences.push(format!("{id}: {what} wrote no such entry"));
             continue;
         };
-        if bytes[entry.offset..entry.offset + entry.length] != expected[..] {
+        let payload = &bytes[entry.offset..entry.offset + entry.length];
+        if let Err(problem) = structure(payload) {
+            differences.push(format!("{id}: {what} wrote a malformed table: {problem}"));
+        } else if payload != &reference[..] {
             differences.push(format!(
-                "{TRAINER_DEFEAT_SPEECH_PACK_ID}: {what} wrote a payload other than the fourteen Route 103 defeat speeches"
+                "{id}: {what} wrote a payload other than the local checkout's"
             ));
         }
     }
     differences
+}
+
+fn trainer_class_name_differences(
+    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    reference: &Result<Vec<u8>, String>,
+) -> Vec<String> {
+    reference_differences(
+        TRAINER_CLASS_NAME_PACK_ID,
+        imported,
+        checkout,
+        reference,
+        class_name_structure,
+    )
+}
+
+fn trainer_defeat_speech_differences(
+    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    reference: &Result<Vec<u8>, String>,
+) -> Vec<String> {
+    reference_differences(
+        TRAINER_DEFEAT_SPEECH_PACK_ID,
+        imported,
+        checkout,
+        reference,
+        speech_structure,
+    )
 }
 
 /// Parse a pack's directory into an id-keyed map.

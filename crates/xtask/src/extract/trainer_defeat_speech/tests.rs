@@ -252,22 +252,25 @@ fn defeat_speeches_are_extracted_from_the_real_checkout() {
     super::super::extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = AssetPack::load(&path).unwrap();
     let table = pack.trainer_defeat_speeches().unwrap();
-    // Spelled by hand through `charmap.txt`: `…` is `B0`, `{PLAYER}` is
-    // `FD 01`, `'` is `B4`, and `$` is `FF`.
-    // "Groan…$"
-    assert_eq!(
-        table.speech(TrainerDefeatSpeechContext::Route103Isabelle),
-        [0xC1, 0xE6, 0xE3, 0xD5, 0xE2, 0xB0, 0xFF]
-    );
-    // "Huh, {PLAYER}, you're not too shabby.$"
-    assert_eq!(
+    // Checked by shape, not spelled out, so no game text is committed:
+    // every speech is one `EOS`-terminated stream, and the rivals keep
+    // `{PLAYER}` (`FD 01`), May also `{KUN}` (`FD 05`), as placeholder tokens.
+    let has = |speech: &[u8], token: [u8; 2]| speech.windows(2).any(|pair| pair == token);
+    for context in TrainerDefeatSpeechContext::ALL {
+        let speech = table.speech(context);
+        // One `EOS`, at the end.
+        assert_eq!(
+            speech.iter().position(|&b| b == 0xFF),
+            Some(speech.len() - 1),
+            "{context:?}"
+        );
+    }
+    let may = table.speech(TrainerDefeatSpeechContext::Route103May);
+    assert!(has(may, [0xFD, 0x01]) && has(may, [0xFD, 0x05]));
+    assert!(has(
         table.speech(TrainerDefeatSpeechContext::Route103Brendan),
-        [
-            0xC2, 0xE9, 0xDC, 0xB8, 0x00, 0xFD, 0x01, 0xB8, 0x00, 0xED, 0xE3, 0xE9, 0xB4, 0xE6,
-            0xD9, 0x00, 0xE2, 0xE3, 0xE8, 0x00, 0xE8, 0xE3, 0xE3, 0x00, 0xE7, 0xDC, 0xD5, 0xD6,
-            0xD6, 0xED, 0xAD, 0xFF
-        ]
-    );
+        [0xFD, 0x01]
+    ));
     // The two Amy/Liv defeat speeches and their rematches differ.
     let shared = [
         TrainerDefeatSpeechContext::Route103Amy,
