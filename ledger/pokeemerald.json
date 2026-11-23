@@ -32438,6 +32438,14 @@
       "status": "pending"
     },
     "src/field_specials.c": {
+      "artifacts": {
+        "IncrementBirthIslandRockStepCount": {
+          "reason": "field_specials.c:3377-3387, called from ProcessPlayerFieldInput on tookStep right after IncrementGameStat(GAME_STAT_STEPS) and before TryStartStepBasedScript (field_control_avatar.c:155-160). OverworldPhase::increment_birth_island_rock_step_count, run from count_took_step, advances VAR_DEOXYS_ROCK_STEP_COUNT (vars.h:72, a saved event var) on MAP_BIRTH_ISLAND_EXTERIOR only, as a u16 wrapping increment that stores zero once the result passes 99, so a loaded value of 99 or more resets rather than climbing and 0xFFFF wraps to zero with no panic and no RNG draw. A landing a coord event or door-shaped warp then claims is still counted; the forced landing, the escalator arrival's held walk-off and an unfinished crossing are not (take_stepped_onto), as for GAME_STAT_STEPS. Not modelled: the rock movement and palette (SetDeoxysRockPalette, the Deoxys triangle scripts), the puzzle outcome, the Deoxys encounter and the trip to the island.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/birth_island_rock.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

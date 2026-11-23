@@ -45,6 +45,7 @@ pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
 mod battle_start_stats;
+mod birth_island_rock;
 mod connections;
 mod escalator_arrival;
 mod field_friendship;
@@ -1084,6 +1085,8 @@ mod animation_tick_tests;
 mod battle_start_stats_tests;
 #[cfg(test)]
 mod bedroom_collision_tests;
+#[cfg(test)]
+mod birth_island_rock_tests;
 #[cfg(test)]
 mod connection_live_objects_tests;
 #[cfg(test)]
