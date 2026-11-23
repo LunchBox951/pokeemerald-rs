@@ -31,6 +31,40 @@ fn noise_retune_preserves_the_width_bit() {
 }
 
 #[test]
+fn noise_retune_applied_by_begin_frame_preserves_the_width_bit() {
+    let octave_up: u8 = 12;
+    let retuned_key = TEST_KEY + octave_up;
+    assert_ne!(
+        midi_key_to_noise_control(TEST_KEY),
+        midi_key_to_noise_control(retuned_key)
+    );
+    let render_frame = |voice: &mut CgbVoice| {
+        let mut frame = [(0i32, 0i32); crate::SAMPLES_PER_FRAME];
+        voice.render(&mut frame, &[]);
+    };
+
+    let mut narrow = noise_voice(CgbAdsr::flat(), NARROW_NOISE, TestNote::default());
+    narrow.begin_frame(false);
+    narrow.set_track_pitch(i32::from(octave_up), 0);
+    narrow.begin_frame(false);
+    assert!(narrow.pending_pitch.is_none());
+    assert_eq!(narrow.noise_is_narrow(), Some(true));
+
+    // The request took effect: the voice clocks like one built at the new key,
+    // not like an un-retuned voice.
+    let mut fresh = noise_voice(CgbAdsr::flat(), NARROW_NOISE, TestNote::at_key(retuned_key));
+    fresh.begin_frame(false);
+    let mut untuned = noise_voice(CgbAdsr::flat(), NARROW_NOISE, TestNote::default());
+    untuned.begin_frame(false);
+    untuned.begin_frame(false);
+    for voice in [&mut narrow, &mut fresh, &mut untuned] {
+        render_frame(voice);
+    }
+    assert_eq!(narrow.noise_lfsr(), fresh.noise_lfsr());
+    assert_ne!(narrow.noise_lfsr(), untuned.noise_lfsr());
+}
+
+#[test]
 fn a_live_noise_retune_carries_elapsed_time_across_full_frames() {
     // `mgba/src/gb/audio.c:354-358,602-607,630-644`: `lastEvent` survives an NR43 write.
     assert_eq!(crate::SAMPLES_PER_FRAME, 224);
