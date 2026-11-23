@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 // of which path opened it, and the handle-bound delete that verifies it, both
 // owned by `win_fs` and shared with the verified save-path read in `open`.
 #[cfg(windows)]
-use win_fs::{remove_through_verified_handle, WindowsFileIdentity};
+use win_fs::{remove_through_verified_handle, VerifiedRemoval, WindowsFileIdentity};
 
 /// A first guess at the per-component limit most POSIX and Windows
 /// filesystems share, in bytes -- not a promise every filesystem keeps:
@@ -523,14 +523,13 @@ impl StagedSave {
     /// has no unlink bound to the checked identity, so any delete would
     /// re-resolve the name and could remove an entry that replaced it.
     ///
-    /// The returned error keeps `source`'s `ErrorKind` and carries `source`
-    /// itself inside a [`RetainedStagingFile`].
+    /// The staged image is reported whether the name still reaches it, reaches
+    /// nothing, or reaches someone else's entry, since a retargeted ancestor
+    /// leaves the image behind in the old directory. The returned error keeps
+    /// `source`'s `ErrorKind` and carries `source` itself inside a
+    /// [`RetainedStagingFile`].
     pub(super) fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
-        let unreadable = match self.still_ours() {
-            Ok(false) => return source,
-            Ok(true) => None,
-            Err(unreadable) => Some(unreadable),
-        };
+        let unreadable = self.still_ours().err();
         self.release_hold();
         std::io::Error::new(
             source.kind(),
@@ -557,10 +556,10 @@ impl StagedSave {
     /// [`SaveFile::write_with`](super::SaveFile::write_with) documents is
     /// unrelated: it bounds the *rename*, not this cleanup unlink.
     ///
-    /// A path that reaches nothing at all is folded into the returned error
-    /// like any other cleanup failure, as the non-Windows arm folds its
-    /// `NotFound`: the staged image may still exist where a retargeted
-    /// ancestor used to point.
+    /// A path that reaches nothing, or someone else's file (which is left
+    /// alone), is folded into the returned error like any other cleanup
+    /// failure: the staged image may still exist where a retargeted ancestor
+    /// used to point.
     pub(super) fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
         self.release_hold();
         match remove_through_verified_handle(&self.path, self.hold.identity) {
@@ -568,7 +567,12 @@ impl StagedSave {
             // still completes once the last other handle closes, as
             // `std::fs::remove_file`'s own fallback does; nothing is left
             // behind to report.
-            Ok(_) => source,
+            Ok(VerifiedRemoval::Unlinked | VerifiedRemoval::Pending) => source,
+            Ok(VerifiedRemoval::NotOurs) => fold_cleanup_error(
+                &source,
+                &std::io::Error::other("the path now reaches a different file, left in place"),
+                &self.path,
+            ),
             Err(cleanup_err) => fold_cleanup_error(&source, &cleanup_err, &self.path),
         }
     }

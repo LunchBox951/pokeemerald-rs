@@ -379,6 +379,15 @@ fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
     let err = staged.remove_after(std::io::Error::other("the rename failed"));
 
     assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err:?}");
+    assert!(
+        err.to_string()
+            .contains("additionally failed to remove the abandoned staging file"),
+        "an orphaned staged image must be reported, not dropped: {err}"
+    );
+    assert!(
+        target.join("staged.tmp").exists(),
+        "the orphan really is still there, under the original target"
+    );
     assert_eq!(
         std::fs::read(&victim).expect("the unrelated file survives"),
         b"someone else's file",
@@ -699,4 +708,45 @@ fn a_save_written_under_an_owner_stripping_umask_is_owner_readable() {
     );
     let reloaded = file.read().unwrap().expect("the save must be readable");
     assert_eq!(reloaded.flash_image(), store.flash_image());
+}
+
+// A retarget of the staging parent to a directory holding a different
+// staged.tmp orphans this call's image; cleanup must report it.
+#[cfg(unix)]
+#[test]
+fn cleanup_reports_a_staged_image_orphaned_by_a_retarget_onto_a_different_file() {
+    let dir = TempDir::new("staging-cleanup-retarget-other-file");
+    let first = dir.join("a");
+    let second = dir.join("b");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::write(second.join("staged.tmp"), b"someone else's file").unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+
+    let mut staged = stage_at_first_free_name(
+        std::iter::once(link.join("staged.tmp")),
+        create_new_exclusive,
+        &vec![0u8; FLASH_IMAGE_LEN],
+    )
+    .unwrap();
+
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&second, &link).unwrap();
+
+    let err = staged.remove_after(std::io::Error::other("the rename failed"));
+
+    assert!(
+        first.join("staged.tmp").exists(),
+        "the orphan is still there"
+    );
+    assert_eq!(
+        std::fs::read(second.join("staged.tmp")).unwrap(),
+        b"someone else's file",
+        "cleanup must leave the other file alone"
+    );
+    assert!(
+        err.to_string().contains("was not removed"),
+        "an orphaned staged image must be reported, not dropped: {err}"
+    );
 }
