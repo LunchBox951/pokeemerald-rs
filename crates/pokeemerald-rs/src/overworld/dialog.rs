@@ -1216,9 +1216,11 @@ mod tests {
             ]
         };
 
-        let path = write_field_dialog_scratch_pack();
-        let pack = AssetPack::load(&path).expect("the synthetic field-dialog pack must load");
-        let _ = std::fs::remove_file(&path);
+        let pack = crate::overworld::test_support::with_scratch_pack(
+            field_dialog_scratch_path(),
+            synthetic_field_dialog_pack_bytes(),
+            |pack| pack,
+        );
 
         let mut fast_dialog =
             NpcDialog::from_pack_at_speed(&pack, tokens(), TextSpeed::from_raw_option(2))
@@ -1487,7 +1489,6 @@ mod tests {
         use crate::pack_test_support::{
             image_entry, pack_bytes_with_fonts, palette_entry_with_color,
         };
-        use assets::pack::AssetPack;
         use rendering::Bgr555;
 
         const MARKER_SHEET_ROW: usize = 3;
@@ -1514,9 +1515,7 @@ mod tests {
             std::process::id(),
             std::thread::current().id()
         ));
-        crate::overworld::test_support::write_scratch_exclusive(&path, bytes);
-        let pack = AssetPack::load(&path).expect("the synthetic pack must load");
-        let _ = std::fs::remove_file(&path);
+        let pack = crate::overworld::test_support::with_scratch_pack(path, bytes, |pack| pack);
 
         let mut dialog = NpcDialog::from_pack_at_speed(
             &pack,
