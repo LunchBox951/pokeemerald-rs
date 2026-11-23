@@ -2,8 +2,9 @@
 //! private action seam because no AI decision selects a switch yet.
 
 use assets::trainers::TrainerId;
-use assets::{MoveId, SpeciesId};
+use assets::{AbilityId, MoveId, SpeciesId, Type};
 
+use super::battler_state::MoveLock;
 use super::trainer::fixed_ivs;
 use super::{
     Battle, BattleEvent, BattlerSide, EnemyAction, LastLandedMove, PerishSongTurns, PlayerAction,
@@ -122,6 +123,36 @@ fn switches_keep_every_party_member_in_its_original_slot() {
         assert_eq!(context.bench().len(), 3);
         assert_eq!(context.bench_len(), 3);
     }
+}
+
+#[test]
+fn a_switch_restores_a_color_change_members_species_typing_out_and_in() {
+    const KECLEON: SpeciesId = SpeciesId::KECLEON;
+    let dex = Dex::new();
+    let player = mon(&dex, MEOWTH, 5, &[MoveId::TACKLE]);
+    let party = vec![
+        mon(&dex, KECLEON, 50, &[MoveId::TACKLE]),
+        mon(&dex, TREECKO, 50, &[MoveId::TACKLE]),
+    ];
+    let mut battle = battle_with_party(party, player);
+    let mut rng = ScriptedRng::new(&[]);
+    battle.enemy.set_temporary_type(Type::Water);
+    assert_eq!(battle.enemy().types(), [Type::Water, Type::Water]);
+
+    turn_with(&mut battle, 0, EnemyAction::Switch(1), &mut rng).expect("a healthy slot");
+    let benched = battle
+        .trainer()
+        .expect("a trainer battle")
+        .candidates()
+        .map(|(slot, mon)| (slot, mon.types()))
+        .find(|(slot, _)| *slot == 0)
+        .expect("the outgoing lead is benched");
+    assert_eq!(benched.1, [Type::Normal, Type::Normal]);
+
+    turn_with(&mut battle, 0, EnemyAction::Switch(0), &mut rng).expect("back to the lead");
+    assert_eq!(battle.enemy().species(), KECLEON);
+    assert_eq!(battle.enemy().types(), [Type::Normal, Type::Normal]);
+    assert_eq!(battle.enemy().ability(), AbilityId::COLOR_CHANGE);
 }
 
 #[test]
@@ -341,6 +372,7 @@ fn a_switch_resets_the_outgoing_battlers_scratch_and_history_only() {
     battle.enemy.volatiles_mut().set_defense_curl();
     battle.enemy.volatiles_mut().set_confusion(3);
     battle.enemy.volatiles_mut().activate_flash_fire();
+    battle.enemy.volatiles_mut().set_yawn();
     battle.last_move_used = MoveId::TACKLE;
     let enemy = BattlerSide::Enemy.index();
     let player = BattlerSide::Player.index();
@@ -350,6 +382,10 @@ fn a_switch_resets_the_outgoing_battlers_scratch_and_history_only() {
         LastLandedMove::Move(MoveId::TACKLE),
     );
     battle.battler_states[enemy].set_perish_song(Some(PerishSongTurns(0)));
+    battle.battler_states[enemy].set_move_lock(Some(MoveLock {
+        move_id: MoveId::ROLLOUT,
+        attempts_left: 3,
+    }));
     battle.battler_states[player].record_move_end(
         BattlerSide::Enemy,
         true,
@@ -731,4 +767,204 @@ fn an_invalid_switch_does_not_cure_a_natural_cure_member() {
     .expect_err("the active slot");
 
     assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+}
+
+/// A badly poisoned member that has already ticked `ticks` times in battle:
+/// its stored word is `stored` and its battle copy is further along.
+fn toxic_after(mut mon: BattlePokemon, stored: u8, ticks: u8) -> BattlePokemon {
+    mon.set_status1(Status1::BadPoisoned { counter: stored });
+    for _ in 0..ticks {
+        mon.advance_toxic_turns().expect("badly poisoned");
+    }
+    mon
+}
+
+/// A switch-out discards the battle copy, and the switch-in reloads the
+/// party's stored word, so the next tick follows the stored counter:
+/// `SwitchInClearSetData` never writes `status1`
+/// (`pokeemerald/src/battle_main.c:3152`-`:3262`).
+#[test]
+fn a_trainer_bench_member_re_enters_with_its_stored_toxic_counter() {
+    for (stored, expected_next) in [(0, 1), (5, 6)] {
+        let mut rng = ScriptedRng::new(&[]);
+        let mut battle = four_mon_battle(&mut rng);
+        battle.enemy = toxic_after(battle.enemy.clone(), stored, 3);
+
+        let mut events = Vec::new();
+        battle.switch_enemy_to(1, &mut events).expect("voluntary");
+        battle.switch_enemy_to(0, &mut events).expect("back in");
+
+        assert_eq!(
+            battle.enemy().status1(),
+            Status1::BadPoisoned { counter: stored },
+            "the status stays and its stored counter is untouched"
+        );
+        assert_eq!(
+            battle.enemy.advance_toxic_turns(),
+            Some(expected_next),
+            "stored {stored}"
+        );
+    }
+}
+
+#[test]
+fn a_player_reserve_enters_with_its_stored_toxic_counter() {
+    for (stored, expected_next) in [(0, 1), (5, 6)] {
+        let dex = Dex::new();
+        let player = mon(&dex, MEOWTH, 5, &[MoveId::TACKLE]);
+        let reserve = toxic_after(mon(&dex, PICHU, 5, &[MoveId::TACKLE]), stored, 3);
+        let party = vec![mon(&dex, TREECKO, 50, &[MoveId::TACKLE])];
+        let mut rng = ScriptedRng::new(&[]);
+        let mut battle = Battle::new_trainer_with_player_reserves(
+            dex,
+            player,
+            vec![reserve],
+            MAY_ROUTE_103_MUDKIP,
+            party,
+            &mut rng,
+        )
+        .expect("a valid battle");
+        battle.player.apply_damage(battle.player.stats().max_hp);
+
+        assert!(battle.send_out_next_player_reserve(&mut Vec::new()));
+
+        assert_eq!(
+            battle.player().status1(),
+            Status1::BadPoisoned { counter: stored }
+        );
+        assert_eq!(
+            battle.player.advance_toxic_turns(),
+            Some(expected_next),
+            "stored {stored}"
+        );
+    }
+}
+
+const NINJASK: SpeciesId = SpeciesId(302);
+
+/// A level-5 Meowth against a trainer party `[Treecko, Ninjask]`, both
+/// knowing only Splash.
+fn ninjask_bench_battle() -> Battle {
+    let dex = Dex::new();
+    let player = mon(&dex, MEOWTH, 5, &[MoveId::SPLASH]);
+    let party = vec![
+        mon(&dex, TREECKO, 50, &[MoveId::SPLASH]),
+        mon(&dex, NINJASK, 50, &[MoveId::SPLASH]),
+    ];
+    battle_with_party(party, player)
+}
+
+fn speed_boosts(events: &[BattleEvent]) -> usize {
+    events
+        .iter()
+        .filter(|event| matches!(event, BattleEvent::SpeedBoostActivated { .. }))
+        .count()
+}
+
+#[test]
+fn a_voluntary_switch_in_skips_that_turns_speed_boost_and_boosts_the_next() {
+    let mut battle = ninjask_bench_battle();
+    let mut rng = ScriptedRng::new(&[]);
+
+    let switch_turn = turn_with(&mut battle, 0, EnemyAction::Switch(1), &mut rng).unwrap();
+    assert_eq!(battle.enemy().species(), NINJASK);
+    assert_eq!(speed_boosts(&switch_turn), 0, "{switch_turn:?}");
+    assert_eq!(
+        battle.enemy().stages(),
+        crate::pokemon::StatStages::default()
+    );
+
+    let next = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng).unwrap();
+    assert!(
+        next.contains(&BattleEvent::SpeedBoostActivated {
+            by_player: false,
+            new_stage: StatStage::new(1).unwrap(),
+        }),
+        "{next:?}"
+    );
+}
+
+#[test]
+fn switching_a_boosted_holder_back_in_restores_the_first_turn_suppression() {
+    let mut battle = ninjask_bench_battle();
+    let mut rng = ScriptedRng::new(&[]);
+    turn_with(&mut battle, 0, EnemyAction::Switch(1), &mut rng).unwrap();
+    let enemy = BattlerSide::Enemy.index();
+    let player = BattlerSide::Player.index();
+    battle.battler_states[enemy].tick_first_turn();
+    assert!(!battle.battler_states[enemy].suppresses_speed_boost());
+    let player_state = battle.battler_states[player];
+
+    let mut events = Vec::new();
+    battle.switch_enemy_to(0, &mut events).unwrap();
+    battle.switch_enemy_to(1, &mut events).unwrap();
+
+    assert!(
+        battle.battler_states[enemy].suppresses_speed_boost(),
+        "a switch resets the occupancy counter to 2"
+    );
+    assert_eq!(
+        battle.battler_states[player], player_state,
+        "the other battler's occupancy state is untouched"
+    );
+}
+
+#[test]
+fn a_fainted_holder_neither_boosts_nor_announces() {
+    for is_player in [true, false] {
+        let dex = Dex::new();
+        let player = mon(&dex, NINJASK, 5, &[MoveId::SPLASH]);
+        let party = vec![mon(&dex, NINJASK, 5, &[MoveId::SPLASH])];
+        let mut battle = battle_with_party(party, player);
+        for state in &mut battle.battler_states {
+            state.tick_first_turn();
+            assert!(!state.suppresses_speed_boost());
+        }
+        let holder = if is_player {
+            &mut battle.player
+        } else {
+            &mut battle.enemy
+        };
+        holder.apply_damage(holder.stats().max_hp);
+
+        let mut events = Vec::new();
+        battle.apply_speed_boost_residual(is_player, &mut events);
+
+        assert!(events.is_empty(), "{events:?}");
+        let holder = if is_player {
+            &battle.player
+        } else {
+            &battle.enemy
+        };
+        assert_eq!(holder.stages().speed, StatStage::NEUTRAL);
+    }
+}
+
+#[test]
+fn a_residual_faint_that_decides_the_battle_still_runs_the_end_turn_cleanup() {
+    let dex = Dex::new();
+    let mut player = mon(&dex, MEOWTH, 5, &[MoveId::SPLASH]);
+    player.set_status1(Status1::Poisoned);
+    player.apply_damage(player.stats().max_hp - 1);
+    let mut battle = battle_with_party(vec![mon(&dex, TREECKO, 50, &[MoveId::SPLASH])], player);
+    let mut rng = ScriptedRng::new(&[]);
+    for side in [BattlerSide::Player, BattlerSide::Enemy] {
+        assert_eq!(battle.battler_state(side).first_turn(), 1);
+    }
+
+    let events = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng).unwrap();
+
+    assert_eq!(
+        battle.outcome(),
+        Some(super::BattleOutcome::PlayerLost),
+        "{events:?}"
+    );
+    // The fainted player was reset to 2 by `FaintClearSetData` and then aged
+    // once; the surviving enemy lead went from 1 to 0.
+    assert_eq!(battle.battler_state(BattlerSide::Player).first_turn(), 1);
+    assert_eq!(
+        battle.battler_state(BattlerSide::Enemy).first_turn(),
+        0,
+        "BattleTurnPassed's TurnValuesCleanUp(FALSE) runs behind a decided outcome"
+    );
 }

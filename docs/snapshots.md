@@ -13,7 +13,7 @@ The command drives a real headless application scene and writes a complete gener
 Each generation contains:
 
 - `<generation>/<scene>.rgb`: raw 240×160 RGB pixels in row-major order.
-- `<generation>/<scene>.meta`: scene, dimensions, pixel format, scripted inputs, `rgb_hash`, `pack_hash`, and `git_sha`; dirty captures suffix the SHA with `-dirty`.
+- `<generation>/<scene>.meta`: scene, dimensions, pixel format, scripted inputs, `rgb_hash`, `pack_hash`, and `git_sha`; dirty captures suffix the SHA with `-dirty`. A tracked file hidden from `git status` by an assume-unchanged or skip-worktree index flag also counts as dirty, because its edits cannot be seen.
 - `<scene>.generation`: the atomic pointer to the complete visible generation.
 
 The recorder stages both payload files before replacing the generation pointer. A failure before that replacement therefore leaves the previous complete generation visible, or leaves no generation on an initial run. Available scenes are `title`, `main-menu-new-game`, and `main-menu-option`. The title capture uses the documented visible “Press Start” frame.

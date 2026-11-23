@@ -624,6 +624,37 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
+    /// Route 104's Haley: a level-6 Lotad leading a level-6 Shroomish, scored
+    /// with `AI_SCRIPT_CHECK_BAD_MOVE` alone (`trainer_parties.h:8007-8017`,
+    /// `trainers.h:7252-7261`). Lotad's level-1 Astonish used to refuse the
+    /// whole party.
+    #[test]
+    fn haleys_real_party_passes_move_admission_and_leads_with_astonish() {
+        let data = battle::trainer_data(TrainerId::HALEY_1).unwrap();
+        assert_eq!(data.ai_flags, assets::trainers::AiFlags::CHECK_BAD_MOVE);
+
+        let mut rng = Rng::new(1);
+        let battle = start_npc_trainer_battle(treecko_lead(), TrainerId::HALEY_1, &mut rng)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+
+        let lotad = battle.enemy();
+        assert_eq!(lotad.species(), SpeciesId::LOTAD);
+        assert_eq!(lotad.level(), 6);
+        assert!(
+            lotad
+                .moves()
+                .iter()
+                .any(|slot| slot.move_id == MoveId::ASTONISH),
+            "{:?}",
+            lotad.moves()
+        );
+        assert_eq!(
+            battle.trainer().map(battle::TrainerContext::bench_len),
+            Some(1),
+            "the level-6 Shroomish waits in reserve"
+        );
+    }
+
     /// A Lady holding a Nugget, with a Full Restore in her bag.
     const CINDY_WITH_FULL_RESTORE: TrainerId = TrainerId(114);
     const NUGGET_THEN_EMPTY_PARTY: TrainerId = TrainerId(694);
@@ -735,12 +766,12 @@ mod tests {
     fn a_berry_holding_lead_is_refused_before_any_ot_id_draw() {
         let mut rng = Rng::new(1);
         let before = rng.state();
-        let lead = treecko_lead().with_held_item(ItemId::ORAN_BERRY);
+        let lead = treecko_lead().with_held_item(ItemId::SITRUS_BERRY);
         let result = start_npc_trainer_battle(lead, NUGGET_THEN_EMPTY_PARTY, &mut rng);
         assert_eq!(
             result.err(),
             Some(NpcTrainerBattleError::Battle(
-                BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)
+                BattleError::UnsupportedHeldItem(ItemId::SITRUS_BERRY)
             ))
         );
         assert_eq!(
@@ -766,16 +797,34 @@ mod tests {
     }
 
     #[test]
-    fn a_berry_party_is_refused_before_any_ot_id_draw() {
+    fn a_party_with_an_unported_move_is_refused_before_any_ot_id_draw() {
+        // `TRAINER_THOMAS`: his level-45 Zangoose knows Pursuit.
         let mut rng = Rng::new(1);
         let before = rng.state();
-        let result = start_npc_trainer_battle(treecko_lead(), ORAN_BERRY_PARTY, &mut rng);
+        let result = start_npc_trainer_battle(treecko_lead(), TrainerId(256), &mut rng);
         assert_eq!(
             result.err(),
             Some(NpcTrainerBattleError::Battle(
-                BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)
+                BattleError::UnsupportedMoveEffect(MoveId::PURSUIT)
             ))
         );
-        assert_eq!(rng.state(), before, "the item screen precedes every draw");
+        assert_eq!(rng.state(), before, "the party screen precedes every draw");
+    }
+
+    #[test]
+    fn the_oran_berry_party_constructs_now_that_headbutt_flinches() {
+        // Neither the Berries nor the party's Headbutt stops it now.
+        let mut rng = Rng::new(1);
+        let battle = start_npc_trainer_battle(treecko_lead(), ORAN_BERRY_PARTY, &mut rng)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let bench = battle.trainer().expect("a trainer battle").bench();
+        assert_eq!(battle.enemy().held_item(), ItemId::ORAN_BERRY);
+        assert!(
+            std::iter::once(battle.enemy())
+                .chain(bench)
+                .flat_map(BattlePokemon::moves)
+                .any(|slot| slot.move_id == MoveId::HEADBUTT),
+            "the move that used to refuse the party is on it"
+        );
     }
 }

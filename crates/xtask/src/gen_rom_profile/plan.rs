@@ -266,10 +266,14 @@ pub struct TitleScreenPlan {
 pub struct SpritePlan {
     /// `sObjectEventSpritePalettes`.
     pub palette_table: u32,
-    /// Every object-event sprite sheet.
+    /// Every sprite sheet: the object-event sheets and the tall-grass
+    /// field-effect sheet.
     pub sheets: Vec<ImagePlan>,
-    /// The palette banks this root owns.
+    /// The object-event palette banks, each named by `sObjectEventSpritePalettes`.
     pub palettes: Vec<PalettePlan>,
+    /// The field-effect palette banks, which the object-event palette table
+    /// does not name.
+    pub field_effect_palettes: Vec<PalettePlan>,
 }
 
 /// A map layout root, owned.
@@ -440,6 +444,32 @@ pub struct FieldMessageRootPlan {
 pub struct FieldMessagePlan {
     /// Every field message, in `FieldMessage::ALL` order.
     pub messages: Vec<FieldMessageRootPlan>,
+}
+
+/// One trainer defeat speech's root, owned.
+#[derive(Debug, Clone)]
+pub struct TrainerDefeatSpeechRootPlan {
+    /// The upstream label, as `TrainerDefeatSpeechContext::symbol` spells it.
+    pub symbol: &'static str,
+    /// The GBA bus address of the speech's token stream.
+    pub addr: u32,
+    /// The GBA bus address of the `trainerbattle` command that names the
+    /// speech, for one whose text alone does not identify it.
+    pub script: Option<u32>,
+}
+
+/// The trainer defeat-speech roots, owned.
+#[derive(Debug, Clone)]
+pub struct TrainerDefeatSpeechPlan {
+    /// Every speech, in `TrainerDefeatSpeechContext::ALL` order.
+    pub speeches: Vec<TrainerDefeatSpeechRootPlan>,
+}
+
+/// The trainer class-name table's root, owned.
+#[derive(Debug, Clone)]
+pub struct TrainerClassNamePlan {
+    /// The GBA bus address of `gTrainerClassNames`, 66 rows of 13 bytes.
+    pub addr: u32,
 }
 
 /// One battle-animation program's root, owned.
@@ -640,6 +670,17 @@ pub struct NamingScreenPlan {
     pub tilemaps: Vec<BlobPlan>,
 }
 
+/// The party menu's sheets, palettes, and maps, owned.
+#[derive(Debug, Clone)]
+pub struct PartyMenuPlan {
+    /// Every `party-menu/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `party-menu/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `party-menu/raw/*` map root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -653,6 +694,8 @@ pub struct ProfilePlan {
     pub layouts: Vec<MapLayoutPlan>,
     /// The Latin glyph sheets.
     pub fonts: Vec<FontPlan>,
+    /// Font bitmaps that are ordinary tile sheets: the keypad-icon sheet.
+    pub font_images: Vec<ImagePlan>,
     /// Text-window frames and palettes.
     pub text_window: TextWindowPlan,
     /// Interface images and palettes.
@@ -663,6 +706,10 @@ pub struct ProfilePlan {
     pub battle_messages: BattleMessagePlan,
     /// The field-message token table.
     pub field_messages: FieldMessagePlan,
+    /// The trainer defeat-speech table.
+    pub trainer_defeat_speeches: TrainerDefeatSpeechPlan,
+    /// The trainer class display-name table.
+    pub trainer_class_names: TrainerClassNamePlan,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.
@@ -677,6 +724,8 @@ pub struct ProfilePlan {
     pub battle_interface: BattleInterfacePlan,
     /// The naming screen's sheets, palettes, and tilemaps.
     pub naming_screen: NamingScreenPlan,
+    /// The party menu's sheets, palettes, and maps.
+    pub party_menu: PartyMenuPlan,
     /// The static battler art.
     pub battlers: BattlerPlan,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.

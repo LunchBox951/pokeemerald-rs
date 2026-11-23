@@ -24,6 +24,7 @@ use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 use crate::damage::{aggregate_type_effectiveness, BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::leech_seed::is_leech_seed_effect;
 use crate::pokemon::BattlePokemon;
 
 /// Move effect shared by Poison Sting, Smog, Sludge, and Sludge Bomb.
@@ -164,6 +165,35 @@ pub fn is_speed_down_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_SPEED_DOWN_HIT
 }
 
+/// Returns whether `effect` is [`MoveEffect::FLINCH_HIT`] or
+/// [`MoveEffect::FLINCH_MINIMIZE_HIT`], the two [`SECONDARY_TRAMPOLINES`]
+/// entries [`spend_effect_chance_draw`] resolves as `MOVE_EFFECT_FLINCH`.
+///
+/// Dispatch is by effect ID, never by the trampoline's symbolic
+/// `"MOVE_EFFECT_FLINCH"` string: [`MoveEffect::FAKE_OUT`] (certain, gated on
+/// the first turn) and [`MoveEffect::TWISTER`] (airborne rule) share it and
+/// stay unported. [`MoveEffect::FLINCH_MINIMIZE_HIT`] is modelled only for
+/// its non-Minimized path, since no Minimized volatile exists
+/// (`BattleScript_EffectStomp`, `data/battle_scripts_1.s:1898`-`:1901`).
+#[must_use]
+pub fn is_flinch_hit_effect(effect: MoveEffect) -> bool {
+    effect == MoveEffect::FLINCH_HIT || effect == MoveEffect::FLINCH_MINIMIZE_HIT
+}
+
+/// `MOVE_EFFECT_FLINCH`'s silent ability guards on a secondary landing: Shield
+/// Dust blocks any chance-based effect whose byte is at most nine
+/// (`battle_script_commands.c:2253`-`:2255`), and Inner Focus refuses the
+/// flinch itself; with neither `primary` nor `certain` it says nothing
+/// (`:2547`-`:2559`). Safeguard's guard stops at byte seven, so it never
+/// applies.
+#[must_use]
+fn flinch_can_land(defender: &BattlePokemon) -> bool {
+    !matches!(
+        defender.ability(),
+        AbilityId::SHIELD_DUST | AbilityId::INNER_FOCUS
+    )
+}
+
 /// Returns whether `effect` is [`EFFECT_ACCURACY_DOWN_HIT`], the fourth
 /// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
 #[must_use]
@@ -282,6 +312,57 @@ pub(crate) fn poison_point_can_land(attacker: &BattlePokemon) -> bool {
         && attacker.ability() != AbilityId::IMMUNITY
 }
 
+/// Whether Flame Body's `MOVE_EFFECT_AFFECTS_USER | MOVE_EFFECT_BURN` can burn
+/// `attacker`.
+///
+/// The ability re-enters `SetMoveEffect` through `BattleScript_ApplySecondaryEffect`
+/// with `primary == FALSE` and no certain flag, so the Water Veil and Fire-type
+/// prevention branches stay silent and fall through to the plain guards: a
+/// Fire type, Water Veil and an existing primary status leave the attacker
+/// unchanged (`battle_util.c:2836`-`:2850`, `battle_script_commands.c:2341`-
+/// `:2379`). Shield Dust and Safeguard are skipped because the ability marker
+/// `HITMARKER_STATUS_ABILITY_EFFECT` is set (`:2253`-`:2259`), so unlike
+/// [`burn_can_land`] neither is read here.
+#[must_use]
+pub(crate) fn flame_body_can_land(attacker: &BattlePokemon) -> bool {
+    attacker.status1().is_healthy()
+        && !attacker.types().contains(&Type::Fire)
+        && attacker.ability() != AbilityId::WATER_VEIL
+}
+
+/// The result of reflecting a Synchronize attacker's burn back onto the
+/// Flame Body holder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SynchronizeBurnReflectionOutcome {
+    /// The holder's Fire typing protected it.
+    TypeProtected,
+    /// The holder already carries a primary status, so the reflection writes
+    /// nothing.
+    AlreadyStatused,
+    /// The holder must be burned.
+    Applied,
+}
+
+/// Resolves a Synchronize burn reflection against `holder`, the Flame Body
+/// holder a contact burn just reflected onto: `SetMoveEffect`'s `STATUS1_BURN`
+/// case reached through `seteffectprimary` with `HITMARKER_STATUS_ABILITY_EFFECT`
+/// set, so a Fire-typed holder earns the prevention message ahead of the
+/// existing-status no-op (`battle_util.c:2987`-`:3001`,
+/// `battle_script_commands.c:2341`-`:2379`). A Water Veil holder would be
+/// protected the same way, but a Flame Body holder cannot carry it.
+#[must_use]
+pub(crate) fn resolve_synchronize_burn_reflection(
+    holder: &BattlePokemon,
+) -> SynchronizeBurnReflectionOutcome {
+    if holder.types().contains(&Type::Fire) {
+        return SynchronizeBurnReflectionOutcome::TypeProtected;
+    }
+    if !holder.status1().is_healthy() {
+        return SynchronizeBurnReflectionOutcome::AlreadyStatused;
+    }
+    SynchronizeBurnReflectionOutcome::Applied
+}
+
 /// A `secondaryEffectChance` that every roll of `Cmd_seteffectwithchance`'s
 /// chance branch passes. That branch still spends its `Random() % 100` draw,
 /// and both this value and Serene Grace's doubled 200 clear the same
@@ -346,13 +427,20 @@ fn confuse_hit_could_ever_land(defender: &BattlePokemon) -> bool {
 /// draw, and clear the same comparison (`:2923-2930`), so the doubling
 /// changes neither outcome nor RNG use.
 ///
+/// Leech Seed is refused against a non-Grass Liquid Ooze defender: the seed's
+/// end-of-turn drain inverts into damage to the seeder there
+/// (`BattleScript_LeechSeedTurnPrintLiquidOoze`,
+/// `data/battle_scripts_1.s:3275`-`:3276`), which is unmodelled. A Grass
+/// defender never takes the seed, so it stays admitted.
+///
 /// # Errors
 ///
 /// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`,
 /// [`BattleError::UnsupportedMoveType`] when its type cannot participate in
 /// battle calculations, or [`BattleError::UnportedAbilityInteraction`] for
-/// the attacker's Serene Grace, when the move would newly poison or confuse
-/// the defender.
+/// either the attacker's Serene Grace, when the move would newly poison or
+/// confuse the defender, or the defender's Liquid Ooze, when the move is
+/// Leech Seed and the defender is not a Grass type.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
@@ -360,6 +448,15 @@ pub fn ensure_admissible(
     defender: &BattlePokemon,
 ) -> Result<(), BattleError> {
     let mv = dex.move_data(move_id)?;
+    if is_leech_seed_effect(mv.effect) {
+        if defender.ability() == AbilityId::LIQUID_OOZE && !defender.types().contains(&Type::Grass)
+        {
+            return Err(BattleError::UnportedAbilityInteraction(
+                AbilityId::LIQUID_OOZE,
+            ));
+        }
+        return Ok(());
+    }
     if is_poison_hit_effect(mv.effect) {
         let move_type = mv
             .move_type
@@ -383,6 +480,12 @@ pub fn ensure_admissible(
     }
     let status_could_ever_land = if is_confuse_hit_effect(mv.effect) {
         confuse_hit_could_ever_land(defender)
+    } else if is_flinch_hit_effect(mv.effect) {
+        // The defender's current ability is read, so a Trace copy of Shield
+        // Dust or Inner Focus counts and the Trace projection screen covers
+        // the rest; the target's current action position and flinch state
+        // are execution-time facts deliberately not read.
+        flinch_can_land(defender)
     } else {
         is_speed_down_hit_effect(mv.effect) && speed_drop_can_land(defender)
             || is_accuracy_down_hit_effect(mv.effect) && accuracy_drop_can_land(defender)
@@ -461,6 +564,12 @@ pub enum SecondaryApplication {
     /// stage is left unchanged without a message
     /// (`battle_script_commands.c:7056-7059,7094-7095`).
     SpeedDown,
+    /// The caller must set the defender's flinch flag, subject to the
+    /// caller's post-damage faint check and to the defender not having acted
+    /// yet this turn (`GetBattlerTurnOrderNum(gEffectBattler) >
+    /// gCurrentTurnActionNumber`, `battle_script_commands.c:2561`-`:2565`).
+    /// Setting the flag draws nothing and emits no event.
+    Flinch,
     /// The caller must write [`crate::status1::Status1::Burned`] to the
     /// defender, subject to the same post-damage faint check
     /// (`battle_script_commands.c:2261`-`:2264`).
@@ -484,8 +593,9 @@ pub enum SecondaryApplication {
 /// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
 /// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
 /// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`],
-/// [`EFFECT_SPEED_DOWN_HIT`], [`EFFECT_ACCURACY_DOWN_HIT`] or
-/// [`EFFECT_THAW_HIT`], or Struggle's certain recoil effect, would apply,
+/// [`EFFECT_SPEED_DOWN_HIT`], [`EFFECT_ACCURACY_DOWN_HIT`], [`EFFECT_THAW_HIT`],
+/// [`MoveEffect::FLINCH_HIT`] or [`MoveEffect::FLINCH_MINIMIZE_HIT`], or
+/// Struggle's certain recoil effect, would apply,
 /// or [`BattleError::UnsupportedMoveType`] for an [`EFFECT_POISON_HIT`] move
 /// whose type cannot participate in battle calculations; either way, any
 /// required chance draw has already been consumed.
@@ -536,6 +646,14 @@ pub fn spend_effect_chance_draw(
     if is_speed_down_hit_effect(mv.effect) {
         return Ok(if speed_drop_can_land(defender) {
             SecondaryApplication::SpeedDown
+        } else {
+            SecondaryApplication::None
+        });
+    }
+
+    if is_flinch_hit_effect(mv.effect) {
+        return Ok(if flinch_can_land(defender) {
+            SecondaryApplication::Flinch
         } else {
             SecondaryApplication::None
         });

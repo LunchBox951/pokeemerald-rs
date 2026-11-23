@@ -87,7 +87,10 @@ fn extract_sheet(
 /// Upstream's `-Wnum_tiles` build keeps the whole sheet when a dropped tile
 /// holds any colour, so a sheet that does that is not the cut this models and
 /// is refused.
-fn keep_leading_tiles(image: &mut png::IndexedImage, kept_tiles: u32) -> Result<(), String> {
+pub(super) fn keep_leading_tiles(
+    image: &mut png::IndexedImage,
+    kept_tiles: u32,
+) -> Result<(), String> {
     let (width, tiles_per_row) = (image.width, image.width / TILE_SIDE);
     let tile_count = tiles_per_row * (image.height / TILE_SIDE);
     // The pixels of each tile in `tiles`, row by row, in tile order.

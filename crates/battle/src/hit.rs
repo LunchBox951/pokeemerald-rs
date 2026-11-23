@@ -10,8 +10,8 @@
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
 use crate::ability::{
-    burn_halves_damage, huge_power_attack, pinch_boosts_power, plus_minus_special_attack,
-    suppresses_critical_hits, thick_fat_special_attack,
+    burn_halves_damage, pinch_boosts_power, plus_minus_special_attack, suppresses_critical_hits,
+    thick_fat_special_attack,
 };
 use crate::accuracy::accuracy_check;
 use crate::critical::{crit_adjusted_stages, crit_roll, crit_stage};
@@ -23,11 +23,11 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::{
-    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_poison_hit_effect,
+    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_flinch_hit_effect, is_poison_hit_effect,
     is_speed_down_hit_effect, is_thaw_hit_effect, spend_effect_chance_draw, SecondaryApplication,
 };
 
-const ORDINARY_HIT_EFFECTS: [MoveEffect; 21] = [
+const ORDINARY_HIT_EFFECTS: [MoveEffect; 22] = [
     MoveEffect::HIT,
     MoveEffect::SPEED_UP,
     MoveEffect::SPECIAL_DEFENSE_UP,
@@ -49,6 +49,9 @@ const ORDINARY_HIT_EFFECTS: [MoveEffect; 21] = [
     MoveEffect::UNUSED_83,
     MoveEffect::UNUSED_8D,
     MoveEffect::UNUSED_A3,
+    // Shares `BattleScript_EffectHit`; its survival clamp is applied by
+    // `resolve_hit` (`Cmd_adjustnormaldamage`, `battle_script_commands.c:1682`).
+    MoveEffect::FALSE_SWIPE,
 ];
 
 const CRITICAL_DAMAGE_MULTIPLIER: u32 = 2;
@@ -86,19 +89,21 @@ pub enum HitOutcome {
     },
     /// The move connected and dealt damage.
     Hit {
-        /// HP of damage dealt.
+        /// HP of damage dealt. Zero when False Swipe connects with a target
+        /// that already has one HP.
         damage: u32,
         /// Whether the hit was critical.
         is_critical: bool,
     },
 }
 
-/// Returns whether `effect` uses the ordinary-hit script without an engine
-/// special case.
+/// Returns whether `effect` uses the ordinary-hit script.
 ///
-/// False Swipe and Pursuit share the script but are excluded because upstream
-/// clamps or redirects them outside it (`battle_script_commands.c:1683`,
-/// `:8745`, `:9854`).
+/// False Swipe is included: upstream's `Cmd_adjustnormaldamage` caps its HP
+/// loss at `hp - 1` (`battle_script_commands.c:1682-1686`), which
+/// [`resolve_hit`] applies after the variance roll. Pursuit shares the script
+/// but stays excluded because upstream redirects it outside it
+/// (`battle_script_commands.c:8745`, `:9854`).
 #[must_use]
 pub fn is_ordinary_hit_effect(effect: MoveEffect) -> bool {
     ORDINARY_HIT_EFFECTS.contains(&effect)
@@ -123,15 +128,16 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
         return Err(BattleError::UnsupportedMoveType(move_id));
     }
     // `EFFECT_POISON_HIT`, `EFFECT_CONFUSE_HIT`, `EFFECT_SPEED_DOWN_HIT`,
-    // `EFFECT_ACCURACY_DOWN_HIT` and `EFFECT_THAW_HIT` resolve through this
-    // same damage script while keeping their own trampoline dispatch in
-    // `spend_effect_chance_draw`.
+    // `EFFECT_ACCURACY_DOWN_HIT`, `EFFECT_THAW_HIT` and the two flinch wrappers
+    // resolve through this same damage script while keeping their own
+    // trampoline dispatch in `spend_effect_chance_draw`.
     if !is_ordinary_hit_effect(move_data.effect)
         && !is_poison_hit_effect(move_data.effect)
         && !is_confuse_hit_effect(move_data.effect)
         && !is_speed_down_hit_effect(move_data.effect)
         && !is_accuracy_down_hit_effect(move_data.effect)
         && !is_thaw_hit_effect(move_data.effect)
+        && !is_flinch_hit_effect(move_data.effect)
         && move_id != STRUGGLE
     {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
@@ -284,32 +290,29 @@ fn roll_critical_hit(
 }
 
 fn damage_input(
-    move_power: u8,
+    move_power: u32,
     move_type: Type,
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
     is_critical: bool,
 ) -> DamageInput {
     let move_category = MoveCategory::for_type(move_type);
-    let (raw_attack, attack_stage) = attacker.attacking_stat(move_category);
-    let ability_adjusted_attack = thick_fat_special_attack(
-        defender.ability(),
-        move_type,
-        huge_power_attack(attacker.ability(), move_category, raw_attack),
-    );
+    let (raw_attack, attack_stage) = attacker.damage_attacking_stat(move_category);
+    let ability_adjusted_attack =
+        thick_fat_special_attack(defender.ability(), move_type, raw_attack);
     let ability_adjusted_attack = plus_minus_special_attack(
         attacker.ability(),
         defender.ability(),
         move_category,
         ability_adjusted_attack,
     );
-    let (defense, defense_stage) = defender.defending_stat(move_category);
+    let (defense, defense_stage) = defender.damage_defending_stat(move_category);
     let (attack_stage, defense_stage) =
         crit_adjusted_stages(attack_stage, defense_stage, is_critical);
 
     DamageInput {
         attacker_level: attacker.level(),
-        power: u32::from(move_power),
+        power: move_power,
         move_type,
         attack_stat: ability_adjusted_attack,
         attack_stage,
@@ -349,6 +352,34 @@ pub fn damage_before_roll(
     critical_hits_suppressed: bool,
     rng: &mut impl BattleRng,
 ) -> Result<RawDamage, BattleError> {
+    let power = u32::from(dex.move_data(move_id)?.power);
+    damage_before_roll_with_power(
+        dex,
+        move_id,
+        power,
+        attacker,
+        defender,
+        critical_hits_suppressed,
+        rng,
+    )
+}
+
+/// [`damage_before_roll`] with the base power given by the caller, upstream's
+/// `gDynamicBasePower` override (`battle_script_commands.c:1290`-`:1299`).
+///
+/// # Errors
+///
+/// Returns [`BattleError::UnknownMove`] or
+/// [`BattleError::UnsupportedMoveType`] before drawing.
+pub(crate) fn damage_before_roll_with_power(
+    dex: &Dex,
+    move_id: MoveId,
+    power: u32,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+    critical_hits_suppressed: bool,
+    rng: &mut impl BattleRng,
+) -> Result<RawDamage, BattleError> {
     let move_data = dex.move_data(move_id)?;
     let move_type = move_data
         .move_type
@@ -362,7 +393,7 @@ pub fn damage_before_roll(
         critical_hits_suppressed,
         rng,
     );
-    let input = damage_input(move_data.power, move_type, attacker, defender, is_critical);
+    let input = damage_input(power, move_type, attacker, defender, is_critical);
 
     let base_damage = base_damage_with_flash_fire(&input, attacker.volatiles().flash_fire);
     let damage_after_critical = if is_critical {
@@ -461,12 +492,41 @@ pub fn damage_core(
     critical_hits_suppressed: bool,
     rng: &mut impl BattleRng,
 ) -> Result<HitOutcome, BattleError> {
+    let power = u32::from(dex.move_data(move_id)?.power);
+    damage_core_with_power(
+        dex,
+        move_id,
+        power,
+        attacker,
+        defender,
+        critical_hits_suppressed,
+        rng,
+    )
+}
+
+/// [`damage_core`] with the base power given by the caller; see
+/// [`damage_before_roll_with_power`].
+///
+/// # Errors
+///
+/// Returns the errors from [`damage_before_roll_with_power`] before the
+/// damage-variance draw.
+pub(crate) fn damage_core_with_power(
+    dex: &Dex,
+    move_id: MoveId,
+    power: u32,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+    critical_hits_suppressed: bool,
+    rng: &mut impl BattleRng,
+) -> Result<HitOutcome, BattleError> {
     if let Some(absorbed) = absorbing_outcome(dex, move_id, defender)? {
         return Ok(absorbed);
     }
-    let raw_damage = damage_before_roll(
+    let raw_damage = damage_before_roll_with_power(
         dex,
         move_id,
+        power,
         attacker,
         defender,
         critical_hits_suppressed,
@@ -499,6 +559,34 @@ pub struct HitResolution {
     /// What the caller should apply to `defender`, subject to the caller's
     /// own post-damage faint check ([`spend_effect_chance_draw`]).
     pub secondary_effect: SecondaryApplication,
+}
+
+/// `Cmd_adjustnormaldamage`'s `EFFECT_FALSE_SWIPE` clamp
+/// (`battle_script_commands.c:1682-1686`): a hit that would reach the
+/// target's remaining HP removes one HP fewer, so a target at one HP loses
+/// none. It runs after the variance roll and spends no draw, and only a
+/// connected [`HitOutcome::Hit`] is adjusted, so an immunity stays an
+/// immunity. Substitute, Endure and Focus Band share this check upstream but
+/// are not modelled.
+fn survive_with_one_hp(
+    dex: &Dex,
+    move_id: MoveId,
+    defender: &BattlePokemon,
+    outcome: HitOutcome,
+) -> Result<HitOutcome, BattleError> {
+    if dex.move_data(move_id)?.effect != MoveEffect::FALSE_SWIPE {
+        return Ok(outcome);
+    }
+    Ok(match outcome {
+        HitOutcome::Hit {
+            damage,
+            is_critical,
+        } => HitOutcome::Hit {
+            damage: damage.min(defender.current_hp().saturating_sub(1)),
+            is_critical,
+        },
+        other => other,
+    })
 }
 
 /// Resolves an ordinary hit against one target.
@@ -538,6 +626,7 @@ pub fn resolve_hit(
         critical_hits_suppressed,
         rng,
     )?;
+    let outcome = survive_with_one_hp(dex, move_id, defender, outcome)?;
 
     let secondary_effect = if move_id == STRUGGLE
         || matches!(

@@ -52,8 +52,20 @@ impl StereoRouting {
         self.left_enabled = matches!(self.calculated_pan, Panning::Left | Panning::Both);
     }
 
+    /// Keep the route the predecessor committed: a first pass that retires jumps
+    /// past the NR51 store (`m4a.c:1053-1056,1205-1208`).
+    pub(super) fn carry_committed_route_from(&mut self, previous: Self) {
+        self.right_enabled = previous.right_enabled;
+        self.left_enabled = previous.left_enabled;
+    }
+
     pub(super) fn envelope_goal(self) -> u8 {
         cgb_envelope_goal(self.right, self.left, cgb_pan(self.right, self.left))
+    }
+
+    /// Whether either output side currently carries this channel (`NR51`).
+    pub(super) fn is_routed(self) -> bool {
+        self.right_enabled || self.left_enabled
     }
 
     pub(super) fn accumulate(self, contribution: i32, output: &mut StereoAcc) {

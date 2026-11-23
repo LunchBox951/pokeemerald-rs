@@ -484,15 +484,14 @@ impl OptionsChrome {
 mod pack_tests {
     use super::OptionsChrome;
     use crate::pack_test_support::{
-        assert_carries_every_font, claim_scratch_exclusive, image_entry, pack_bytes_with_fonts,
-        palette_entry,
+        assert_carries_every_font, image_entry, pack_bytes_with_fonts, palette_entry, ScratchClaim,
     };
     use assets::pack::AssetPack;
-    use std::io::Write as _;
 
     /// A pack with the frames and every font sheet `OptionsChrome::from_pack`
-    /// reads, written to a scratch path removed on drop.
-    struct ScratchPack(std::path::PathBuf);
+    /// reads, written to a scratch path removed on drop while it still names
+    /// the claimed file.
+    struct ScratchPack(ScratchClaim);
 
     impl ScratchPack {
         fn new() -> Self {
@@ -516,23 +515,17 @@ mod pack_tests {
                 std::process::id(),
                 std::thread::current().id()
             ));
-            let mut file = claim_scratch_exclusive(&path);
-            let guard = Self(path);
-            file.write_all(&pack_bytes_with_fonts(entries)).unwrap();
-            guard
-        }
-    }
-
-    impl Drop for ScratchPack {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
+            Self(ScratchClaim::claim_with(
+                path,
+                pack_bytes_with_fonts(entries),
+            ))
         }
     }
 
     #[test]
     fn a_label_printer_built_from_a_pack_carries_every_font() {
         let scratch = ScratchPack::new();
-        let pack = AssetPack::load(&scratch.0).unwrap();
+        let pack = AssetPack::load(scratch.0.path()).unwrap();
         let chrome = OptionsChrome::from_pack(&pack).expect("the pack carries all five fonts");
         assert_carries_every_font(&chrome.label_printer(Vec::new()));
     }

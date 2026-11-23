@@ -36,6 +36,7 @@ pub(crate) mod interface;
 pub(crate) mod layouts;
 pub(crate) mod naming_screen;
 pub(crate) mod opening_scene;
+pub(crate) mod party_menu;
 pub(crate) mod poke_ball;
 pub(crate) mod song;
 pub(crate) mod sprites;
@@ -44,6 +45,8 @@ pub(crate) mod text_window;
 pub(crate) mod tilesets;
 pub(crate) mod title;
 pub(crate) mod trainer_battlers;
+pub(crate) mod trainer_class_names;
+pub(crate) mod trainer_defeat_speeches;
 pub(crate) mod trainer_front;
 
 use pack_format::{raw_entry, EntryKind, PackEntry, PackWriter};
@@ -73,6 +76,8 @@ pub(crate) const DOMAINS: &[Domain] = &[
     song::write,
     battle_messages::write,
     field_messages::write,
+    trainer_defeat_speeches::write,
+    trainer_class_names::write,
     battle_anim::write,
     bag::write,
     starter_choose::write,
@@ -81,6 +86,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     battle_interface::write,
     battlers::write,
     naming_screen::write,
+    party_menu::write,
     poke_ball::write,
     trainer_front::write,
     trainer_battlers::write,

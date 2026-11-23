@@ -53,10 +53,15 @@
 //!   templates `BufferStringBattle` selects); and
 //! - the naming screen's 15 sheets (the three cursors cut to their first five
 //!   tiles), seven palettes, and four decoded tilemaps;
+//! - the party menu's background (cut to its first 62 tiles, with all 176 palette
+//!   colours and its screen), Poké Ball and held-item sheets with their palettes, the
+//!   five slot tilemaps, and the confirm and cancel button tilemaps;
 //! - the battle-animation catalog (`data/battle_anim_scripts.s`);
-//! - the sheet and palette of every battle-effect sprite a catalog program loads; and
+//! - the sheet and palette of every battle-effect sprite a catalog program loads;
 //! - the Poké Ball's 16x48 sheet with its embedded palette and the opened-ball
-//!   sheet.
+//!   sheet; and
+//! - the twelve non-default standard PC wallpapers (IDs 4 to 15), each a frame-then-background
+//!   tile sheet, a tilemap, and two palettes.
 //!
 //! The battle interface also contributes the player and opponent singles health-box
 //! frames, the ball-status-bar and ball-display palettes, and the enemy shadow sheet.
@@ -70,9 +75,9 @@
 //! - `sprite/<relative-path>` and `sprite/palette/<name>`
 //! - `field-effect/{image,palette}/<name>`
 //! - `layout/<name>/{map,border}`
-//! - `font/<name>/glyphs`
+//! - `font/<name>/glyphs` and `font/keypad_icons`
 //! - `text-window/{image,palette}/<stem>`
-//! - `interface/image/down_arrow` and `interface/palette/main_menu_bg`
+//! - `interface/image/{down_arrow,down_arrow_alt}` and `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
 //! - `opening-scene/{image,palette,raw}/<name>`
 //! - `evolution-scene/{image,palette,raw}/<name>`
@@ -88,8 +93,13 @@
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
 //! - `poke-ball/{image,palette}/<name>`
+//! - `pc-wallpaper/<style>/{tiles,tilemap}` and
+//!   `pc-wallpaper/<style>/palette/{frame,background}`
 //! - `field-message/table`
+//! - `trainer-defeat-speech/table`
+//! - `trainer-class-name/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
+//! - `party-menu/{image,palette,raw}/<name>`
 //! - `battle-anim/catalog`
 //! - `battle-effect/<NNN>/{image,palette}`, `NNN` the three-digit effect sprite index
 //!
@@ -121,6 +131,10 @@ mod layouts_json;
 pub(crate) mod midi;
 mod naming_screen;
 mod opening_scene;
+#[cfg(test)]
+mod owned_fixture;
+mod party_menu;
+mod pc_wallpaper;
 pub mod png;
 pub(crate) mod poke_ball;
 mod pokedex;
@@ -134,6 +148,8 @@ mod text_window;
 mod tilesets;
 mod title;
 mod trainer_battler;
+mod trainer_class_names;
+mod trainer_defeat_speech;
 mod trainer_pic;
 pub(crate) mod voicegroups;
 mod wav;
@@ -223,11 +239,15 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     midi::extract_songs(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     field_message::extract_field_message(&upstream, &mut writer)?;
+    trainer_defeat_speech::extract_trainer_defeat_speech(&upstream, &mut writer)?;
+    trainer_class_names::extract_trainer_class_names(&upstream, &mut writer)?;
     let catalog = battle_anim::extract_battle_anim(&upstream, &mut writer)?;
     battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;
     battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
+    party_menu::extract_party_menu(&upstream, &mut writer)?;
     poke_ball::extract_poke_ball(&upstream, &mut writer)?;
+    pc_wallpaper::extract_pc_wallpapers(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
@@ -326,32 +346,9 @@ fn push_raw_bytes(id: String, payload: Vec<u8>, writer: &mut PackWriter) {
     writer.push(pack_format::raw_entry(id, payload));
 }
 
-fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                walk(&path, out)?;
-            } else if path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-            {
-                out.push(path);
-            }
-        }
-        Ok(())
-    }
-    let mut out = Vec::new();
-    walk(dir, &mut out).map_err(|e| ExtractError::ReadFailed(dir.to_path_buf(), e.to_string()))?;
-    out.sort();
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{collect_pngs_sorted, extract_to, jasc_pal, upstream_present, ExtractError};
+    use super::{extract_to, jasc_pal, upstream_present, ExtractError};
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -446,11 +443,5 @@ mod tests {
 
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&dir).unwrap();
-    }
-
-    #[test]
-    fn collect_pngs_sorted_rejects_missing_dir() {
-        let err = collect_pngs_sorted(std::path::Path::new("/does/not/exist")).unwrap_err();
-        assert!(matches!(err, super::ExtractError::ReadFailed(..)));
     }
 }

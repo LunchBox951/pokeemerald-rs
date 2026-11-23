@@ -103,7 +103,9 @@ pub(super) fn stage(entries: &[SheetSprite], sheet: &Tileset) -> StagedObjVram {
         staged.push(entry.oam().with_tile_index(base));
     }
     StagedObjVram {
-        tiles: Tileset::from_tiles(BitDepth::Bpp4, tiles),
+        // Every tile is copied from a 4bpp sheet, whose indices already fit.
+        tiles: Tileset::from_tiles(BitDepth::Bpp4, tiles)
+            .expect("tiles copied from a 4bpp sheet hold only 4bpp indices"),
         entries: staged,
         dropped,
     }

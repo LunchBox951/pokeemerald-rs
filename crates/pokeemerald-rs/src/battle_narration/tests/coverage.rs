@@ -1,10 +1,12 @@
 //! Every battle event the turn engine can report has a narration mapping.
 
-use assets::{AbilityId, Effectiveness, MoveId};
-use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
+use assets::items::ItemId;
+use assets::{AbilityId, Effectiveness, MoveId, Type};
+use battle::{BattleEvent, BattleOutcome, ChangedStat, LoafMessage, StatStage, Status1};
 
 use super::fixtures::{narrator, RATTATA};
-use crate::battle_narration::{AssetNames, BattleKind, NarrationError};
+use crate::battle_narration::string_ids::PKMNLEARNEDMOVE;
+use crate::battle_narration::{AssetNames, BattleKind, NarrationError, TemplateId};
 
 const BY_PLAYER: bool = true;
 const MOVE: MoveId = MoveId::TACKLE;
@@ -13,7 +15,22 @@ fn every_event() -> Vec<BattleEvent> {
     let mut events = move_events();
     events.extend(ability_and_status_events());
     events.extend(party_events());
+    events.extend(disobedience_events());
     events
+}
+
+fn disobedience_events() -> Vec<BattleEvent> {
+    vec![
+        BattleEvent::Disobeyed {
+            message: LoafMessage::TurnedAway,
+        },
+        BattleEvent::IgnoredOrders,
+        BattleEvent::DisobedientNap,
+        BattleEvent::DisobedientSelfHit {
+            by_player: BY_PLAYER,
+            damage: 3,
+        },
+    ]
 }
 
 fn move_events() -> Vec<BattleEvent> {
@@ -33,6 +50,7 @@ fn move_events() -> Vec<BattleEvent> {
         BattleEvent::FastAsleep { by_player, move_id },
         BattleEvent::WokeUp { by_player },
         BattleEvent::LoafingAround { by_player, move_id },
+        BattleEvent::Flinched { by_player, move_id },
         BattleEvent::FrozenSolid { by_player, move_id },
         BattleEvent::Thawed { by_player },
         BattleEvent::ThawedByMove { by_player, move_id },
@@ -120,6 +138,13 @@ fn move_events() -> Vec<BattleEvent> {
 fn ability_and_status_events() -> Vec<BattleEvent> {
     let (by_player, move_id) = (BY_PLAYER, MOVE);
     vec![
+        BattleEvent::MadeDrowsy { by_player, move_id },
+        BattleEvent::YawnAbilityProtected {
+            by_player,
+            move_id,
+            ability: AbilityId::INSOMNIA,
+        },
+        BattleEvent::FellAsleepFromYawn { by_player },
         BattleEvent::SoundproofProtected { by_player, move_id },
         BattleEvent::Paralyzed { by_player, move_id },
         BattleEvent::AlreadyParalyzed { by_player, move_id },
@@ -139,6 +164,9 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
         BattleEvent::PoisonedByEffectSpore { by_player, move_id },
         BattleEvent::ParalyzedByEffectSpore { by_player, move_id },
         BattleEvent::PoisonedByPoisonPoint { by_player, move_id },
+        BattleEvent::BurnedByFlameBody { by_player, move_id },
+        BattleEvent::BurnedByAttackerSynchronize { by_player, move_id },
+        BattleEvent::AttackerSynchronizeFireTypeProtected { by_player, move_id },
         BattleEvent::PoisonedByAttackerSynchronize { by_player, move_id },
         BattleEvent::AttackerSynchronizePoisonOrSteelTypeProtected { by_player, move_id },
         BattleEvent::SynchronizeImmunityProtected { by_player, move_id },
@@ -154,9 +182,33 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
             by_player,
             damage: 1,
         },
+        BattleEvent::Seeded { by_player, move_id },
+        BattleEvent::LeechSeedEvaded { by_player, move_id },
+        BattleEvent::SappedByLeechSeed {
+            by_player,
+            damage: 1,
+        },
+        BattleEvent::LeechSeedHealed {
+            by_player,
+            healed: 1,
+        },
+        BattleEvent::ItemRestoredHealth {
+            by_player,
+            item: ItemId::ORAN_BERRY,
+            healed: 10,
+        },
         BattleEvent::ShedSkinCured {
             by_player,
             status: Status1::Poisoned,
+        },
+        BattleEvent::SpeedBoostActivated {
+            by_player,
+            new_stage: StatStage::new(1).unwrap(),
+        },
+        BattleEvent::TypeChanged {
+            by_player,
+            move_id,
+            new_type: Type::Water,
         },
     ]
 }
@@ -176,10 +228,15 @@ fn party_events() -> Vec<BattleEvent> {
             species: RATTATA,
             reserves_remaining: 1,
         },
+        BattleEvent::TracedAbility {
+            by_player,
+            ability: AbilityId::LIMBER,
+        },
         BattleEvent::ExpGained {
             amount: 10,
             boosted: false,
         },
+        BattleEvent::MoveLearned { move_id },
         BattleEvent::MoveLearnPrompt { move_id },
         BattleEvent::MoveReplaced {
             learned: move_id,
@@ -189,6 +246,11 @@ fn party_events() -> Vec<BattleEvent> {
         BattleEvent::MoveLearnDeclined { move_id },
         BattleEvent::MoneyGained(10),
         BattleEvent::Ended(BattleOutcome::PlayerLost),
+        BattleEvent::InLove { by_player },
+        BattleEvent::ImmobilizedByLove { by_player, move_id },
+        BattleEvent::Infatuated { by_player, move_id },
+        BattleEvent::ObliviousPreventsAttraction { by_player, move_id },
+        BattleEvent::InfatuatedByCuteCharm { by_player, move_id },
         BattleEvent::UsedMove { by_player, move_id },
         BattleEvent::TypeEffectiveness {
             by_player,
@@ -203,7 +265,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 72;
+const VARIANTS: usize = 97;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -268,20 +330,45 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::TrainerSentOut { .. } => 55,
         BattleEvent::PlayerSentOut { .. } => 56,
         BattleEvent::ExpGained { .. } => 57,
-        BattleEvent::MoveLearnPrompt { .. } => 58,
-        BattleEvent::MoveReplaced { .. } => 59,
-        BattleEvent::MoveLearnDeclined { .. } => 60,
-        BattleEvent::MoneyGained(..) => 61,
-        BattleEvent::Ended(..) => 62,
-        BattleEvent::UsedMove { .. } => 63,
-        BattleEvent::TypeEffectiveness { .. } => 64,
-        BattleEvent::AbsorbMadeMoveUseless { .. } => 65,
-        BattleEvent::LoafingAround { .. } => 66,
-        BattleEvent::FrozenSolid { .. } => 67,
-        BattleEvent::Thawed { .. } => 68,
-        BattleEvent::ThawedByMove { .. } => 69,
-        BattleEvent::Burned { .. } => 70,
-        BattleEvent::TargetDefrosted { .. } => 71,
+        BattleEvent::MoveLearned { .. } => 58,
+        BattleEvent::MoveLearnPrompt { .. } => 59,
+        BattleEvent::MoveReplaced { .. } => 60,
+        BattleEvent::MoveLearnDeclined { .. } => 61,
+        BattleEvent::MoneyGained(..) => 62,
+        BattleEvent::Ended(..) => 63,
+        BattleEvent::UsedMove { .. } => 64,
+        BattleEvent::TypeEffectiveness { .. } => 65,
+        BattleEvent::AbsorbMadeMoveUseless { .. } => 66,
+        BattleEvent::LoafingAround { .. } => 67,
+        BattleEvent::FrozenSolid { .. } => 68,
+        BattleEvent::Thawed { .. } => 69,
+        BattleEvent::ThawedByMove { .. } => 70,
+        BattleEvent::Burned { .. } => 71,
+        BattleEvent::TargetDefrosted { .. } => 72,
+        BattleEvent::Seeded { .. } => 73,
+        BattleEvent::SappedByLeechSeed { .. } => 74,
+        BattleEvent::LeechSeedHealed { .. } => 75,
+        BattleEvent::ItemRestoredHealth { .. } => 76,
+        BattleEvent::LeechSeedEvaded { .. } => 77,
+        BattleEvent::InLove { .. } => 78,
+        BattleEvent::ImmobilizedByLove { .. } => 79,
+        BattleEvent::Infatuated { .. } => 80,
+        BattleEvent::ObliviousPreventsAttraction { .. } => 81,
+        BattleEvent::InfatuatedByCuteCharm { .. } => 82,
+        BattleEvent::Disobeyed { .. } => 83,
+        BattleEvent::DisobedientSelfHit { .. } => 84,
+        BattleEvent::IgnoredOrders => 85,
+        BattleEvent::DisobedientNap => 86,
+        BattleEvent::SpeedBoostActivated { .. } => 87,
+        BattleEvent::MadeDrowsy { .. } => 88,
+        BattleEvent::YawnAbilityProtected { .. } => 89,
+        BattleEvent::FellAsleepFromYawn { .. } => 90,
+        BattleEvent::TracedAbility { .. } => 91,
+        BattleEvent::Flinched { .. } => 92,
+        BattleEvent::TypeChanged { .. } => 93,
+        BattleEvent::BurnedByFlameBody { .. } => 94,
+        BattleEvent::BurnedByAttackerSynchronize { .. } => 95,
+        BattleEvent::AttackerSynchronizeFireTypeProtected { .. } => 96,
     }
 }
 
@@ -289,12 +376,15 @@ const fn variant(event: &BattleEvent) -> usize {
 fn every_event_variant_maps_to_at_least_the_requests_upstream_prints() {
     let mut narrator = narrator(BattleKind::Trainer);
 
+    // A landed `Hit` and the seeder's `LeechSeedHealed` print nothing upstream.
     for event in every_event() {
         let requests = narrator.requests(&AssetNames, &event);
         assert!(
-            requests.is_ok_and(
-                |requests| !requests.is_empty() || matches!(event, BattleEvent::Hit { .. })
-            ),
+            requests.is_ok_and(|requests| !requests.is_empty()
+                || matches!(
+                    event,
+                    BattleEvent::Hit { .. } | BattleEvent::LeechSeedHealed { .. }
+                )),
             "{event:?} has no narration"
         );
     }
@@ -314,4 +404,32 @@ fn the_fixture_list_names_each_variant_once() {
             .map(|r| r.len()),
         Ok::<_, NarrationError>(1)
     );
+}
+
+/// A free slot takes the move straight into `BattleScript_LearnedNewMove`
+/// (`data/battle_scripts_1.s:3182`-`:3188`), so the event prints the same
+/// PKMNLEARNEDMOVE line, with the same nickname and move buffers, that
+/// closes a replacement.
+#[test]
+fn a_free_slot_learn_prints_the_learned_line_a_replacement_ends_with() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let move_id = MoveId::EMBER;
+
+    let learned = narrator
+        .requests(&AssetNames, &BattleEvent::MoveLearned { move_id })
+        .unwrap();
+    let replaced = narrator
+        .requests(
+            &AssetNames,
+            &BattleEvent::MoveReplaced {
+                learned: move_id,
+                forgotten: MoveId::SCRATCH,
+                slot: 0,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(learned.len(), 1);
+    assert_eq!(learned[0].template, TemplateId::Table(PKMNLEARNEDMOVE));
+    assert_eq!(Some(&learned[0]), replaced.last());
 }
