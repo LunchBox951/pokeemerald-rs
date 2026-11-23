@@ -58,6 +58,7 @@ pub mod battle_moves;
 pub mod battle_palace;
 pub mod battle_pike_wild_mons;
 pub mod battle_pyramid_items;
+pub mod berries;
 pub mod bundled_overworld;
 pub mod decorations;
 pub mod easy_chat;
