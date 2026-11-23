@@ -718,3 +718,33 @@ fn sonic_boom_is_admitted_for_check_bad_move_alone() {
         );
     }
 }
+
+/// False Swipe executes through the ordinary hit script, but no trainer AI
+/// script scores `EFFECT_FALSE_SWIPE`, so a scoring trainer holding it stays
+/// refused under every flag combination; a flagless trainer runs no script.
+#[test]
+fn false_swipe_stays_unscoreable_under_every_scoring_flag() {
+    let dex = Dex::new();
+    let scripts = [
+        AiFlags::CHECK_BAD_MOVE,
+        AiFlags::TRY_TO_FAINT,
+        AiFlags::CHECK_VIABILITY,
+        AiFlags::SETUP_FIRST_TURN,
+    ];
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::FALSE_SWIPE, AiFlags::NONE),
+        Ok(())
+    );
+    for mask in 1_u8..16 {
+        let flags = scripts
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| mask & (1 << bit) != 0)
+            .fold(AiFlags::NONE, |all, (_, script)| all.union(*script));
+        assert_eq!(
+            ensure_scoreable(&dex, MoveId::FALSE_SWIPE, flags),
+            Err(BattleError::UnscoreableMoveEffect(MoveId::FALSE_SWIPE)),
+            "mask {mask:#06b}"
+        );
+    }
+}
