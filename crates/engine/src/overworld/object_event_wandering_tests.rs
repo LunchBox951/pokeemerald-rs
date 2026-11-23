@@ -702,7 +702,7 @@ fn a_frozen_frame_lets_the_named_object_finish_its_step_and_start_nothing_after(
 
 const ROUTE_101: MapId = MapId("MAP_ROUTE101");
 
-/// Route 101's boy (local id 6, (2, 13), WanderLeftAndRight, range 1x1), carried into
+/// Route 101's boy (local id 6, (2, 13), `WanderLeftAndRight`, range 1x1), carried into
 /// Littleroot Town (20x20, Route 101 20 tall to its north at offset 0) the frame after he is
 /// admitted, with `route_101` as the connected map. His East draw lands on frame 32.
 fn carried_boy_rig(route_101: Terrain) -> Rig {
