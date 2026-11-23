@@ -271,13 +271,15 @@ pub enum BattleEvent {
         /// move without boosting (`B_MSG_FLASH_FIRE_NO_BOOST`).
         boosted: bool,
     },
-    /// A move dealt damage.
+    /// A move connected. A False Swipe that connects with a target at one HP
+    /// removes none (`damage` is zero).
     Hit {
         /// Whether the player used the move.
         by_player: bool,
         /// The move that dealt damage.
         move_id: MoveId,
-        /// HP removed from the target, capped at its HP before the hit.
+        /// HP removed from the target, capped at its HP before the hit (and at
+        /// one HP fewer for False Swipe).
         damage: u32,
         /// Whether the hit was critical.
         is_critical: bool,

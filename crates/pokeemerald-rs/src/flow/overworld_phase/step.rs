@@ -338,6 +338,14 @@ impl OverworldPhase {
     /// skips this frame's movement, as upstream skips `PlayerStep` on a
     /// claimed frame.
     pub(in crate::flow) fn step(&mut self, buttons: ButtonState) {
+        self.step_callbacks(buttons);
+        // After every callback, a battle's included, as `main.c` runs
+        // `PlayTimeCounter_Update` once the callbacks are done.
+        self.tick_play_time();
+    }
+
+    /// Everything [`Self::step`] runs before its frame's play-time tick.
+    fn step_callbacks(&mut self, buttons: ButtonState) {
         // Map load has already spawned the objects in view, so a crossing on the first frame
         // carries them.
         self.admit_object_events_on_map_load();
