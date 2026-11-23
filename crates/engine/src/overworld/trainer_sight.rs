@@ -59,6 +59,7 @@ pub fn trainer_can_see_player(
         return false;
     };
     let world = SightWorld {
+        trainer_id: trainer.id(),
         trainer_elevation: state.elevation(),
         objects,
         runtime,
@@ -91,6 +92,8 @@ fn approach_distance(
 /// What a sight line reads besides the trainer's own position and facing.
 #[derive(Clone, Copy)]
 struct SightWorld<'a> {
+    /// The observing trainer's [`LiveObjectEvent::id`], which its own intermediate scan skips.
+    trainer_id: u32,
     /// The trainer's live elevation.
     trainer_elevation: u8,
     /// The live object events that can block an intermediate tile.
@@ -157,7 +160,8 @@ fn sight_line_clear(
 /// Whether intermediate tile `(x, y)` -- one step along `facing`, strictly
 /// between the trainer and the player -- blocks the sight line: any
 /// collision bit, a directional wall, an elevation mismatch, or another
-/// active object event occupying it. An undecodable cell fails
+/// active object event occupying it (`DoesObjectCollideWithObjectAt` skips the mover,
+/// `event_object_movement.c:4733`). An undecodable cell fails
 /// closed (`true`).
 fn tile_blocks_intermediate_sight(
     world: &SightWorld<'_>,
@@ -167,6 +171,7 @@ fn tile_blocks_intermediate_sight(
     facing: Direction,
 ) -> bool {
     let SightWorld {
+        trainer_id,
         trainer_elevation,
         objects,
         runtime,
@@ -186,8 +191,7 @@ fn tile_blocks_intermediate_sight(
     }
     objects
         .collision_objects_at(x, y, trainer_elevation)
-        .next()
-        .is_some()
+        .any(|object| object.id() != trainer_id)
 }
 
 #[cfg(test)]
@@ -791,6 +795,41 @@ mod tests {
             s.settle_previous_position();
         };
         assert!(live_sees(vec![t, blocker], off, 2, &player));
+    }
+
+    #[test]
+    fn a_trainer_never_blocks_its_own_sight_line_with_its_previous_tile() {
+        // `DoesObjectCollideWithObjectAt` skips `curObject == objectEvent`
+        // (`event_object_movement.c:4733`).
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let walked_then_turned = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.walk(Direction::East);
+            s.face(Direction::West);
+        };
+        assert!(live_sees(
+            vec![t],
+            walked_then_turned,
+            1,
+            &player_at(4, 5, 3)
+        ));
+    }
+
+    #[test]
+    fn another_object_on_the_trainers_previous_tile_still_blocks_its_sight_line() {
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let mut other = trainer(5, 5, 3, MovementType::FaceDown, "0");
+        other.local_id = 2;
+        other.trainer_type = TrainerType::None;
+        let walked_then_turned = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.walk(Direction::East);
+            s.face(Direction::West);
+        };
+        assert!(!live_sees(
+            vec![t, other],
+            walked_then_turned,
+            1,
+            &player_at(4, 5, 3)
+        ));
     }
 
     #[test]
