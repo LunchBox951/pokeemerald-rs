@@ -2,7 +2,9 @@
 
 use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId, Type};
-use battle::{BattleEvent, BattleOutcome, ChangedStat, LoafMessage, StatStage, Status1};
+use battle::{
+    BattleEvent, BattleOutcome, ChangedStat, CuredCondition, LoafMessage, StatStage, Status1,
+};
 
 use super::fixtures::{narrator, RATTATA};
 use crate::battle_narration::string_ids::PKMNLEARNEDMOVE;
@@ -201,6 +203,11 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
             by_player,
             status: Status1::Poisoned,
         },
+        BattleEvent::AbilityCuredStatus {
+            by_player,
+            ability: AbilityId::LIMBER,
+            condition: CuredCondition::Paralysis,
+        },
         BattleEvent::SpeedBoostActivated {
             by_player,
             new_stage: StatStage::new(1).unwrap(),
@@ -265,7 +272,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 97;
+const VARIANTS: usize = 98;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -369,6 +376,7 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::BurnedByFlameBody { .. } => 94,
         BattleEvent::BurnedByAttackerSynchronize { .. } => 95,
         BattleEvent::AttackerSynchronizeFireTypeProtected { .. } => 96,
+        BattleEvent::AbilityCuredStatus { .. } => 97,
     }
 }
 

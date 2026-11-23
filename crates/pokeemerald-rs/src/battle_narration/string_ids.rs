@@ -102,6 +102,7 @@ pub(super) const PKMNMAKESGROUNDMISS: u16 = 332;
 pub(super) const PKMNFLEDUSING: u16 = 339;
 pub(super) const PKMNSXMADEITINEFFECTIVE: u16 = 346;
 pub(super) const PKMNSXPREVENTSYSZ: u16 = 355;
+pub(super) const PKMNSXCUREDITSYPROBLEM: u16 = 356;
 pub(super) const PKMNSXHADNOEFFECTONY: u16 = 362;
 /// `STRINGID_TRAINER1LOSETEXT`, the first table slot.
 pub(super) const TRAINER1LOSETEXT: u16 = 12;

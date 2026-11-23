@@ -7,7 +7,6 @@
 use assets::trainers::TrainerId;
 use assets::{AbilityId, MoveId, SpeciesId};
 
-use super::admission::ensure_participant_admissible;
 use super::trainer::fixed_ivs;
 use super::{Battle, BattleEvent, BattlerSide, EnemyAction, PlayerAction};
 use crate::damage::BattleRng;
@@ -16,6 +15,7 @@ use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 use crate::script_rng::SequenceRng;
 use crate::status1::Status1;
+use crate::status_immunity::CuredCondition;
 
 const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
 const TACKLE: MoveId = MoveId::TACKLE;
@@ -195,10 +195,11 @@ fn a_holder_switched_out_and_back_reloads_its_native_ability_and_copies_again() 
 
 // A Trace holder that gains a primary status while it holds a copied ability
 // keeps that status on the trainer bench, so a re-copy on its return can pair
-// the status with an ability that forbids it. Upstream never holds that state:
-// `ABILITYEFFECT_IMMUNITY` cures it at move end (`battle_util.c:2873`-`:2951`),
-// which this engine does not model, so the return is refused as admission
-// refuses the same pairing at construction. No selector emits the enemy switch
+// the status with an ability that forbids it. Upstream plays that battle:
+// `ABILITYEFFECT_IMMUNITY` cures the pairing at the next move end
+// (`battle_util.c:2873`-`:2951`). A voluntary switch runs that pass before the
+// queued copy drains, and a forced replacement never runs it, so the pairing
+// stands until the move that follows. No selector emits the enemy switch
 // today; these tests drive it through the same private seam as above.
 
 /// Draws of a status move that passes its accuracy check.
@@ -265,8 +266,23 @@ fn bench_the_statused_holder(fixture: &mut Reentry) {
     );
 }
 
+fn used(by_player: bool, move_id: MoveId) -> [BattleEvent; 2] {
+    [
+        BattleEvent::UsedMove { by_player, move_id },
+        BattleEvent::NothingHappened { by_player, move_id },
+    ]
+}
+
+fn cured(ability: AbilityId, condition: CuredCondition) -> BattleEvent {
+    BattleEvent::AbilityCuredStatus {
+        by_player: false,
+        ability,
+        condition,
+    }
+}
+
 #[test]
-fn a_paralysed_trace_holder_cannot_recopy_limber_on_its_return() {
+fn a_paralysed_trace_holder_recopies_limber_on_its_return_and_is_cured_after_the_next_move() {
     let dex = Dex::new();
     let reserve = mon(&dex, SpeciesId::PERSIAN, 100, &[SPLASH]);
     assert_eq!(reserve.ability(), AbilityId::LIMBER);
@@ -283,33 +299,36 @@ fn a_paralysed_trace_holder_cannot_recopy_limber_on_its_return() {
     bench_the_statused_holder(&mut fixture);
     let Reentry { battle, rng } = &mut fixture;
     assert_eq!(battle.player().ability(), AbilityId::LIMBER);
-    let holder = battle.trainer().unwrap().bench()[0].clone();
-    assert_eq!(holder.status1(), Status1::Paralysed);
-    let before = battle.clone();
+    assert_eq!(
+        battle.trainer().unwrap().bench()[0].status1(),
+        Status1::Paralysed
+    );
 
-    let refused = turn_with(battle, 0, EnemyAction::Switch(0), rng);
+    let events = turn_with(battle, 0, EnemyAction::Switch(0), rng).expect("the holder returns");
 
-    // Copying Limber here would give the oracle's own refused pairing.
-    let mut projected = holder;
-    projected.trace_ability(AbilityId::LIMBER);
+    // The switch's own immunity pass finds nothing: the copy is still queued.
+    // The copy pairs Limber with paralysis, which the player's Splash ends.
     assert_eq!(
-        ensure_participant_admissible(&projected),
-        Err(BattleError::UnportedAbilityInteraction(AbilityId::LIMBER))
+        events,
+        [
+            vec![
+                BattleEvent::TrainerSentOut {
+                    species: SpeciesId::PORYGON2,
+                    bench_remaining: 1,
+                },
+                traced(false, AbilityId::LIMBER),
+            ],
+            used(true, SPLASH).to_vec(),
+            vec![cured(AbilityId::LIMBER, CuredCondition::Paralysis)],
+        ]
+        .concat()
     );
-    assert_eq!(
-        refused,
-        Err(BattleError::UnportedAbilityInteraction(AbilityId::LIMBER))
-    );
-    assert_eq!(battle.enemy(), before.enemy());
-    assert_eq!(
-        battle.trainer().unwrap().bench(),
-        before.trainer().unwrap().bench()
-    );
+    assert_eq!(battle.enemy().status1(), Status1::Healthy);
     rng.assert_exhausted();
 }
 
 #[test]
-fn a_yawned_to_sleep_trace_holder_cannot_recopy_a_sleep_immunity_on_its_return() {
+fn a_yawned_to_sleep_trace_holder_recopies_a_sleep_immunity_and_is_cured_after_the_next_move() {
     for (species, ability) in [
         (SpeciesId::DROWZEE, AbilityId::INSOMNIA),
         (SpeciesId::MANKEY, AbilityId::VITAL_SPIRIT),
@@ -332,19 +351,25 @@ fn a_yawned_to_sleep_trace_holder_cannot_recopy_a_sleep_immunity_on_its_return()
         bench_the_statused_holder(&mut fixture);
         let Reentry { battle, rng } = &mut fixture;
         assert_eq!(battle.player().ability(), ability);
-        let before = battle.clone();
 
-        let refused = turn_with(battle, 0, EnemyAction::Switch(0), rng);
+        let events = turn_with(battle, 0, EnemyAction::Switch(0), rng).expect("the holder returns");
 
         assert_eq!(
-            refused,
-            Err(BattleError::UnportedAbilityInteraction(ability))
+            events,
+            [
+                vec![
+                    BattleEvent::TrainerSentOut {
+                        species: SpeciesId::PORYGON2,
+                        bench_remaining: 1,
+                    },
+                    traced(false, ability),
+                ],
+                used(true, SPLASH).to_vec(),
+                vec![cured(ability, CuredCondition::Sleep)],
+            ]
+            .concat()
         );
-        assert_eq!(battle.enemy(), before.enemy());
-        assert_eq!(
-            battle.trainer().unwrap().bench(),
-            before.trainer().unwrap().bench()
-        );
+        assert_eq!(battle.enemy().status1(), Status1::Healthy);
         rng.assert_exhausted();
     }
 }
@@ -368,58 +393,72 @@ fn a_statused_trace_holder_still_recopies_an_ability_its_status_allows() {
 }
 
 #[test]
-fn a_refused_trace_return_spends_no_draw_and_changes_nothing() {
+fn a_native_status_immunity_holder_is_cured_by_the_voluntary_switch_before_the_move() {
     let dex = Dex::new();
-    let reserve = mon(&dex, SpeciesId::PERSIAN, 100, &[SPLASH]);
-    let mut fixture = reentry_fixture(reserve, MoveId::THUNDER_WAVE, &[&S, &U], &[]);
-    let Reentry { battle, rng } = &mut fixture;
-    turn_with(battle, 0, EnemyAction::Move(0), rng).expect("Thunder Wave");
-    bench_the_statused_holder(&mut fixture);
-    let Reentry { battle, rng } = &mut fixture;
-    rng.assert_exhausted();
-    let before = format!("{battle:?}");
-    let refused = Err(BattleError::UnportedAbilityInteraction(AbilityId::LIMBER));
+    let player = at_one_hp(mon(&dex, SpeciesId::GASTLY, 100, &[SPLASH]));
+    let mut persian = mon(&dex, SpeciesId::PERSIAN, 10, &[SPLASH]);
+    assert_eq!(persian.ability(), AbilityId::LIMBER);
+    persian.set_status1(Status1::Paralysed);
+    let party = vec![mon(&dex, SpeciesId::RATTATA, 1, &[SPLASH]), persian];
+    let mut rng = script(&[&C, &U]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
-    // The selected action is refused before it reorders, draws, or switches.
-    let action = battle
-        .validate_player_action(PlayerAction::UseMove(0))
-        .unwrap();
-    let mut events = Vec::new();
-    let mut empty = script(&[]);
+    let events = turn_with(&mut battle, 0, EnemyAction::Switch(1), &mut rng).unwrap();
+
     assert_eq!(
-        battle.resolve_selected_actions(action, EnemyAction::Switch(0), &mut empty, &mut events),
-        refused
+        events,
+        [
+            vec![
+                BattleEvent::TrainerSentOut {
+                    species: SpeciesId::PERSIAN,
+                    bench_remaining: 1,
+                },
+                cured(AbilityId::LIMBER, CuredCondition::Paralysis),
+            ],
+            used(true, SPLASH).to_vec(),
+        ]
+        .concat()
     );
-    // So is the switch itself, which a forced replacement also reaches.
-    assert_eq!(battle.switch_enemy_to(0, &mut events), refused);
-
-    assert!(events.is_empty());
-    assert_eq!(format!("{battle:?}"), before);
+    assert_eq!(battle.enemy().status1(), Status1::Healthy);
+    rng.assert_exhausted();
 }
 
 #[test]
-fn a_forced_replacement_cannot_send_in_a_statused_trace_holder_that_copies_a_cure() {
+fn a_forced_replacement_sends_in_a_statused_trace_holder_that_copies_a_cure_uncured() {
     let dex = Dex::new();
     let reserve = mon(&dex, SpeciesId::PERSIAN, 100, &[TACKLE, SPLASH]);
-    let mut fixture = reentry_fixture(reserve, MoveId::THUNDER_WAVE, &[&S, &U], &[&U, &H]);
+    let mut fixture = reentry_fixture(reserve, MoveId::THUNDER_WAVE, &[&S, &U], &[&U, &H, &U]);
     let Reentry { battle, rng } = &mut fixture;
     turn_with(battle, 0, EnemyAction::Move(0), rng).expect("Thunder Wave");
     bench_the_statused_holder(&mut fixture);
     let Reentry { battle, rng } = &mut fixture;
 
     // Tackle faints the Rattata; the only member left to replace it is the
-    // paralysed Trace holder, and Persian's Limber would be its copy.
-    let refused = turn_with(battle, 0, EnemyAction::Move(1), rng);
+    // paralysed Trace holder, and Persian's Limber is its copy. No move ends
+    // between the send-out and the copy, so nothing cures it yet.
+    let events = turn_with(battle, 0, EnemyAction::Move(1), rng).expect("the holder replaces");
 
+    assert!(events.contains(&BattleEvent::Fainted { by_player: false }));
+    assert!(events.contains(&traced(false, AbilityId::LIMBER)));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, BattleEvent::AbilityCuredStatus { .. })));
+    assert_eq!(battle.enemy().species(), SpeciesId::PORYGON2);
+    assert_eq!(battle.enemy().ability(), AbilityId::LIMBER);
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+
+    // The next move's end cures it.
+    let next = turn_with(battle, 1, EnemyAction::Move(0), rng).expect("the next turn");
     assert_eq!(
-        refused,
-        Err(BattleError::UnportedAbilityInteraction(AbilityId::LIMBER))
+        next,
+        [
+            used(true, SPLASH).to_vec(),
+            vec![cured(AbilityId::LIMBER, CuredCondition::Paralysis)],
+            used(false, SPLASH).to_vec(),
+        ]
+        .concat()
     );
-    assert!(battle.enemy().is_fainted());
-    assert_eq!(battle.enemy().species(), SpeciesId::RATTATA);
-    let holder = &battle.trainer().unwrap().bench()[0];
-    assert_eq!(holder.status1(), Status1::Paralysed);
-    assert_eq!(holder.ability(), AbilityId::TRACE);
     rng.assert_exhausted();
 }
 
@@ -490,38 +529,32 @@ fn every_battleable_species_has_an_ability_for_trace_to_copy() {
     assert!(checked > 380, "{checked}");
 }
 
-/// The refused replacement leaves the fainted Rattata active, so a later
-/// turn reaches the faint pass again; `Cmd_getexp` pays one faint once.
+/// The forced replacement of a fainted enemy pays its faint once;
+/// `Cmd_getexp` runs once per faint.
 #[test]
-fn a_refused_forced_replacement_does_not_pay_the_faint_again_on_a_later_turn() {
+fn a_forced_replacement_pays_the_faint_once() {
     let dex = Dex::new();
     let reserve = mon(&dex, SpeciesId::PERSIAN, 99, &[TACKLE, SPLASH]);
-    let mut fixture = reentry_fixture(reserve, MoveId::THUNDER_WAVE, &[&S, &U], &[&U, &H]);
+    let mut fixture = reentry_fixture(reserve, MoveId::THUNDER_WAVE, &[&S, &U], &[&U, &H, &U]);
     let Reentry { battle, rng } = &mut fixture;
     turn_with(battle, 0, EnemyAction::Move(0), rng).expect("Thunder Wave");
     bench_the_statused_holder(&mut fixture);
     let Reentry { battle, rng } = &mut fixture;
     let before = battle.player().experience();
 
-    let refused = turn_with(battle, 0, EnemyAction::Move(1), rng);
-    assert_eq!(
-        refused,
-        Err(BattleError::UnportedAbilityInteraction(AbilityId::LIMBER))
-    );
+    let events = turn_with(battle, 0, EnemyAction::Move(1), rng).expect("the holder replaces");
     let paid = battle.player().experience();
-    assert!(paid > before, "the faint pays once");
+    assert!(paid > before, "the faint pays");
+    let awards = |events: &[BattleEvent]| {
+        events
+            .iter()
+            .filter(|event| matches!(event, BattleEvent::ExpGained { .. }))
+            .count()
+    };
+    assert_eq!(awards(&events), 1);
 
-    let mut retry_rng = SequenceRng::new(vec![0; 64]);
-    let retry = battle
-        .take_turn(PlayerAction::UseMove(0), &mut retry_rng)
-        .expect_err("the replacement is refused again");
-    assert_eq!(
-        retry.error,
-        BattleError::UnportedAbilityInteraction(AbilityId::LIMBER)
-    );
-    assert!(!retry
-        .events
-        .iter()
-        .any(|event| matches!(event, BattleEvent::ExpGained { .. })));
+    let next = turn_with(battle, 1, EnemyAction::Move(0), rng).expect("the next turn");
+    assert_eq!(awards(&next), 0);
     assert_eq!(battle.player().experience(), paid);
+    rng.assert_exhausted();
 }

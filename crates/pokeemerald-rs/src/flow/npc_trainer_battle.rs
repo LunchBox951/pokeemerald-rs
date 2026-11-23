@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn statused_limber_lead_is_refused_before_any_ot_id_draw() {
+    fn statused_limber_lead_starts_the_battle_and_keeps_its_status_until_a_move_ends() {
         let mut lead = BattlePokemon::new(
             &Dex::new(),
             SpeciesId(53),
@@ -378,19 +378,11 @@ mod tests {
         lead.set_status1(battle::Status1::Paralysed);
 
         let mut rng = Rng::new(1);
-        let before = rng.state();
-        let result = start_npc_trainer_battle(lead, TrainerId::MAY_ROUTE_103_MUDKIP, &mut rng);
-        assert_eq!(
-            result.err(),
-            Some(NpcTrainerBattleError::Battle(
-                BattleError::UnportedAbilityInteraction(assets::AbilityId::LIMBER)
-            )),
-        );
-        assert_eq!(
-            rng.state(),
-            before,
-            "the statused-entrant refusal must precede every OT-ID draw"
-        );
+        let battle = start_npc_trainer_battle(lead, TrainerId::MAY_ROUTE_103_MUDKIP, &mut rng)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+
+        // The move-end immunity pass cures the paralysis; construction does not.
+        assert_eq!(battle.player().status1(), battle::Status1::Paralysed);
     }
 
     fn lead_of(species: SpeciesId) -> BattlePokemon {

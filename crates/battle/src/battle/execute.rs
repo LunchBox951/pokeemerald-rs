@@ -42,6 +42,7 @@ mod burn;
 mod color_change;
 mod cute_charm;
 mod effect_spore;
+mod immunity;
 mod pipelines;
 mod rollout;
 mod yawn;
@@ -178,6 +179,7 @@ impl Battle {
             self.apply_contact_abilities(attacker_is_player, move_id, rng, events)?;
         }
         let landed = last_landed_from(&events[events_before..], move_id);
+        self.apply_move_end_immunity(events);
         self.record_move_end(attacker_is_player, move_id, landed)
     }
 
@@ -202,13 +204,15 @@ impl Battle {
         Ok(())
     }
 
-    /// The move-end write for an action a canceller stopped before
-    /// `HITMARKER_OBEYS` was set: its target records `MOVE_UNAVAILABLE`.
-    pub(super) fn record_cancelled_move(
+    /// The move end of an action a canceller stopped before `HITMARKER_OBEYS`
+    /// was set: the immunity pass, then its target records `MOVE_UNAVAILABLE`.
+    pub(super) fn finish_cancelled_move(
         &mut self,
         attacker_is_player: bool,
         move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        self.apply_move_end_immunity(events);
         self.record_move_end(attacker_is_player, move_id, LastLandedMove::Unavailable)
     }
 
@@ -221,8 +225,13 @@ impl Battle {
     }
 
     /// Confusion's self-hit ends the action with the attacker as its own
-    /// target (`battle_util.c:2169`-`:2177`).
-    pub(super) fn record_confusion_self_hit(&mut self, attacker_is_player: bool) {
+    /// target (`battle_util.c:2169`-`:2177`), after the immunity pass.
+    pub(super) fn finish_confusion_self_hit(
+        &mut self,
+        attacker_is_player: bool,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        self.apply_move_end_immunity(events);
         let survived = !self.battlers(attacker_is_player).0.is_fainted();
         let side = BattlerSide::from_is_player(attacker_is_player);
         self.battler_states[side.index()].record_move_end(

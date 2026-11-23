@@ -164,10 +164,10 @@
 //! `Battle::residual_effects` deals the burn tick after poison's
 //! ([`status1::burn_residual_damage`]). A frozen attacker spends one
 //! `Random() % 5` draw after the sleep canceller and before confusion and
-//! paralysis ([`status1::draw_freeze_canceller`]); a frozen Magma Armor
-//! participant is refused at admission for the same unmodelled move-end cure. A burned participant with Water Veil
-//! is refused at admission, as a poisoned or badly poisoned Immunity holder is, because the
-//! move-end cure is unmodelled. The paralysis pipeline still reads Limber and the accuracy
+//! paralysis ([`status1::draw_freeze_canceller`]). A status or volatile that
+//! the holder's ability forbids (Limber, Immunity, Water Veil, Magma Armor,
+//! Insomnia, Vital Spirit, Own Tempo, Oblivious) is admitted and cured when a
+//! move ends ([`status_immunity`]). The paralysis pipeline still reads Limber and the accuracy
 //! abilities ([`paralyze`], `accuracy_check`) and admits a Shed Skin
 //! holder: Shed Skin's own end-turn cure draw lives in
 //! `Battle::residual_effects`.
@@ -306,6 +306,7 @@ pub mod secondary;
 pub mod stat_change;
 pub mod stat_stage;
 pub mod status1;
+pub mod status_immunity;
 pub mod turn_order;
 pub mod volatile;
 pub mod wild;
@@ -371,6 +372,7 @@ pub use stat_change::{
 };
 pub use stat_stage::StatStage;
 pub use status1::Status1;
+pub use status_immunity::CuredCondition;
 pub use volatile::Volatiles;
 pub use wild::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,

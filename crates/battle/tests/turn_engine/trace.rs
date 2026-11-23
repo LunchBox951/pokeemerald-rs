@@ -11,7 +11,9 @@ use crate::common::{
     SECONDARY_ABILITY_PERSONALITY,
 };
 use assets::{AbilityId, MoveId, SpeciesId};
-use battle::{Battle, BattleError, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1};
+use battle::{
+    Battle, BattleError, BattleEvent, BattlePokemon, CuredCondition, Dex, PlayerAction, Status1,
+};
 
 /// The constructor's turn-number seed; no Speed tie, so no order draw.
 const C: [u16; 1] = [0];
@@ -203,39 +205,57 @@ fn a_copied_ability_the_engine_refuses_stays_refused_before_any_draw() {
 }
 
 #[test]
-fn a_status_the_copied_ability_would_cure_is_refused_before_any_draw() {
+fn a_status_the_copied_ability_forbids_is_cured_when_the_first_move_ends() {
     let dex = Dex::new();
     let mut player = trace_holder(&dex, SpeciesId::PORYGON2, 20, &[MoveId::SPLASH]);
     player.set_status1(Status1::Paralysed);
     let enemy = max_iv_mon(&dex, SpeciesId::PERSIAN.0, 20, vec![MoveId::SPLASH]);
     assert_eq!(enemy.ability(), AbilityId::LIMBER);
-    let mut rng = SequenceRng::new([]);
-    assert_eq!(
-        Battle::new(dex, player, enemy, false, &mut rng).err(),
-        Some(BattleError::UnportedAbilityInteraction(AbilityId::LIMBER))
+    assert!(
+        enemy.speed_for_turn_order() > player.speed_for_turn_order(),
+        "the paralysed holder is slower, so no order draw"
     );
-    rng.assert_exhausted();
-}
+    let mut rng = SequenceRng::new(script(&[&C, &W]));
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    assert_eq!(battle.player().ability(), AbilityId::LIMBER);
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Paralysed,
+        "the copy does not run the immunity pass"
+    );
 
-#[test]
-fn a_copied_serene_grace_on_a_poison_hit_move_is_refused_before_any_draw() {
-    let dex = Dex::new();
-    let player = mon(
-        &dex,
-        SpeciesId::TOGEPI,
-        20,
-        &[MoveId::SPLASH],
-        SECONDARY_ABILITY_PERSONALITY,
-    );
-    assert_eq!(player.ability(), AbilityId::SERENE_GRACE);
-    let enemy = trace_holder(&dex, SpeciesId::PORYGON2, 20, &[MoveId::POISON_STING]);
-    let mut rng = SequenceRng::new([]);
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
     assert_eq!(
-        Battle::new(dex, player, enemy, false, &mut rng).err(),
-        Some(BattleError::UnportedAbilityInteraction(
-            AbilityId::SERENE_GRACE
-        ))
+        events,
+        [
+            traced(true, AbilityId::LIMBER),
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::SPLASH
+            },
+            BattleEvent::NothingHappened {
+                by_player: false,
+                move_id: MoveId::SPLASH
+            },
+            BattleEvent::AbilityCuredStatus {
+                by_player: true,
+                ability: AbilityId::LIMBER,
+                condition: CuredCondition::Paralysis,
+            },
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::SPLASH
+            },
+            BattleEvent::NothingHappened {
+                by_player: true,
+                move_id: MoveId::SPLASH
+            },
+        ]
     );
+    assert_eq!(battle.player().status1(), Status1::Healthy);
     rng.assert_exhausted();
 }
 
@@ -258,17 +278,37 @@ fn a_holder_is_not_screened_against_an_ability_only_its_own_side_carries() {
 }
 
 #[test]
-fn an_opposing_holder_can_relay_the_own_sides_ability_so_it_is_screened() {
+fn an_opposing_holder_relaying_the_own_sides_ability_is_admitted() {
     let dex = Dex::new();
     let mut player = trace_holder(&dex, SpeciesId::PORYGON2, 20, &[MoveId::SPLASH]);
     player.set_status1(Status1::Paralysed);
     let limber_reserve = max_iv_mon(&dex, SpeciesId::PERSIAN.0, 20, vec![MoveId::SPLASH]);
     let enemy = trace_holder(&dex, SpeciesId::PORYGON, 20, &[MoveId::SPLASH]);
+    let speed_tie = player.stats().speed == enemy.stats().speed;
+    let mut rng = SequenceRng::new(admission_script(speed_tie));
+    Battle::new_with_player_reserves(dex, player, vec![limber_reserve], enemy, false, &mut rng)
+        .unwrap();
+    rng.assert_exhausted();
+}
+
+#[test]
+fn a_copied_serene_grace_on_a_poison_hit_move_is_refused_before_any_draw() {
+    let dex = Dex::new();
+    let player = mon(
+        &dex,
+        SpeciesId::TOGEPI,
+        20,
+        &[MoveId::SPLASH],
+        SECONDARY_ABILITY_PERSONALITY,
+    );
+    assert_eq!(player.ability(), AbilityId::SERENE_GRACE);
+    let enemy = trace_holder(&dex, SpeciesId::PORYGON2, 20, &[MoveId::POISON_STING]);
     let mut rng = SequenceRng::new([]);
     assert_eq!(
-        Battle::new_with_player_reserves(dex, player, vec![limber_reserve], enemy, false, &mut rng)
-            .err(),
-        Some(BattleError::UnportedAbilityInteraction(AbilityId::LIMBER))
+        Battle::new(dex, player, enemy, false, &mut rng).err(),
+        Some(BattleError::UnportedAbilityInteraction(
+            AbilityId::SERENE_GRACE
+        ))
     );
     rng.assert_exhausted();
 }
