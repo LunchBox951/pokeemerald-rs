@@ -9,7 +9,9 @@ use super::{SaveFileStatus, SaveLineage, SaveSlot};
 
 const SAVEBLOCK2_SECTOR_ID: u16 = 0;
 const FIRST_SAVEBLOCK1_SECTOR_ID: u16 = 1;
-const DEFERRED_BYTE_OFFSET: usize = 0x16;
+/// A `SaveBlock2` payload offset no field models (padding past the options
+/// bitfield, `0x14..0x16`), so only the retained base can carry its byte.
+pub(crate) const DEFERRED_BYTE_OFFSET: usize = 0x16;
 const FIRST_SAVE_COUNTER: u32 = 1;
 const SECOND_SAVE_COUNTER: u32 = 2;
 const OLDER_DEFERRED_BYTE: u8 = 0x11;
