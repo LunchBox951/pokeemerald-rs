@@ -24,8 +24,9 @@
 //! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
 //! [`battle_pike_wild_mons`]), the Battle Pyramid floor-item and Pickup
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
-//! lists (see [`trainer_hill_prizes`]), and the slot-machine reel strips and
-//! starting positions (see [`slot_machine_reels`]); more
+//! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
+//! starting positions (see [`slot_machine_reels`]), and the Verdanturf Battle
+//! Tent Pokémon sets (see [`verdanturf_tent_mons`]); more
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -90,6 +91,7 @@ pub mod tmhm_learnsets;
 pub mod trainer_hill_prizes;
 pub mod trainers;
 pub mod type_chart;
+pub mod verdanturf_tent_mons;
 pub mod wild_encounters;
 
 pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
@@ -206,6 +208,11 @@ pub use trainers::{
     TrainerParty, TrainerPicId, TrainerTable, MAX_TRAINER_ITEMS, TRAINERS_COUNT,
 };
 pub use type_chart::{Effectiveness, Type, TypeChart};
+pub use verdanturf_tent_mons::{
+    verdanturf_tent_mon, verdanturf_tent_roster, TentEvSpread, TentHeldItemIndex,
+    VerdanturfTentMon, VerdanturfTentMonError, VerdanturfTentSetId, VERDANTURF_TENT_MON_COUNT,
+    VERDANTURF_TENT_MON_MOVES,
+};
 pub use wild_encounters::{
     FishingEncounters, FishingRod, LandEncounters, MapId, RockSmashEncounters, WaterEncounters,
     WildEncounterHeader, WildEncounterTable, WildPokemon, FISHING_SLOTS, LAND_SLOTS,

@@ -30044,6 +30044,14 @@
       "status": "pending"
     },
     "src/data/battle_frontier/battle_tent.h": {
+      "artifacts": {
+        "gVerdanturfBattleTentMons": {
+          "reason": "Ported all 45 gVerdanturfBattleTentMons records from src/data/battle_frontier/battle_tent.h:1807-2124 with set IDs from include/constants/battle_tent_mons.h:77-123, ordered moves, documented BATTLE_FRONTIER_ITEM_* indices, F_EV_SPREAD_* masks and NATURE_* IDs. Trainer pools, other Tent rosters, held-item resolution, facility rules and party construction remain outside this artifact.",
+          "rust_target": "crates/assets/src/verdanturf_tent_mons.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
