@@ -249,9 +249,8 @@ pub(crate) struct BagScreen {
     shake: BagShake,
     /// The bag as the screen has reordered it, which the engine menu lists.
     bag: Bag,
-    /// What the engine menu was opened with. Its positions are the ones to
-    /// open again from: each pocket's as the player last left it, or as the
-    /// host passed it in until then.
+    /// What the engine menu was opened with. Only its bike flag is read
+    /// again; the live positions are the engine menu's own.
     menu_request: BagMenuRequest,
     swap: Option<ItemSwap>,
     /// The TOSS prompt, once TOSS is chosen.

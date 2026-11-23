@@ -390,6 +390,89 @@ fn a_swap_leaves_the_other_pockets_where_the_player_put_them() {
     assert_eq!((screen.menu.scroll(), screen.menu.cursor()), (2, 5));
 }
 
+/// Sixteen balls with the cursor on row 7, which open at scroll 2 / row 5.
+fn sixteen_balls_screen() -> BagScreen {
+    let mut bag = abcd();
+    for index in 0..16 {
+        bag.poke_balls[index] = ItemSlot {
+            item_id: ItemId::POKE_BALL.0,
+            quantity: 1,
+        };
+    }
+    let mut request = BagScreenRequest::new(BagScreenMode::Field);
+    request.positions.cursor[1] = 7;
+    open_with(request, &bag)
+}
+
+fn toss_one(screen: &mut BagScreen) {
+    super::toss::choose_toss(screen);
+    presses(screen, &[Buttons::A, Buttons::A]);
+    assert!(matches!(
+        tick(screen, Buttons::A),
+        BagScreenTick::Tossed { .. }
+    ));
+}
+
+fn balls_viewport_after(screen: &mut BagScreen) -> (u16, u16) {
+    switch_pocket(screen, Buttons::RIGHT);
+    assert_eq!(screen.menu.pocket(), Pocket::PokeBalls);
+    (screen.menu.scroll(), screen.menu.cursor())
+}
+
+#[test]
+fn a_swap_after_tosses_leaves_the_other_pockets_where_the_player_put_them() {
+    for tosses in 1..=2 {
+        let mut screen = sixteen_balls_screen();
+        for _ in 0..tosses {
+            toss_one(&mut screen);
+        }
+        presses(
+            &mut screen,
+            &[Buttons::SELECT, Buttons::DOWN, Buttons::DOWN],
+        );
+        let BagScreenTick::Reordered { bag } = tick(&mut screen, Buttons::A) else {
+            panic!("the swap reorders the bag");
+        };
+        assert_eq!(items_of(&bag), [20, 10 - tosses, 30, 40], "{tosses} tosses");
+        assert_eq!((screen.menu.scroll(), screen.menu.cursor()), (0, 1));
+        assert_eq!(balls_viewport_after(&mut screen), (2, 5), "{tosses} tosses");
+    }
+}
+
+#[test]
+fn a_cancelled_swap_after_a_toss_leaves_the_other_pockets_where_they_were() {
+    for (moves, confirm, cursor) in [
+        (vec![Buttons::DOWN, Buttons::DOWN], Buttons::B, 1),
+        (vec![Buttons::DOWN], Buttons::A, 0),
+    ] {
+        let mut screen = sixteen_balls_screen();
+        toss_one(&mut screen);
+        presses(&mut screen, &[Buttons::SELECT]);
+        presses(&mut screen, &moves);
+        assert_eq!(tick(&mut screen, confirm), BagScreenTick::Open);
+        assert_eq!((screen.menu.scroll(), screen.menu.cursor()), (0, cursor));
+        assert_eq!(balls_viewport_after(&mut screen), (2, 5));
+    }
+}
+
+#[test]
+fn a_swap_does_not_recenter_the_pocket_it_reorders() {
+    let mut bag = Bag::default();
+    for index in 0..16 {
+        bag.items[index] = stack(index, u16::try_from(index + 1).unwrap());
+    }
+    let mut request = BagScreenRequest::new(BagScreenMode::Field);
+    request.positions.cursor[0] = 10;
+    let mut screen = open_with(request, &bag);
+    assert_eq!((screen.menu.scroll(), screen.menu.cursor()), (4, 6));
+    presses(&mut screen, &[Buttons::SELECT, Buttons::UP]);
+    assert!(matches!(
+        tick(&mut screen, Buttons::A),
+        BagScreenTick::Reordered { .. }
+    ));
+    assert_eq!((screen.menu.scroll(), screen.menu.cursor()), (4, 5));
+}
+
 #[test]
 fn the_screen_remembers_where_the_swap_left_the_pocket() {
     let (screen, _) = swapped(&abcd(), 0, &[Buttons::DOWN, Buttons::DOWN], Buttons::A);

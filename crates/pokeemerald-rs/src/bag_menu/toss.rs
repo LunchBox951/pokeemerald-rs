@@ -233,7 +233,6 @@ impl BagScreen {
             self.registered_item,
             self.menu_request.bike_avatar,
         );
-        self.menu_request.positions = self.menu.positions();
         BagScreenTick::Tossed {
             bag: Box::new(self.bag.clone()),
         }
