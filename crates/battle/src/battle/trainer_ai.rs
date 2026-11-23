@@ -69,6 +69,10 @@ const DEFENSE_DROP_USER_HP_THRESHOLD: u32 = 70;
 const STAT_DROP_TARGET_HP_THRESHOLD: u32 = 70;
 const HEAVILY_LOWERED_STAT_STAGE: i8 = -3;
 const FIRST_TURN: u8 = 0;
+const CONFUSE_PENALTY_ROLL_THRESHOLD: u16 = 128;
+const CONFUSE_UNDISCOURAGED_TARGET_HP: u32 = 70;
+const CONFUSE_SECOND_PENALTY_TARGET_HP: u32 = 50;
+const CONFUSE_THIRD_PENALTY_TARGET_HP: u32 = 30;
 
 /// `AI_CV_AlwaysHit` compares raw stages (`0..=12`, neutral `6`)
 /// (`data/battle_ai_scripts.s:1076`-`:1079`); these are the same cut-offs as
@@ -251,12 +255,12 @@ impl ScoreableEffect {
         }
     }
 
-    /// `AI_CheckViability` branches on Paralyze, Confuse and Leech Seed
-    /// (`data/battle_ai_scripts.s:687,704,711`), and `AI_SetupFirstTurn` rolls
-    /// for all four (`:2667,2668,2685,2687`); neither is ported. Focus Energy
-    /// has no viability branch.
+    /// `AI_CheckViability` branches on Paralyze and Leech Seed
+    /// (`data/battle_ai_scripts.s:704,711`) and `AI_SetupFirstTurn` rolls for
+    /// all four (`:2667,2668,2685,2687`); neither is ported. Focus Energy has
+    /// no viability branch, and Confuse's is ported (`score_confuse_viability`).
     const fn supported_with_status_handler(self, flags: AiFlags) -> bool {
-        let viability_branch = !matches!(self, Self::FocusEnergy);
+        let viability_branch = !matches!(self, Self::FocusEnergy | Self::Confuse);
         !(flags.contains(AiFlags::SETUP_FIRST_TURN)
             || viability_branch && flags.contains(AiFlags::CHECK_VIABILITY))
     }
@@ -1093,10 +1097,8 @@ fn score_viability(
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
         // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
-        ScoreableEffect::Paralyze
-        | ScoreableEffect::Confuse
-        | ScoreableEffect::LeechSeed
-        | ScoreableEffect::StatLabel(..) => {
+        ScoreableEffect::Confuse => score_confuse_viability(scores, slot, target, rng),
+        ScoreableEffect::Paralyze | ScoreableEffect::LeechSeed | ScoreableEffect::StatLabel(..) => {
             return Err(BattleError::UnscoreableMoveEffect(move_id));
         }
         ScoreableEffect::AttackDown => {
@@ -1107,6 +1109,29 @@ fn score_viability(
         }
     }
     Ok(())
+}
+
+/// `AI_CV_Confuse` (`data/battle_ai_scripts.s:1467`-`:1477`).
+fn score_confuse_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    let target_hp = current_hp_percent(target);
+    if target_hp > CONFUSE_UNDISCOURAGED_TARGET_HP {
+        return;
+    }
+    if random_roll_is_at_least(rng, CONFUSE_PENALTY_ROLL_THRESHOLD) {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+    }
+    if target_hp > CONFUSE_SECOND_PENALTY_TARGET_HP {
+        return;
+    }
+    scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+    if target_hp <= CONFUSE_THIRD_PENALTY_TARGET_HP {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+    }
 }
 
 /// `AI_CV_AlwaysHit` (`data/battle_ai_scripts.s:1075`-`:1088`); upstream's
@@ -2505,6 +2530,8 @@ mod always_hit_viability_tests;
 mod attract_tests;
 #[cfg(test)]
 mod charge_tests;
+#[cfg(test)]
+mod confuse_viability_tests;
 #[cfg(test)]
 mod drain_viability_tests;
 #[cfg(test)]
