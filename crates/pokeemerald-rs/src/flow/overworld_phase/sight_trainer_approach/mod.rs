@@ -141,6 +141,10 @@ enum ApproachStage {
         /// this stage opens it, every later one ticks it.
         opened: bool,
     },
+    /// `dotrainerbattle` (`trainer_battle.inc:110`): `waitbuttonpress`
+    /// returned on the previous frame's script pass, so the bytecode after it
+    /// runs now (`script.c:80-87`), the intro box still up.
+    BattleHandoff,
 }
 
 /// One sight trainer's in-progress approach: which live object event is being
@@ -341,7 +345,8 @@ impl SightApproach {
             | ApproachStage::PlayerFacesTrainer
             | ApproachStage::PlayerFaceWait
             | ApproachStage::EndTrainerApproach
-            | ApproachStage::IntroMessage { .. } => {}
+            | ApproachStage::IntroMessage { .. }
+            | ApproachStage::BattleHandoff => {}
         }
     }
 
