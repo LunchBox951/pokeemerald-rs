@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.142.0] - 2026-11-23
+
+- Pokémon whose ability protects them from a status condition, such as Limber, Immunity, Insomnia or Own Tempo, can now take part in battles while carrying that condition: the ability cures it after the next move, as in the original game.
+
 ## [0.0.141.0] - 2026-11-22
 
 - General improvements in preparation for False Swipe: the move now leaves its target with at least 1 HP instead of knocking it out, as in the original game.
@@ -629,6 +633,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
+[0.0.142.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/b3c32a4a9d54b8fb9a5f5987ce0836e113029d55...dev
 [0.0.141.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ca9e7b40b003094ffe20f40b304439c4eb92634a...dev
 [0.0.140.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/05a2c78f28fabc7418016221f93f70db6a1c01d8...dev
 [0.0.137.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/57283ac35b0dc473f4019d9c8b860647c772b6c5...dev
