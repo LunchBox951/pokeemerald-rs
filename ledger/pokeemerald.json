@@ -29596,6 +29596,14 @@
       "status": "pending"
     },
     "src/battle_tower.c": {
+      "artifacts": {
+        "gBattleFrontierHeldItems": {
+          "reason": "gBattleFrontierHeldItems (src/battle_tower.c:82-147), the 63-entry table from a BATTLE_FRONTIER_ITEM_* index (itemTableId, include/battle_tower.h:31) to an ITEM_* id, re-expressed as frontier_held_item over the distinct FrontierItemIndex type, resolving to items::ItemId. Index 0 is the no-item entry (ItemId::NONE) and 62 is Ganlon Berry; an index past 62 is FrontierHeldItemError::InvalidIndex. Facility party generation, the duplicate held-item check (src/battle_factory.c:365-373) and held-item effects are not ported.",
+          "rust_target": "crates/assets/src/frontier_held_items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
