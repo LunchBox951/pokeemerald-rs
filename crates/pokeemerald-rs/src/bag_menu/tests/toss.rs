@@ -500,7 +500,8 @@ fn the_screen_keeps_its_place_and_swaps_from_the_new_bag() {
         panic!("returns the bag");
     };
     assert_eq!([bag.items[0].quantity, bag.items[1].quantity], [10, 30]);
-    assert_eq!(screen.positions(), screen.menu_request.positions);
+    assert_eq!(screen.menu.pocket(), assets::items::Pocket::Items);
+    assert_eq!((screen.menu.scroll(), screen.menu.cursor()), (0, 1));
     // SELECT swap then works from the bag after the toss.
     open_ok(&mut screen, Buttons::UP);
     open_ok(&mut screen, Buttons::SELECT);

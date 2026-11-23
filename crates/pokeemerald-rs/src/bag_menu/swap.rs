@@ -4,7 +4,7 @@
 //! rows, and A or SELECT puts it down there.
 
 use assets::items::{ItemId, Pocket};
-use engine::bag_menu::{BagMenu, BagMenuInput, BagMenuOutcome};
+use engine::bag_menu::{BagMenuInput, BagMenuOutcome};
 use engine::save::bag::{Bag, ItemSlot};
 use platform::{ButtonState, Buttons};
 
@@ -130,16 +130,19 @@ impl BagScreen {
         if reordered.is_none() && !below {
             return BagScreenTick::Open;
         }
-        let index = self.pocket_index();
-        let positions = &mut self.menu_request.positions;
-        positions.scroll[index] = self.menu.scroll();
-        positions.cursor[index] = self.menu.cursor().saturating_sub(u16::from(below));
-        positions.pocket = self.menu.pocket();
+        let (scroll, cursor) = (
+            self.menu.scroll(),
+            self.menu.cursor().saturating_sub(u16::from(below)),
+        );
         if let Some(bag) = &reordered {
             self.bag = bag.clone();
         }
-        self.menu = BagMenu::open(&self.bag, self.menu_request)
-            .expect("the pocket on show is a pocket the menu opens on");
+        self.menu.refresh(
+            &self.bag,
+            self.registered_item,
+            self.menu_request.bike_avatar,
+        );
+        self.menu.set_position(scroll, cursor);
         reordered.map_or(BagScreenTick::Open, |bag| BagScreenTick::Reordered {
             bag: Box::new(bag),
         })
@@ -166,23 +169,19 @@ impl BagScreen {
         Some(bag)
     }
 
-    /// Applies one input to the engine menu and remembers where it left the
-    /// shown pocket's cursor for the next time the menu is opened. A list
-    /// step is remembered; a context menu's own movement is not.
+    /// Applies one input to the engine menu, shaking the bag when a list step
+    /// moves the selection.
     pub(super) fn apply(&mut self, input: BagMenuInput) -> Option<BagMenuOutcome> {
         let browsing = self.menu.context_grid().is_none();
         let before = self.list_position();
         let outcome = self.menu.handle_input(input);
-        if browsing && matches!(input, BagMenuInput::Up | BagMenuInput::Down) {
-            if self.list_position() != before {
-                // `BagMenu_MoveCursorCallback`, which the list calls only when
-                // the selection moves (`item_menu.c:926-932`).
-                self.shake.start();
-            }
-            let index = self.pocket_index();
-            let positions = &mut self.menu_request.positions;
-            positions.scroll[index] = self.menu.scroll();
-            positions.cursor[index] = self.menu.cursor();
+        if browsing
+            && matches!(input, BagMenuInput::Up | BagMenuInput::Down)
+            && self.list_position() != before
+        {
+            // `BagMenu_MoveCursorCallback`, which the list calls only when
+            // the selection moves (`item_menu.c:926-932`).
+            self.shake.start();
         }
         outcome
     }

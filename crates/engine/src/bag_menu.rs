@@ -363,6 +363,20 @@ impl BagMenu {
         self.positions.scroll[self.pocket_index()]
     }
 
+    /// Puts the shown pocket's window where `scroll` and `cursor` say, kept
+    /// inside its list. Unlike [`BagMenu::open`], it never recenters.
+    pub fn set_position(&mut self, scroll: u16, cursor: u16) {
+        let index = self.pocket_index();
+        let window = Window::of(self.stacks[index].len());
+        let (scroll_slot, cursor_slot) = (
+            &mut self.positions.scroll[index],
+            &mut self.positions.cursor[index],
+        );
+        (*scroll_slot, *cursor_slot) = (scroll, cursor);
+        window.clamp_cursor(scroll_slot, cursor_slot);
+        window.confine(scroll_slot, cursor_slot);
+    }
+
     /// The shown pocket's stacks in display order, without the close row.
     #[must_use]
     pub fn stacks(&self) -> &[BagStack] {
@@ -1255,6 +1269,52 @@ mod tests {
                 assert!(usize::from(menu.scroll()) + shown <= total);
             }
         }
+    }
+
+    #[test]
+    fn setting_a_position_never_recenters_and_leaves_other_pockets_alone() {
+        let mut bag = Bag::default();
+        for index in 0..16 {
+            bag.items[index] = ItemSlot {
+                item_id: ItemId::POTION.0,
+                quantity: 1,
+            };
+            bag.poke_balls[index] = ItemSlot {
+                item_id: ItemId::POKE_BALL.0,
+                quantity: 1,
+            };
+        }
+        let mut request = BagMenuRequest::new(BagMenuMode::Field);
+        request.positions.cursor[1] = 7;
+        let mut menu = BagMenu::open(&bag, request).unwrap();
+        let balls = menu.positions();
+        assert_eq!((balls.scroll[1], balls.cursor[1]), (2, 5));
+        for _ in 0..2 {
+            menu.set_position(2, 5);
+            assert_eq!((menu.scroll(), menu.cursor()), (2, 5));
+        }
+        assert_eq!(menu.positions().scroll[1], 2);
+        assert_eq!(menu.positions().cursor[1], 5);
+        menu.set_position(u16::MAX, u16::MAX);
+        assert_eq!((menu.scroll(), menu.cursor()), (9, 7));
+    }
+
+    #[test]
+    fn setting_a_position_on_a_short_or_empty_pocket_stays_in_its_list() {
+        let mut bag = Bag::default();
+        for index in 0..4 {
+            bag.items[index] = ItemSlot {
+                item_id: ItemId::POTION.0,
+                quantity: 1,
+            };
+        }
+        let mut menu = BagMenu::open(&bag, BagMenuRequest::new(BagMenuMode::Field)).unwrap();
+        menu.set_position(u16::MAX, u16::MAX);
+        assert_eq!((menu.scroll(), menu.cursor()), (0, 4));
+        let mut empty =
+            BagMenu::open(&Bag::default(), BagMenuRequest::new(BagMenuMode::Field)).unwrap();
+        empty.set_position(u16::MAX, u16::MAX);
+        assert_eq!((empty.scroll(), empty.cursor()), (0, 0));
     }
 
     #[test]
