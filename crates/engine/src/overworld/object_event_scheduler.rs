@@ -36,7 +36,7 @@
 use assets::{MapId, MovementType};
 
 use crate::event_data::EventData;
-use crate::overworld::map_runtime::MapRuntime;
+use crate::overworld::map_runtime::{ConnectedMapData, MapRuntime};
 use crate::overworld::object_event::{object_event_is_visible, tile_is_in_view};
 use crate::overworld::player::TilePos;
 use crate::rng::RandomSource;
@@ -105,7 +105,7 @@ impl Lifecycle {
 }
 
 /// What one overworld frame lets the scheduler see of the rest of the game.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct FrameContext<'a> {
     /// The player's tile, `gSaveBlock1Ptr->pos`, centring the spawn window.
     pub player_position: TilePos,
@@ -121,11 +121,28 @@ pub struct FrameContext<'a> {
     /// The map's cells and metatile behaviours, for an object's step to be checked against
     /// (`GetCollisionAtCoords`). Unbound: other objects come from the collection itself.
     pub terrain: MapRuntime<'a>,
+    /// The maps `terrain` connects to, whose rows the backup layout keeps in reach of the edge,
+    /// where an object a crossing carried over may stand
+    /// ([`MapRuntime::metatile_cell_in_band`]).
+    pub connected_maps: &'a dyn ConnectedMapData,
     /// The tile the player is leaving, `gObjectEvents[0].previousCoords`; equal to
     /// `player_position` while the player stands still.
     pub player_previous_position: TilePos,
     /// The player's collision elevation, `gObjectEvents[0].currentElevation`.
     pub player_elevation: u8,
+}
+
+impl std::fmt::Debug for FrameContext<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrameContext")
+            .field("player_position", &self.player_position)
+            .field("frozen", &self.frozen)
+            .field("player_dashing", &self.player_dashing)
+            .field("terrain", &self.terrain)
+            .field("player_previous_position", &self.player_previous_position)
+            .field("player_elevation", &self.player_elevation)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ObjectEventCollection {

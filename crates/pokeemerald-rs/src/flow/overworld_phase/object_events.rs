@@ -5,8 +5,9 @@
 
 use engine::event_data::EventData;
 use engine::overworld::object_event::FrameContext;
-use engine::overworld::{MapRuntime, PlayerState};
+use engine::overworld::{ConnectedMapData, MapRuntime, PlayerState};
 
+use super::connections::MapConnections;
 use super::sight_trainer_approach::SightApproach;
 use super::OverworldPhase;
 
@@ -15,6 +16,7 @@ fn frame_context<'a>(
     player: &PlayerState,
     event_data: &'a EventData,
     terrain: MapRuntime<'a>,
+    connected_maps: &'a dyn ConnectedMapData,
     frozen: bool,
 ) -> FrameContext<'a> {
     FrameContext {
@@ -23,6 +25,7 @@ fn frame_context<'a>(
         frozen,
         player_dashing: player.dashing(),
         terrain,
+        connected_maps,
         player_previous_position: player.previous_position(),
         player_elevation: player.elevation(),
     }
@@ -79,10 +82,19 @@ impl OverworldPhase {
         self.scene.update_object_elevations(&mut self.object_events);
         self.scene
             .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
+        // The neighbours' rows an object a crossing carried over can stand on. Terrain only: the
+        // scheduler borrows the live set mutably.
+        let maps = MapConnections {
+            pack: &self.connection_pack,
+            source: self.pack_source.clone(),
+            departed: self.map_id,
+            departed_objects: None,
+        };
         let context = frame_context(
             &self.player,
             &self.save1.event_data,
             self.scene.runtime(),
+            &maps,
             frozen,
         );
         let finishing = self

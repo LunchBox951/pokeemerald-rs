@@ -262,6 +262,7 @@ impl LiveObjectEvent {
         };
         collision_in_direction(
             &context.terrain,
+            context.connected_maps,
             &self.state,
             Some(MovementRange {
                 initial,
@@ -299,13 +300,14 @@ impl LiveObjectEvent {
         self.update_elevation_from_terrain(context);
     }
 
-    /// `ObjectEventUpdateElevation` (`:7759-7771`) against the cells under the object. An object
-    /// off the grid keeps its elevations, and an off-grid previous cell reads as a transition.
+    /// `ObjectEventUpdateElevation` (`:7759-7771`) against the cells under the object, the
+    /// neighbours' band included. An object on no cell keeps its elevations, and a previous cell
+    /// on none reads as a transition.
     fn update_elevation_from_terrain(&mut self, context: &FrameContext<'_>) {
         let cell = |(x, y): (i32, i32)| {
             context
                 .terrain
-                .metatile_cell(x, y)
+                .metatile_cell_in_band(x, y, context.connected_maps)
                 .map(|cell| cell.elevation)
         };
         if let Some(current) = cell(self.state.position()) {

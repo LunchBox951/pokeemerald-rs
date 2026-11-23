@@ -564,7 +564,7 @@ impl OverworldPhase {
             pack: &self.connection_pack,
             source: self.pack_source.clone(),
             departed: self.map_id,
-            departed_objects: &self.object_events,
+            departed_objects: Some(&self.object_events),
         };
         // `interaction` preempts movement too (issue #435), and so do a
         // claimed fresh `START`, the pre-movement animated-door check

@@ -812,6 +812,7 @@ mod tests {
                     frozen: false,
                     player_dashing: false,
                     terrain: terrain.runtime(),
+                    connected_maps: &crate::overworld::NoConnectedMaps,
                     player_previous_position: player,
                     player_elevation: crate::overworld::object_event_harness::FLOOR_ELEVATION,
                 },

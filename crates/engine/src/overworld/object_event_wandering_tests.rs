@@ -4,13 +4,13 @@
 //! Frames are counted from one: the first `Rig::tick` admits the entries and runs their first
 //! callback.
 
-use assets::{MapId, MovementType, ObjectEvent};
+use assets::{MapConnection, MapId, MovementType, ObjectEvent};
 
 use super::super::Lifecycle;
 use crate::overworld::direction::Direction;
 use crate::overworld::object_event::FrameContext;
 use crate::overworld::object_event::StepKind;
-use crate::overworld::object_event_harness::{template, Rig, ScriptedRng};
+use crate::overworld::object_event_harness::{template, Neighbours, Rig, ScriptedRng, Terrain};
 
 const NEVER_HIDDEN: &str = "0";
 const FAR: (i32, i32) = (20, 25);
@@ -663,6 +663,7 @@ fn a_frozen_frame_lets_the_named_object_finish_its_step_and_start_nothing_after(
             frozen: rig.frozen,
             player_dashing: rig.dashing,
             terrain: rig.terrain.runtime(),
+            connected_maps: &*rig.connected_maps,
             player_previous_position: rig.player,
             player_elevation: rig.player_elevation,
         };
@@ -687,6 +688,7 @@ fn a_frozen_frame_lets_the_named_object_finish_its_step_and_start_nothing_after(
         frozen: rig.frozen,
         player_dashing: rig.dashing,
         terrain: rig.terrain.runtime(),
+        connected_maps: &*rig.connected_maps,
         player_previous_position: rig.player,
         player_elevation: rig.player_elevation,
     };
@@ -696,4 +698,145 @@ fn a_frozen_frame_lets_the_named_object_finish_its_step_and_start_nothing_after(
     }
     assert_eq!(step(&rig, 1), None, "a frozen object starts no new step");
     assert_eq!(position(&rig, 1), (20, 19));
+}
+
+const ROUTE_101: MapId = MapId("MAP_ROUTE101");
+
+/// Route 101's boy (local id 6, (2, 13), WanderLeftAndRight, range 1x1), carried into
+/// Littleroot Town (20x20, Route 101 20 tall to its north at offset 0) the frame after he is
+/// admitted, with `route_101` as the connected map. His East draw lands on frame 32.
+fn carried_boy_rig(route_101: Terrain) -> Rig {
+    const LITTLEROOT: MapId = MapId("MAP_LITTLEROOT_TOWN");
+    let mut rig = Rig::new(
+        vec![mover(6, (2, 13), MovementType::WanderLeftAndRight, (1, 1))],
+        (10, 19),
+    );
+    // Delay 32 on frame 1, East on frame 32, then spare delays.
+    rig.rng = ScriptedRng::new([0, 1, 0, 0, 0, 0]);
+    rig.tick(1);
+
+    rig.collection = rig.collection.carry_across_connection(
+        ROUTE_101,
+        LITTLEROOT,
+        crate::overworld::object_event_harness::leaked(vec![]),
+        (0, -20),
+    );
+    rig.terrain = Terrain::flat_sized(20, 20).with_connections(vec![MapConnection {
+        direction: assets::Direction::North,
+        offset: 0,
+        target: ROUTE_101,
+    }]);
+    rig.connected_maps = Box::new(Neighbours::new(vec![(ROUTE_101, route_101)]));
+    rig.player = (10, 0);
+    rig
+}
+
+#[test]
+fn a_wanderer_carried_across_a_connection_keeps_walking_on_its_home_maps_cells() {
+    // Upstream's backup layout holds Route 101's rows 13..=19 at Littleroot y -7..=-1
+    // (FillNorthConnection, fieldmap.c:225-246), so the boy's East step onto Route 101
+    // (3, 13), a passable elevation-3 cell, is (3, -7) in Littleroot's coordinates and succeeds.
+    let mut rig = carried_boy_rig(Terrain::flat_sized(20, 20));
+    rig.tick(31);
+
+    let boy = rig.collection.find(Some(ROUTE_101), 6).expect("carried");
+    assert!(boy.is_active(), "still in view of (10, 0)");
+    assert_eq!(boy.state().facing(), Direction::East);
+    assert_eq!(
+        boy.state().position(),
+        (3, -7),
+        "the carried wanderer steps onto its home map's passable cell"
+    );
+}
+
+#[test]
+fn a_carried_wanderer_adopts_the_elevation_of_the_band_cell_it_steps_onto() {
+    let mut route_101 = Terrain::flat_sized(20, 20);
+    route_101.set_elevation((3, 13), 0);
+    let mut rig = carried_boy_rig(route_101);
+    rig.tick(31);
+
+    let state = rig.collection.find(Some(ROUTE_101), 6).unwrap().state();
+    assert_eq!(state.position(), (3, -7));
+    assert_eq!(
+        state.elevation(),
+        0,
+        "the band cell's elevation, which the entered map's own grid has no cell for"
+    );
+}
+
+#[test]
+fn a_band_cell_is_the_neighbours_wall_and_reaches_only_as_far_as_the_backup_layout() {
+    let band_rig = |wall: Option<(i32, i32)>, neighbour_rows: u16| {
+        let mut neighbour = Terrain::flat_sized(20, neighbour_rows);
+        if let Some(tile) = wall {
+            neighbour.set_wall(tile);
+        }
+        let mut rig = Rig::new(vec![], (10, 0));
+        rig.terrain = Terrain::flat_sized(20, 20).with_connections(vec![MapConnection {
+            direction: assets::Direction::North,
+            offset: 0,
+            target: ROUTE_101,
+        }]);
+        rig.connected_maps = Box::new(Neighbours::new(vec![(ROUTE_101, neighbour)]));
+        rig
+    };
+    let cell_at = |rig: &Rig, x, y| {
+        rig.terrain
+            .runtime()
+            .metatile_cell_in_band(x, y, &*rig.connected_maps)
+    };
+
+    let rig = band_rig(Some((3, 13)), 20);
+    assert!(
+        cell_at(&rig, 3, -7).is_some_and(|cell| cell.collision != 0),
+        "the neighbour's wall at (3, 13) is Littleroot's (3, -7)"
+    );
+    assert!(cell_at(&rig, 2, -7).is_some_and(|cell| cell.collision == 0));
+    assert!(
+        cell_at(&rig, 3, -8).is_none(),
+        "the band reaches seven rows north"
+    );
+    assert!(
+        cell_at(&rig, -1, -1).is_none(),
+        "a corner tile files under the west edge, which has no connection"
+    );
+    let short = band_rig(None, 4);
+    assert!(
+        cell_at(&short, 3, -5).is_none(),
+        "a neighbour with fewer rows than the band leaves the rest undefined"
+    );
+}
+
+#[test]
+fn the_backup_layout_reaches_one_column_farther_east_than_west_and_decodes_with_the_entered_tilesets(
+) {
+    const ROUTE_104: MapId = MapId("MAP_ROUTE104");
+    let mut neighbour = Terrain::flat_sized(20, 20);
+    neighbour.set_behavior((7, 5), 0x30);
+    // The neighbour's own tilesets would decode metatile 0x30 differently.
+    neighbour.set_attribute(0x30, 0x31);
+    let mut rig = Rig::new(vec![], (10, 10));
+    rig.terrain = Terrain::flat_sized(20, 20).with_connections(vec![MapConnection {
+        direction: assets::Direction::East,
+        offset: 2,
+        target: ROUTE_104,
+    }]);
+    rig.connected_maps = Box::new(Neighbours::new(vec![(ROUTE_104, neighbour)]));
+    let band = |x, y| {
+        rig.terrain
+            .runtime()
+            .metatile_cell_in_band(x, y, &*rig.connected_maps)
+    };
+
+    assert!(band(27, 7).is_some(), "eight columns east of the edge");
+    assert!(band(28, 7).is_none());
+    assert!(band(20, 1).is_none(), "above the connection's offset");
+    // Route 104 (7, 5) is the entered map's (27, 7); its metatile id is decoded by the entered map.
+    assert_eq!(
+        rig.terrain
+            .runtime()
+            .metatile_behavior_in_band(27, 7, &*rig.connected_maps),
+        Some(0x30)
+    );
 }
