@@ -196,6 +196,26 @@ fn a_loafing_user_prints_loafing_around_in_place_of_its_move() {
 }
 
 #[test]
+fn a_flinched_user_prints_flinched_in_place_of_its_move() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let events = [
+        BattleEvent::Flinched {
+            by_player: false,
+            move_id: MoveId::TACKLE,
+        },
+        BattleEvent::Flinched {
+            by_player: true,
+            move_id: MoveId::EMBER,
+        },
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        ["Foe RATTATA flinched!", "TORCHIC flinched!"]
+    );
+}
+
+#[test]
 fn a_disobedient_user_prints_its_refusal_in_place_of_its_move() {
     let mut narrator = narrator(BattleKind::Trainer);
     let events = [
@@ -333,6 +353,83 @@ fn effect_spore_names_its_holder_and_the_attacker_it_statused() {
             "Wild PARAS's EFFECT SPORE\nmade TORCHIC sleep!",
             "Wild PARAS's EFFECT SPORE\npoisoned TORCHIC!",
             "Wild PARAS's EFFECT SPORE\nparalyzed TORCHIC!",
+        ]
+    );
+}
+
+/// `BattleScript_EffectYawn` names the user and target in
+/// `STRINGID_PKMNWASMADEDROWSY`; an Insomnia or Vital Spirit holder is the
+/// scripting battler of `STRINGID_PKMNSXMADEITINEFFECTIVE`; the expiry's
+/// `BattleScript_YawnMakesAsleep` names the drowsy battler as the effect
+/// battler (`data/battle_scripts_1.s:2451`-`:2473`, `:3878`-`:3885`).
+#[test]
+fn yawn_names_the_user_the_target_and_the_battler_that_fell_asleep() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let move_id = MoveId::YAWN;
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::MadeDrowsy {
+                    by_player: true,
+                    move_id
+                },
+                BattleEvent::MadeDrowsy {
+                    by_player: false,
+                    move_id
+                },
+                BattleEvent::YawnAbilityProtected {
+                    by_player: true,
+                    move_id,
+                    ability: AbilityId::INSOMNIA
+                },
+                BattleEvent::YawnAbilityProtected {
+                    by_player: false,
+                    move_id,
+                    ability: AbilityId::VITAL_SPIRIT
+                },
+                BattleEvent::FellAsleepFromYawn { by_player: true },
+                BattleEvent::FellAsleepFromYawn { by_player: false },
+            ]
+        )),
+        [
+            "TORCHIC made\nWild RATTATA drowsy!",
+            "Wild RATTATA made\nTORCHIC drowsy!",
+            "Wild RATTATA's INSOMNIA\nmade it ineffective!",
+            "TORCHIC's VITAL SPIRIT\nmade it ineffective!",
+            "TORCHIC\nfell asleep!",
+            "Wild RATTATA\nfell asleep!",
+        ]
+    );
+}
+
+/// `BattleScript_SpeedBoostActivates` names the holder as the scripting
+/// battler (`data/battle_scripts_1.s:3965`-`:3969`).
+#[test]
+fn speed_boost_names_its_holder() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.opponent = battler("NINJASK", Some(AbilityId::SPEED_BOOST));
+    let mut narrator = Narrator::new(scene);
+    let new_stage = StatStage::new(1).unwrap();
+
+    assert_eq!(
+        lines(&narrate(
+            &mut narrator,
+            &[
+                BattleEvent::SpeedBoostActivated {
+                    by_player: false,
+                    new_stage,
+                },
+                BattleEvent::SpeedBoostActivated {
+                    by_player: true,
+                    new_stage,
+                },
+            ]
+        )),
+        [
+            "Wild NINJASK's SPEED BOOST\nraised its SPEED!",
+            "TORCHIC's SPEED BOOST\nraised its SPEED!",
         ]
     );
 }
@@ -808,6 +905,23 @@ fn a_full_hp_water_absorb_activation_says_the_move_was_made_useless() {
 }
 
 #[test]
+fn a_color_change_type_change_names_the_holder_its_ability_and_the_new_type() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.opponent = battler("KECLEON", Some(AbilityId::COLOR_CHANGE));
+    let mut narrator = Narrator::new(scene);
+    let changed = BattleEvent::TypeChanged {
+        by_player: true,
+        move_id: MoveId::WATER_GUN,
+        new_type: assets::Type::Water,
+    };
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &[changed])),
+        ["Wild KECLEON's COLOR CHANGE\nmade it the WATER type!"]
+    );
+}
+
+#[test]
 fn an_unstaged_send_out_still_names_the_absorbing_ability() {
     let mut narrator = narrator(BattleKind::Trainer);
     let sent_out = BattleEvent::TrainerSentOut {
@@ -909,4 +1023,43 @@ fn a_boosted_award_reads_gained_a_boosted() {
             "TORCHIC gained a boosted\n69 EXP. Points!{CLEAR}",
         ]
     );
+}
+
+#[test]
+fn a_trace_copy_names_the_holder_the_source_and_the_copied_ability() {
+    for (kind, player_line, opponent_line) in [
+        (
+            BattleKind::Wild,
+            "TORCHIC TRACED\nWild RATTATA's LIMBER!",
+            "Wild RATTATA TRACED\nTORCHIC's LIMBER!",
+        ),
+        (
+            BattleKind::Trainer,
+            "TORCHIC TRACED\nFoe RATTATA's LIMBER!",
+            "Foe RATTATA TRACED\nTORCHIC's LIMBER!",
+        ),
+    ] {
+        for (by_player, expected) in [(true, player_line), (false, opponent_line)] {
+            let mut narrator = narrator(kind);
+            let event = BattleEvent::TracedAbility {
+                by_player,
+                ability: AbilityId::LIMBER,
+            };
+            assert_eq!(
+                lines(&narrate(&mut narrator, &[event])),
+                [expected],
+                "{kind:?}, by_player {by_player}"
+            );
+            let holder = if by_player {
+                &narrator.scene().player
+            } else {
+                &narrator.scene().opponent
+            };
+            assert_eq!(
+                holder.ability,
+                Some(AbilityId::LIMBER),
+                "later messages read the copied ability"
+            );
+        }
+    }
 }

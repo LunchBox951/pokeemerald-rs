@@ -2,7 +2,10 @@
 //! hold, with text printed into them through the engine [`Printer`].
 
 use assets::fonts::OwnedFontGlyphSheet;
-use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
+use assets::KeypadIconSheet;
+use engine::text::render::{
+    KeypadIconPlacement, Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent,
+};
 use engine::text::{char_to_byte, Token};
 
 use super::NamingSceneError;
@@ -17,6 +20,9 @@ pub(super) const TILE_BYTES: usize = TILE_PX * TILE_PX / 2;
 const GLYPH_FOREGROUND: u8 = 1;
 /// The glyph value that selects the shadow colour.
 const GLYPH_SHADOW: u8 = 2;
+/// The keypad-icon index that leaves the window pixel alone
+/// (`CopyGlyphToWindow`'s colour key, `window.c:398-411`).
+const ICON_TRANSPARENT: u8 = 0;
 
 /// The window palette indices a print draws with (`TextPrinterTemplate`'s
 /// `fgColor` and `shadowColor`). The background colour is the window's fill:
@@ -83,21 +89,52 @@ impl WindowBuffer {
         }
     }
 
+    /// Copies a keypad icon's pixels into the window (`DrawKeypadIcon`).
+    ///
+    /// Index 0 is the transparent colour key and every other index names a
+    /// window palette entry directly, so an icon ignores the print's text
+    /// colours.
+    fn blit_icon(&mut self, icon: KeypadIconPlacement, icons: &KeypadIconSheet) {
+        for dy in 0..u32::from(icon.height) {
+            for dx in 0..u32::from(icon.width) {
+                let Some(index) = icons.pixel(icon.id, dx, dy) else {
+                    continue;
+                };
+                if index == ICON_TRANSPARENT {
+                    continue;
+                }
+                let (Ok(dx), Ok(dy)) = (i32::try_from(dx), i32::try_from(dy)) else {
+                    continue;
+                };
+                self.set(icon.x.saturating_add(dx), icon.y.saturating_add(dy), index);
+            }
+        }
+    }
+
     /// Prints `tokens` at the window-local `origin` with `font`, revealing
     /// every glyph at once (`TEXT_SKIP_DRAW` prints). A `CLEAR` repaints the
-    /// span it erases with the window's fill.
+    /// span it erases with the window's fill, and a keypad icon draws from
+    /// `icons` where the printer places it; with no sheet an icon only
+    /// advances the cursor.
     pub(super) fn print(
         &mut self,
         font: &OwnedFontGlyphSheet,
         mut tokens: Vec<Token>,
         origin: (i32, i32),
         colors: TextColors,
+        icons: Option<&KeypadIconSheet>,
     ) {
-        tokens.push(Token::End);
+        if !matches!(tokens.last(), Some(Token::End)) {
+            tokens.push(Token::End);
+        }
         let ticks = tokens.len() + 1;
         let mut printer = Printer::new(tokens, font.sheet(), TextSpeed::Instant, origin);
         for _ in 0..ticks {
-            match printer.tick(PrinterInput::none()) {
+            let event = printer.tick(PrinterInput::none());
+            if let (Some(icons), Some(icon)) = (icons, printer.keypad_icon()) {
+                self.blit_icon(icon, icons);
+            }
+            match event {
                 TickEvent::Glyph(glyph) => self.blit(&glyph, colors),
                 TickEvent::Finished => break,
                 _ => {

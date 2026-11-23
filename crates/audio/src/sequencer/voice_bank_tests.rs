@@ -257,7 +257,7 @@ fn higher_priority_later_track_cgb_voice_survives_earlier_track_allocation_on_ex
     let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
         .as_ref()
         .expect("track 1's voice must still occupy Square1");
-    assert_eq!((square1.track(), square1.midi_key()), (1, 60));
+    assert_eq!((square1.track(), square1.midi_key()), (Some(1), 60));
     assert!(square1.is_stopping());
 }
 

@@ -90,6 +90,8 @@ mod tileset_anims;
 mod viewport;
 
 #[cfg(test)]
+mod retained_elevation_tests;
+#[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -480,6 +482,28 @@ impl OverworldScene {
         events: &assets::MapEvents,
         event_data: &EventData,
     ) -> Result<Self, OverworldSceneError> {
+        Self::from_pack_carrying(pack, header, layout, player, events, &[], event_data)
+    }
+
+    /// [`Self::from_pack`] for a room entered over a seamless connection, whose
+    /// sprite bindings also cover `carried`: the templates of the live objects
+    /// the crossing keeps, whose sheets the entered map's own events need not
+    /// name. Without them a carried object would stay live and solid but draw
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::from_pack`]; a carried object's missing sheet fails the load
+    /// like an entered event's would.
+    pub(crate) fn from_pack_carrying(
+        pack: &AssetPack,
+        header: &assets::MapHeader,
+        layout: &MapLayout,
+        player: PlayerCharacter,
+        events: &assets::MapEvents,
+        carried: &[&'static assets::ObjectEvent],
+        event_data: &EventData,
+    ) -> Result<Self, OverworldSceneError> {
         if layout.id != header.layout {
             return Err(OverworldSceneError::LayoutNotOfHeader {
                 map: header.id,
@@ -521,7 +545,8 @@ impl OverworldScene {
         let _ = BorderGrid::new(&border_bytes)?;
 
         let connections = resolve_connections(pack, header)?;
-        let sprites = sprites::SceneSprites::from_pack(pack, player, events, &grid, event_data)?;
+        let sprites =
+            sprites::SceneSprites::from_pack(pack, player, events, carried, &grid, event_data)?;
 
         Ok(Self {
             map_id: header.id,
@@ -615,10 +640,29 @@ impl OverworldScene {
         self.sprites.entries(player, event_data, &self.grass)
     }
 
+    /// Settles each object's elevations on the cell it stands on
+    /// (`ObjectEventUpdateElevation`, `event_object_movement.c:7759-7771`).
+    /// Call it after creating `objects` and after they move, before
+    /// [`Self::compose_live`], which only reads the settled elevations.
+    pub fn update_object_elevations(
+        &self,
+        objects: &mut engine::overworld::object_event::ObjectEventCollection,
+    ) {
+        self.sprites.update_object_elevations(objects);
+    }
+
+    /// [`Self::update_object_elevations`] for one object: the finish-step update
+    /// (`DoGroundEffects_OnFinishStep`, `event_object_movement.c:8119-8132`) a driver
+    /// that ends one walked tile and begins the next in a single frame runs between them.
+    pub fn update_object_elevation(&self, state: &mut engine::overworld::ObjectEventState) {
+        self.sprites.update_object_elevation(state);
+    }
+
     /// [`Self::compose`] with object-event sprites drawn from `objects`' live
-    /// tile, facing, and elevation instead of the scene's authored templates,
-    /// under `palette` as [`Self::compose_staged`] applies it.
-    /// `objects` must be seeded from this scene's map events.
+    /// tile, facing, and retained elevation instead of the scene's authored
+    /// templates, under `palette` as [`Self::compose_staged`] applies it.
+    /// `objects` must be seeded from this scene's map events and settled by
+    /// [`Self::update_object_elevations`].
     #[must_use]
     pub fn compose_live(
         &self,
@@ -934,11 +978,28 @@ pub(crate) fn load_room_from_source(
     player: PlayerCharacter,
     event_data: &EventData,
 ) -> Result<OverworldScene, OverworldSceneError> {
+    load_room_carrying_from_source(source, map_id, player, event_data, &[])
+}
+
+/// [`load_room_from_source`] for a room entered over a seamless connection,
+/// binding the sprites of the `carried` live objects too
+/// ([`OverworldScene::from_pack_carrying`]).
+///
+/// # Errors
+///
+/// See [`load_room`].
+pub(crate) fn load_room_carrying_from_source(
+    source: &crate::pack_source::PackSource,
+    map_id: assets::MapId,
+    player: PlayerCharacter,
+    event_data: &EventData,
+    carried: &[&'static assets::ObjectEvent],
+) -> Result<OverworldScene, OverworldSceneError> {
     let pack = source.load()?;
     let header = assets::MapHeaderTable::new().header(map_id)?;
     let layout = assets::LayoutTable::new().layout(header.layout)?;
     let events = oldale_town_npc_reposition::resolve_map_events(map_id, event_data)?;
-    OverworldScene::from_pack(&pack, header, layout, player, &events, event_data)
+    OverworldScene::from_pack_carrying(&pack, header, layout, player, &events, carried, event_data)
 }
 
 /// Returns the asset-pack name of `tileset_symbol`, which must be one of the

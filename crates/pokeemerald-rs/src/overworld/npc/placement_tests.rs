@@ -1,10 +1,9 @@
 use super::test_support::{
-    object, open_runtime, DEFAULT_ELEVATION, EXPECTED_WALK_FRAMES_PER_TILE,
-    HIDE_BRENDAN_BEDROOM_RIVAL, RAISED_ELEVATION, RAISED_PRIORITY,
+    admitted, admitted_with, object, open_runtime, DEFAULT_ELEVATION,
+    EXPECTED_WALK_FRAMES_PER_TILE, HIDE_BRENDAN_BEDROOM_RIVAL, RAISED_ELEVATION, RAISED_PRIORITY,
 };
 use super::*;
 use assets::MovementType;
-use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::Direction;
 
 #[test]
@@ -71,7 +70,7 @@ fn the_spawn_window_keeps_every_admitted_sprite_clear_of_the_oam_y_wrap() {
         MovementType::FaceDown,
     )]));
     let drawn = oam_entries(
-        &ObjectEventCollection::from_templates(here),
+        &admitted(here),
         &bindings,
         &PlayerState::new(player, DEFAULT_ELEVATION, Direction::South),
         &data,
@@ -160,12 +159,7 @@ fn oam_entries_skips_a_hidden_object_and_one_with_no_binding() {
     );
 
     let player = PlayerState::new((7, 2), DEFAULT_ELEVATION, Direction::North);
-    let entries = oam_entries(
-        &ObjectEventCollection::from_templates(events),
-        &bindings,
-        &player,
-        &data,
-    );
+    let entries = oam_entries(&admitted_with(events, &data), &bindings, &player, &data);
     assert!(
         entries.is_empty(),
         "the hidden rival and the unrecognized decoration must both be skipped"
@@ -185,12 +179,7 @@ fn oam_entries_draws_a_visible_recognized_object() {
     );
 
     let player = PlayerState::new((2, 6), DEFAULT_ELEVATION, Direction::South);
-    let entries = oam_entries(
-        &ObjectEventCollection::from_templates(events),
-        &bindings,
-        &player,
-        &data,
-    );
+    let entries = oam_entries(&admitted(events), &bindings, &player, &data);
     assert_eq!(entries.len(), 1);
     let entry = entries[0];
     assert_eq!(entry.palette_bank(), NpcPaletteTag::Npc4.bank());
@@ -220,13 +209,7 @@ fn oam_entries_take_their_priority_from_the_templates_elevation() {
     );
     let flat: &'static [ObjectEvent] = Box::leak(Box::new([flat]));
     assert_eq!(
-        oam_entries(
-            &ObjectEventCollection::from_templates(flat),
-            &bindings,
-            &player,
-            &data
-        )[0]
-        .priority(),
+        oam_entries(&admitted(flat), &bindings, &player, &data)[0].priority(),
         avatar::PLAYER_OBJ_PRIORITY,
     );
 
@@ -237,13 +220,7 @@ fn oam_entries_take_their_priority_from_the_templates_elevation() {
     };
     let raised: &'static [ObjectEvent] = Box::leak(Box::new([raised]));
     assert_eq!(
-        oam_entries(
-            &ObjectEventCollection::from_templates(raised),
-            &bindings,
-            &player,
-            &data
-        )[0]
-        .priority(),
+        oam_entries(&admitted(raised), &bindings, &player, &data)[0].priority(),
         RAISED_PRIORITY,
         "a raised object must not draw at the flat priority"
     );
@@ -285,7 +262,7 @@ fn a_distant_object_event_produces_no_oam_entry_instead_of_wrapping_onto_the_pla
 
     let north_edge = PlayerState::new(NORTH_EDGE, DEFAULT_ELEVATION, Direction::South);
     let entries = oam_entries(
-        &ObjectEventCollection::from_templates(events.object_events),
+        &admitted(events.object_events),
         &bindings,
         &north_edge,
         &data,
@@ -300,12 +277,7 @@ fn a_distant_object_event_produces_no_oam_entry_instead_of_wrapping_onto_the_pla
     );
 
     let near = PlayerState::new(NEAR_BOY, DEFAULT_ELEVATION, Direction::South);
-    let entries = oam_entries(
-        &ObjectEventCollection::from_templates(events.object_events),
-        &bindings,
-        &near,
-        &data,
-    );
+    let entries = oam_entries(&admitted(events.object_events), &bindings, &near, &data);
     assert_eq!(entries.len(), 1, "in view from five tiles away");
     let tile_distance = BOY_POSITION.1 - NEAR_BOY.1;
     let expected_y =
@@ -319,12 +291,7 @@ fn draw_templates(
     player: &PlayerState,
     data: &EventData,
 ) -> Vec<SheetSprite> {
-    oam_entries(
-        &ObjectEventCollection::from_templates(events),
-        bindings,
-        player,
-        data,
-    )
+    oam_entries(&admitted(events), bindings, player, data)
 }
 
 #[test]
