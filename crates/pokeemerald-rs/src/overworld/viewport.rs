@@ -281,15 +281,22 @@ fn write_quad(map: &mut [ScreenEntry], stride: usize, col: usize, row: usize, qu
 /// `step_progress / transit_duration` -- a dispatched slide crossing
 /// (eight frames) starts owing a full metatile and covers two pixels per
 /// frame, not one, unlike an ordinary step or a dispatched walk tile
-/// (sixteen frames, one pixel per frame).
+/// (sixteen frames, one pixel per frame). The spin mat's slow exit step
+/// covers a pixel on every other update instead.
 #[must_use]
 pub(super) fn camera_lag_px(player: &PlayerState) -> (i32, i32) {
     let Some(direction) = player.step_direction() else {
         return (0, 0);
     };
     let (dx, dy) = direction.delta();
-    let covered_px =
-        i32::from(player.step_progress()) * METATILE_PX / i32::from(player.transit_duration());
+    let covered_px = if player.transit_walk_slow() {
+        // `UpdateWalkSlowAnim` moves a pixel on every even `sTimer`, so `k`
+        // updates have covered `ceil(k / 2)` pixels
+        // (`event_object_movement.c:8328-8341`).
+        (i32::from(player.step_progress()) + 1) / 2
+    } else {
+        i32::from(player.step_progress()) * METATILE_PX / i32::from(player.transit_duration())
+    };
     let lag = METATILE_PX - covered_px;
     (dx * lag, dy * lag)
 }

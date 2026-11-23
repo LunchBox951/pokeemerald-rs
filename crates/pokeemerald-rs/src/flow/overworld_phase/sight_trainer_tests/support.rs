@@ -9,7 +9,7 @@ use engine::overworld::{ObjectEventState, PlayerState};
 use platform::ButtonState;
 
 use super::super::sight_trainer_approach::SightApproach;
-use super::super::{ActiveBattle, OverworldPhase};
+use super::super::{ActiveBattle, OverworldPhase, PartyReserves};
 
 /// `MAP_ROUTE103`, used throughout the sight-trainer test modules.
 pub(super) const ROUTE_103: MapId = MapId("MAP_ROUTE103");
@@ -26,10 +26,11 @@ pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 /// range 2.
 pub(super) const TRAINER_RHETT: u16 = 703;
 
-/// The trainer whose party Taillow knows Headbutt (`EFFECT_FLINCH_HIT`), which
-/// the battle crate does not execute: its construction is refused for a move,
-/// so tests use its id as the refused party.
-pub(super) const TRAINER_REFUSED_FOR_MOVE: u16 = 292;
+/// `TRAINER_THOMAS` (`include/constants/opponents.h`), whose level-45
+/// Zangoose knows Pursuit (`EFFECT_PURSUIT`), which the battle crate does not
+/// execute: its construction is refused for a move, so tests use its id as
+/// the refused party.
+pub(super) const TRAINER_REFUSED_FOR_MOVE: u16 = 256;
 
 /// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
 /// has no resolver, so `validate_player_move` refuses it ahead of any draw
@@ -176,6 +177,7 @@ pub(super) fn seed_battle(
     phase.active_battle = Some(ActiveBattle::SightTrainer {
         battle,
         trainer_id: assets::trainers::TrainerId(trainer_id),
+        reserves: PartyReserves::default(),
     });
 }
 
@@ -218,6 +220,17 @@ pub(super) fn rhetts_object_event() -> &'static assets::ObjectEvent {
 /// (`InitTrainerApproachTask`'s own `approachDistance - 1`), carrying a real
 /// stand-in battle (section docs).
 pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
+    seed_approach_for(phase, rhetts_object_event().local_id, None, walk_tiles);
+}
+
+/// [`seed_approach`] for the live entry `(carried_from, local_id)` names, so a
+/// test can approach a trainer a connection crossing carried into this map.
+pub(super) fn seed_approach_for(
+    phase: &mut OverworldPhase,
+    local_id: u8,
+    carried_from: Option<MapId>,
+    walk_tiles: u8,
+) {
     phase.rng = engine::rng::Rng::new(7);
     let battle = crate::flow::npc_trainer_battle::start_npc_trainer_battle(
         overwhelming_lead(),
@@ -227,11 +240,13 @@ pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
     .expect("the stand-in Route 103 rival must always construct");
     phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.sight_approach = Some(SightApproach::new(
-        rhetts_object_event().local_id,
+        local_id,
+        carried_from,
         walk_tiles,
         "Whoa!\nHow'd you get into a space this small?",
         battle,
         assets::trainers::TrainerId(TRAINER_RHETT),
+        PartyReserves::default(),
     ));
 }
 

@@ -67,10 +67,12 @@
 //!    (`pokeemerald/src/event_object_movement.c:1389-1397`) -- i.e. setting
 //!    the object's own hide flag, `FLAG_HIDE_ROUTE_103_RIVAL`. That one
 //!    line is [`advance_route103_rival_battle_frame`]'s job on
-//!    [`battle::BattleOutcome::PlayerWon`]: the object stops being spawned
-//!    at all from then on (`crate::overworld::npc`'s hide-flag gate, shared
-//!    with every other `FLAG_HIDE_*` object event), matching upstream's own
-//!    observable result without a `removeobject`-the-verb to reimplement.
+//!    [`battle::BattleOutcome::PlayerWon`], together with retiring the live
+//!    entry (`RemoveObjectEvent`'s `active = FALSE`, ported as
+//!    `ObjectEventCollection::remove_by_local_id`): the object leaves every
+//!    position query at once, and the set flag keeps the scheduler from
+//!    spawning it again (the hide-flag check at admission, shared with every
+//!    other `FLAG_HIDE_*` object event).
 //!    The other seven lines are **not** modelled: `VAR_BIRCH_LAB_STATE`,
 //!    `FLAG_DEFEATED_RIVAL_ROUTE103`, `VAR_OLDALE_RIVAL_STATE`, and
 //!    `FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_RIVAL`/`FLAG_HIDE_OLDALE_TOWN_RIVAL`
@@ -154,7 +156,7 @@ use engine::save::PlayerGender;
 use crate::flow::npc_trainer_battle;
 use crate::flow::route103_rival::{self, PlayerStarter, Rival};
 
-use super::{ActiveBattle, OverworldPhase};
+use super::{ActiveBattle, OverworldPhase, PartyReserves};
 
 /// `MAP_ROUTE103` -- the only map this trigger, and
 /// [`setup_rival_gfx_id_on_transition`], are wired to.
@@ -192,6 +194,10 @@ const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 /// `Route103_EventScript_RivalEnd`'s `removeobject` actually performs
 /// (module docs).
 const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
+
+/// `LOCALID_ROUTE103_RIVAL` (`data/maps/Route103/map.json`, `local_id` 2): the object
+/// `removeobject` retires.
+const RIVAL_LOCAL_ID: u8 = 2;
 
 /// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`): base of the
 /// per-trainer defeated-flag range `SetBattledTrainersFlags` writes
@@ -362,13 +368,31 @@ impl OverworldPhase {
             return;
         };
         let trainer = route103_rival::route103_rival_for(rival, starter);
-        match npc_trainer_battle::start_npc_trainer_battle(lead.clone(), trainer, &mut self.rng) {
+        // The saved party behind the lead goes in with it; the start consumes the copies, and
+        // the lent originals return through `file_trainer_party`. A healthy saved member that
+        // cannot join refuses the fight here, before any draw.
+        let (player_reserves, reserves) = match self.trainer_party_reserves(trainer) {
+            Ok(party) => party,
+            Err(error) => {
+                eprintln!("route 103 rival: can't start ({error})");
+                self.restore_lead_battler(lead);
+                return;
+            }
+        };
+        match npc_trainer_battle::start_npc_trainer_battle_with_reserves(
+            lead.clone(),
+            player_reserves,
+            trainer,
+            &mut self.rng,
+        ) {
             Ok(battle) => {
                 let battle = battle.with_player_obedience(self.player_obedience());
                 self.active_battle = Some(ActiveBattle::Rival {
                     battle,
                     trainer_id: trainer,
+                    reserves,
                 });
+                self.count_trainer_battle_start();
                 // Mirrors `begin_first_battle`'s own
                 // `RestartWildEncounterImmunitySteps` call
                 // (`CB2_StartFirstBattle`-equivalent reasoning): unobservable
@@ -397,20 +421,26 @@ impl OverworldPhase {
         &mut self,
         battle: battle::Battle,
         trainer_id: assets::trainers::TrainerId,
+        reserves: PartyReserves,
     ) -> Option<ActiveBattle> {
         self.take_field_lock();
         let mut slot = Some(battle);
-        let mut returned_lead = None;
-        let outcome = npc_trainer_battle::advance_npc_trainer_battle(
+        let end = npc_trainer_battle::advance_npc_trainer_party_battle(
             &mut slot,
-            &mut returned_lead,
             &mut self.save1.money,
             &mut self.rng,
         );
-        // Back with the owner before the flags, the white-out or any routing.
-        if let Some(lead) = returned_lead {
-            self.restore_lead_battler(lead);
-        }
+        let Some(end) = end else {
+            // Ongoing: the whole variant stays, party included.
+            return slot.map(|battle| ActiveBattle::Rival {
+                battle,
+                trainer_id,
+                reserves,
+            });
+        };
+        let outcome = end.outcome;
+        // Back with the owners before the flags, the white-out or any routing.
+        let filed = self.file_trainer_party(end, reserves);
         if let Some(outcome) = outcome {
             eprintln!("route 103 rival: ended -- {outcome:?}");
             self.rival_battle_outcome = Some(outcome);
@@ -421,6 +451,9 @@ impl OverworldPhase {
                          the rival may remain interactable"
                     );
                 }
+                // `removeobject` also deactivates the object, and the scheduler does not retire an
+                // admitted entry for its flag (`event_object_movement.c:1383-1397`).
+                self.object_events.remove_by_local_id(RIVAL_LOCAL_ID);
                 if let Err(error) = self
                     .save1
                     .event_data
@@ -432,20 +465,14 @@ impl OverworldPhase {
                     );
                 }
             }
-            // `CB2_EndTrainerBattle`'s `IsPlayerDefeated` branch
-            // (`src/battle_setup.c:1333-1338`) -> `CB2_WhiteOut` (issue
-            // #261, module docs' "The loss decision (issue #261: now the
-            // real one)"): heal, halve money, warp home -- the same shared
-            // `Self::white_out` the wild-battle driver calls.
-            if outcome == battle::BattleOutcome::PlayerLost {
-                self.white_out();
-            }
         }
-        if slot.is_none() {
-            self.reinit_field_tileset_animations();
-        }
-        // A failed turn ends the battle with no outcome; the whole variant
-        // goes with it either way.
-        slot.map(|battle| ActiveBattle::Rival { battle, trainer_id })
+        // `CB2_EndTrainerBattle`'s `IsPlayerDefeated` branch
+        // (`src/battle_setup.c:1333-1338`) -> `CB2_WhiteOut`: heal, halve money, warp
+        // home, through the `Self::white_out` the wild-battle driver also calls, once
+        // the whole party is exhausted (`settle_trainer_party`).
+        self.settle_trainer_party(outcome, filed);
+        self.reinit_field_tileset_animations();
+        // The battle slot emptied: the whole variant goes with it.
+        None
     }
 }
