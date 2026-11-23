@@ -24,9 +24,10 @@
 //! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
 //! [`battle_pike_wild_mons`]), the Battle Pyramid floor-item and Pickup
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
-//! lists (see [`trainer_hill_prizes`]), and the slot-machine reel strips
-//! and starting positions (see [`slot_machine_reels`]); more data follows as
-//! the crate fills out.
+//! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
+//! starting positions (see [`slot_machine_reels`]), and the region-map
+//! section grid (see [`region_map_layout`]); more data follows as the crate
+//! fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
 //! audio-extraction backends emit into (S-4) live in [`audio`].
@@ -81,6 +82,7 @@ pub mod pickup;
 pub mod pokeblock_flavors;
 pub mod pokedex;
 pub mod pokenav_city_maps;
+pub mod region_map_layout;
 pub mod ribbon_descriptions;
 pub mod script_refs;
 pub mod slot_machine_reels;
@@ -158,6 +160,10 @@ pub use new_game_flags::{
     TRUCK_INTRO_VARS_MALE, WALL_CLOCK_VIGOROTH_HIDE_FLAGS,
 };
 pub use pokenav_city_maps::{CityMapCatalog, CityMapEntry, CityMapId, CITY_MAP_COUNT};
+pub use region_map_layout::{
+    map_section_at, map_section_layout, RegionMapLayoutError, MAPSEC_NONE, REGION_MAP_HEIGHT,
+    REGION_MAP_WIDTH,
+};
 pub use script_refs::{MapScriptTableRef, ScriptRef};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
