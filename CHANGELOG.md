@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.143.0] - 2026-11-23
+
+- General improvements in preparation for the Route 103 trainers' defeat lines. The asset pack format changed, so the game asks you to import your ROM again once.
+
 ## [0.0.142.0] - 2026-11-23
 
 - Townspeople who wander or patrol in the original game now move around their areas instead of standing still.
@@ -633,6 +637,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
+[0.0.143.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/554b8126a0a9db6ac4cd4c7c1b2f97e34a1d126c...dev
 [0.0.142.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/b3c32a4a9d54b8fb9a5f5987ce0836e113029d55...dev
 [0.0.141.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ca9e7b40b003094ffe20f40b304439c4eb92634a...dev
 [0.0.140.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/05a2c78f28fabc7418016221f93f70db6a1c01d8...dev

@@ -22,8 +22,8 @@ use assets::pack::{
 use pack_format::PackWriter;
 
 use super::text_source::{
-    ident, is_punct, parse_definitions, skip_brackets, string_args, tokenize, Charmap, Fault, Tok,
-    Token,
+    ident, is_punct, parse_assembly_strings, parse_definitions, skip_brackets, string_args,
+    tokenize, Charmap, Fault, Tok, Token,
 };
 use super::{read_text, ExtractError};
 
@@ -109,7 +109,8 @@ fn build(src: &Sources<'_>) -> Located<Vec<u8>> {
     let definitions = parse_definitions(&tokens).map_err(at(File::Message))?;
     let rows = parse_table_rows(&tokens, &defines).map_err(at(File::Message))?;
     let type_rows = parse_type_rows(&tokens, &charmap).map_err(at(File::Message))?;
-    let external = parse_external(src.pc_transfer, &charmap).map_err(at(File::PcTransfer))?;
+    let external = parse_assembly_strings(src.pc_transfer, &charmap, &EXTERNAL_LABELS)
+        .map_err(at(File::PcTransfer))?;
 
     let convert = |symbol: &str| -> Located<Vec<u8>> {
         if let Some((body, line)) = definitions.get(symbol) {
@@ -341,48 +342,6 @@ fn parse_type_rows(tokens: &[Token], charmap: &Charmap) -> Result<HashMap<String
         }
     }
     Ok(rows)
-}
-
-/// The four whitelisted assembly labels: `.string` pieces concatenated up to the
-/// next label. The explicit `$` supplies the terminator.
-fn parse_external(text: &str, charmap: &Charmap) -> Result<HashMap<String, Vec<u8>>, Fault> {
-    let mut out: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut current: Option<&str> = None;
-    for (index, raw) in text.lines().enumerate() {
-        let line = index + 1;
-        let trimmed = raw.trim();
-        if let Some(label) = trimmed
-            .strip_suffix("::")
-            .or_else(|| trimmed.strip_suffix(':'))
-        {
-            current = EXTERNAL_LABELS.iter().copied().find(|l| *l == label);
-            if let Some(label) = current {
-                if out.insert(label.to_owned(), Vec::new()).is_some() {
-                    return Err(Fault::new(line, format!("`{label}` is defined twice")));
-                }
-            }
-            continue;
-        }
-        let Some(label) = current else { continue };
-        if trimmed.is_empty() || trimmed.starts_with('@') {
-            continue;
-        }
-        let body = trimmed
-            .strip_prefix(".string")
-            .and_then(|rest| rest.trim().strip_prefix('"'))
-            .and_then(|rest| rest.strip_suffix('"'))
-            .ok_or_else(|| Fault::new(line, format!("unsupported line in `{label}`")))?;
-        let bytes = charmap.convert(body, line)?;
-        out.get_mut(label)
-            .expect("label was inserted when it was opened")
-            .extend(bytes);
-    }
-    for label in EXTERNAL_LABELS {
-        if !out.contains_key(label) {
-            return Err(Fault::new(0, format!("`{label}` is not defined")));
-        }
-    }
-    Ok(out)
 }
 
 #[cfg(test)]

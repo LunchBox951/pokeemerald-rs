@@ -201,9 +201,11 @@ pub use trainer_hill_prizes::{
     prize_item, prize_list, PrizeListError, PRIZE_LISTS_PER_SET, PRIZE_LIST_LEN, PRIZE_SET_COUNT,
 };
 pub use trainers::{
-    AiFlags, EncounterMusic, TrainerClass, TrainerData, TrainerId, TrainerMonItemCustomMoves,
+    AiFlags, EncounterMusic, TrainerClass, TrainerClassNameTable, TrainerData,
+    TrainerDefeatSpeechContext, TrainerDefeatSpeechTable, TrainerId, TrainerMonItemCustomMoves,
     TrainerMonItemDefaultMoves, TrainerMonNoItemCustomMoves, TrainerMonNoItemDefaultMoves,
     TrainerParty, TrainerPicId, TrainerTable, MAX_TRAINER_ITEMS, TRAINERS_COUNT,
+    TRAINER_CLASS_NAME_COUNT, TRAINER_CLASS_NAME_ROW_BYTES, TRAINER_DEFEAT_SPEECH_COUNT,
 };
 pub use type_chart::{Effectiveness, Type, TypeChart};
 pub use wild_encounters::{
