@@ -138,6 +138,57 @@ pub(super) fn scene_scratch_pack_path() -> std::path::PathBuf {
 }
 
 pub(crate) use crate::pack_test_support::write_scratch_exclusive;
+use crate::pack_test_support::ScratchClaim;
+
+/// Claims `path`, writes `bytes`, loads the pack and hands it to `use_pack`.
+/// The file is removed afterwards only while `path` still names the claimed
+/// file.
+pub(crate) fn with_scratch_pack<R>(
+    path: std::path::PathBuf,
+    bytes: impl AsRef<[u8]>,
+    use_pack: impl FnOnce(AssetPack) -> R,
+) -> R {
+    let claim = ScratchClaim::claim_with(path, bytes);
+    use_pack(AssetPack::load(claim.path()).unwrap())
+}
+
+#[cfg(all(test, unix))]
+mod scratch_pack_cleanup_tests {
+    use super::*;
+
+    fn cleanup_path(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "pokeemerald-rs-scratch-cleanup-{tag}-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        ))
+    }
+
+    #[test]
+    fn with_scratch_pack_removes_the_pack_it_claimed() {
+        let path = cleanup_path("claimed");
+        with_scratch_pack(path.clone(), write_synthetic_pack(Vec::new()), |_| {});
+        assert!(!path.exists(), "the claimed scratch pack was left behind");
+    }
+
+    #[test]
+    fn with_scratch_pack_leaves_a_replacement_alone() {
+        let path = cleanup_path("replaced");
+        let moved = cleanup_path("moved");
+        with_scratch_pack(path.clone(), write_synthetic_pack(Vec::new()), |_| {
+            std::fs::rename(&path, &moved).unwrap();
+            std::fs::write(&path, b"replacement").unwrap();
+        });
+        let survivor = std::fs::read(&path);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&moved);
+        assert_eq!(
+            survivor.ok().as_deref(),
+            Some(&b"replacement"[..]),
+            "cleanup deleted a replacement planted at the scratch path"
+        );
+    }
+}
 
 /// Plants a symlink at `path` pointing at a fresh victim file holding
 /// `sentinel`, runs `write`, and asserts the writer refused (panicked) and
@@ -811,9 +862,19 @@ pub(super) fn synthetic_scene_result_with_connections_and_events(
 ) -> Result<super::OverworldScene, OverworldSceneError> {
     // pid + thread id keep concurrently-running tests' scratch packs from
     // colliding on the same path.
-    let path = scene_scratch_pack_path();
-    write_scratch_exclusive(&path, pack_bytes);
-    let pack = AssetPack::load(&path).unwrap();
+    with_scratch_pack(scene_scratch_pack_path(), pack_bytes, |pack| {
+        scene_from_pack(&pack, tileset_symbol, width, height, connections, events)
+    })
+}
+
+fn scene_from_pack(
+    pack: &AssetPack,
+    tileset_symbol: &'static str,
+    width: u16,
+    height: u16,
+    connections: &'static [assets::MapConnection],
+    events: &'static assets::MapEvents,
+) -> Result<super::OverworldScene, OverworldSceneError> {
     let layout = MapLayout {
         id: LayoutId("LAYOUT_MAP_TEST"),
         name: "MapTest",
@@ -841,16 +902,14 @@ pub(super) fn synthetic_scene_result_with_connections_and_events(
         map_scripts: None,
         connections,
     };
-    let scene = super::OverworldScene::from_pack(
-        &pack,
+    super::OverworldScene::from_pack(
+        pack,
         &header,
         &layout,
         super::PlayerCharacter::Brendan,
         events,
         &engine::event_data::EventData::new(),
-    );
-    let _ = std::fs::remove_file(path);
-    scene
+    )
 }
 
 /// Writes a synthetic pack at `path` that loads the *real* bundled
