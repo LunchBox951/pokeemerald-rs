@@ -82,6 +82,10 @@ pub use keypad_icon::{keypad_icon_size, KeypadIconPlacement};
 /// (`TextPrinterWaitAutoMode`, `pokeemerald/src/text.c:850-863`).
 const AUTO_SCROLL_WAIT_CALLS: u8 = 50;
 
+/// Reveal-delay reload of a non-recorded auto-scroll printer
+/// (`pokeemerald/src/text.c:958-959`).
+const AUTO_SCROLL_REVEAL_DELAY_FRAMES: u8 = 3;
+
 const EXTRA_SYMBOL_PAGE_START: u16 = 0x100;
 
 /// Returns the vertical cursor advance for a newline in `font`.
@@ -526,6 +530,9 @@ impl<S: GlyphSource> Printer<S> {
     /// do. Upstream draws no prompt arrow in this mode (`text.c:792`,
     /// `:868-871`); a consumer that draws one checks [`Self::is_auto_scroll`].
     ///
+    /// A speed that delays also reloads three frames per token instead of its
+    /// own (`text.c:958-961`); Fast and Instant stay undelayed.
+    ///
     /// Select the mode before the first tick; it survives [`Self::restart`].
     #[must_use]
     pub const fn with_auto_scroll(mut self) -> Self {
@@ -733,7 +740,7 @@ impl<S: GlyphSource> Printer<S> {
             if self.consume_reveal_delay_frame(input) {
                 return TickEvent::Idle;
             }
-            self.reveal_delay_frames_remaining = self.speed.wait_frames();
+            self.reveal_delay_frames_remaining = self.reveal_delay_reload();
 
             let Some(token) = self.tokens.get(self.next_token_index).cloned() else {
                 self.state = PrinterState::Finished;
@@ -839,6 +846,17 @@ impl<S: GlyphSource> Printer<S> {
                 self.erase_forward(gap);
             }
             return TickEvent::Glyph(Box::new(placement));
+        }
+    }
+
+    /// Auto-scroll overrides the speed's reload, but a speed with no delay
+    /// stays undelayed (`text.c:947`).
+    const fn reveal_delay_reload(&self) -> u8 {
+        let own = self.speed.wait_frames();
+        if own != 0 && self.is_auto_scroll() {
+            AUTO_SCROLL_REVEAL_DELAY_FRAMES
+        } else {
+            own
         }
     }
 
