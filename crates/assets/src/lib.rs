@@ -10,8 +10,8 @@
 //! egg-move lists (see [`egg_moves`]), the enemy battler elevation table (see
 //! [`enemy_elevation`]), the Battle Arena per-move mind ratings (see
 //! [`arena_mind_ratings`]), the species/move/ability display text
-//! (see [`species_names`], [`move_names`], [`abilities`]), the Trainer Easy
-//! Chat vocabulary group (see [`easy_chat`]), the experience
+//! (see [`species_names`], [`move_names`], [`abilities`]), the Trainer and
+//! Greetings Easy Chat vocabulary groups (see [`easy_chat`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
 //! [`wild_encounters`]), the trainer roster and parties (see [`trainers`]),
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
@@ -24,10 +24,9 @@
 //! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
 //! [`battle_pike_wild_mons`]), the Battle Pyramid floor-item and Pickup
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
-//! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
-//! starting positions (see [`slot_machine_reels`]), and the Easy Chat
-//! Greetings word group (see [`easy_chat_greetings`]); more
-//! data follows as the crate fills out.
+//! lists (see [`trainer_hill_prizes`]), and the slot-machine reel strips
+//! and starting positions (see [`slot_machine_reels`]); more data follows as
+//! the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
 //! audio-extraction backends emit into (S-4) live in [`audio`].
@@ -59,7 +58,6 @@ pub mod battle_pyramid_items;
 pub mod bundled_overworld;
 pub mod decorations;
 pub mod easy_chat;
-pub mod easy_chat_greetings;
 pub mod egg_moves;
 pub mod enemy_elevation;
 pub mod error;
@@ -122,7 +120,8 @@ pub use battle_pyramid_items::{
     PYRAMID_ROUNDS,
 };
 pub use easy_chat::{
-    EasyChatError, TrainerGroup, TrainerWord, TrainerWordIndex, TRAINER_WORD_COUNT,
+    EasyChatError, GreetingsGroup, GreetingsWord, GreetingsWordIndex, TrainerGroup, TrainerWord,
+    TrainerWordIndex, GREETINGS_WORD_COUNT, TRAINER_WORD_COUNT,
 };
 pub use egg_moves::{
     EggMoveList, EggMoveTable, EGG_MOVES_SPECIES_OFFSET, EGG_MOVES_TERMINATOR,

@@ -21467,8 +21467,8 @@
     "include/constants/easy_chat.h": {
       "artifacts": {
         "EC_WORD_GREETINGS": {
-          "reason": "The EC_WORD_* indices of EC_GROUP_GREETINGS (include/constants/easy_chat.h:260-302, EC_WORD_THANKS 0 through EC_WORD_COUNT_ON 41) are the associated constants of assets::easy_chat_greetings::GreetingsWordIndex. The group id and every other group's words are not modelled.",
-          "rust_target": "crates/assets/src/easy_chat_greetings.rs",
+          "reason": "The EC_WORD_* indices of EC_GROUP_GREETINGS (include/constants/easy_chat.h:260-302, EC_WORD_THANKS 0 through EC_WORD_COUNT_ON 41) are the associated constants of assets::easy_chat::GreetingsWordIndex. The group id and every other group's words are not modelled.",
+          "rust_target": "crates/assets/src/easy_chat.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -21886,8 +21886,8 @@
     "include/easy_chat.h": {
       "artifacts": {
         "EasyChatWordInfo": {
-          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91) is modelled only as the Greetings row shape: assets::easy_chat_greetings::GreetingsWord carries text (a charmap-notation str), alphabeticalOrder and enabled (a bool), with alphabeticalOrder typed as a GreetingsWordIndex whose domain is 0..41. The struct is shared by every Easy Chat group (easy_chat_group_status.h uses alphabetical indices past 41), so the general row type and index domain, and every other group's use of it, are not modelled.",
-          "rust_target": "crates/assets/src/easy_chat_greetings.rs",
+          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91) is modelled only as per-group row shapes: assets::easy_chat::GreetingsWord and assets::easy_chat::TrainerWord each carry text (a charmap-notation str), alphabeticalOrder and enabled (a bool), with alphabeticalOrder typed as that group's own index (a GreetingsWordIndex whose domain is 0..41, a TrainerWordIndex whose domain is 0..26). The struct is shared by every Easy Chat group (easy_chat_group_status.h uses alphabetical indices past 41), so the general row type and index domain, and every other group's use of it, are not modelled.",
+          "rust_target": "crates/assets/src/easy_chat.rs",
           "spec": "S-4",
           "status": "stubbed"
         }
@@ -30179,8 +30179,8 @@
     "src/data/easy_chat/easy_chat_group_greetings.h": {
       "category": "code.header",
       "kind": "file",
-      "reason": "gEasyChatGroup_Greetings (src/data/easy_chat/easy_chat_group_greetings.h:44-297) and the 42 gEasyChatWord_* texts (lines 1-42) extracted to assets::easy_chat_greetings::GreetingsGroup keyed by GreetingsWordIndex (EC_WORD_THANKS..EC_WORD_COUNT_ON, include/constants/easy_chat.h:261-302): text, alphabeticalOrder permutation and the enabled flag per row; all 42 words are enabled upstream. Other groups, easy_chat_groups.h, unlock state and the editor UI are not modelled.",
-      "rust_target": "crates/assets/src/easy_chat_greetings.rs",
+      "reason": "gEasyChatGroup_Greetings (src/data/easy_chat/easy_chat_group_greetings.h:44-297) and the 42 gEasyChatWord_* texts (lines 1-42) extracted to assets::easy_chat::GreetingsGroup keyed by GreetingsWordIndex (EC_WORD_THANKS..EC_WORD_COUNT_ON, include/constants/easy_chat.h:261-302): text, alphabeticalOrder permutation and the enabled flag per row; all 42 words are enabled upstream. Other groups, easy_chat_groups.h, unlock state and the editor UI are not modelled.",
+      "rust_target": "crates/assets/src/easy_chat.rs",
       "spec": "S-4",
       "status": "ported"
     },
