@@ -44,8 +44,12 @@ const FLAG_SYS_USE_STRENGTH: u16 = SYSTEM_FLAGS + 0x29;
 const FLAG_SYS_CYCLING_ROAD: u16 = SYSTEM_FLAGS + 0x2B;
 const FLAG_SYS_SAFARI_MODE: u16 = SYSTEM_FLAGS + 0x2C;
 const FLAG_SYS_CRUISE_MODE: u16 = SYSTEM_FLAGS + 0x2D;
-const FLAG_SYS_ENC_UP_ITEM: u16 = SYSTEM_FLAGS + 0x4D;
-const FLAG_SYS_ENC_DOWN_ITEM: u16 = SYSTEM_FLAGS + 0x4E;
+/// Set by the White Flute (`ItemUseOutOfBattle_BlackWhiteFlute`, `src/item_use.c:877-890`) while
+/// its wild encounter rate increase is active.
+pub const FLAG_SYS_ENC_UP_ITEM: u16 = SYSTEM_FLAGS + 0x4D;
+/// Set by the Black Flute (`src/item_use.c:877-890`) while its wild encounter rate decrease is
+/// active.
+pub const FLAG_SYS_ENC_DOWN_ITEM: u16 = SYSTEM_FLAGS + 0x4E;
 const FLAG_SYS_CTRL_OBJ_DELETE: u16 = SYSTEM_FLAGS + 0x61;
 
 /// First ordinary variable id.
@@ -69,6 +73,9 @@ pub const SPECIAL_VARS_END: u16 = 0x8015;
 /// Number of session-only variable ids.
 pub const NUM_SPECIAL_VARS: u16 = SPECIAL_VARS_END - SPECIAL_VARS_START + 1;
 
+/// Remaining Repel steps (`VAR_REPEL_STEP_COUNT`, `include/constants/vars.h:51`). The
+/// ordinary variable is saved with the rest of `SaveBlock1`; nonzero means a Repel is active.
+pub const VAR_REPEL_STEP_COUNT: u16 = 0x4021;
 const VAR_ABNORMAL_WEATHER_LOCATION: u16 = 0x4037;
 const VAR_SHOULD_END_ABNORMAL_WEATHER: u16 = 0x4039;
 const ABNORMAL_WEATHER_NONE: u16 = 0;
@@ -321,6 +328,17 @@ mod tests {
         assert_eq!(SPECIAL_VARS_START, 0x8000);
         assert_eq!(SPECIAL_VARS_END, 0x8015);
         assert_eq!(NUM_SPECIAL_VARS, 22);
+    }
+
+    #[test]
+    fn repel_step_count_is_an_ordinary_variable_that_survives_temporary_clearing() {
+        assert_eq!(VAR_REPEL_STEP_COUNT, 0x4021);
+        assert!((VARS_START..=VARS_END).contains(&VAR_REPEL_STEP_COUNT));
+        const { assert!(VAR_REPEL_STEP_COUNT > TEMP_VARS_END) };
+        let mut data = EventData::default();
+        data.var_set(VAR_REPEL_STEP_COUNT, 37).unwrap();
+        data.clear_temp_field_event_data();
+        assert_eq!(data.var_get(VAR_REPEL_STEP_COUNT), Ok(37));
     }
 
     #[test]

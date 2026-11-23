@@ -10,15 +10,22 @@
 //! locates the table, whose extent then selects the real copy of each
 //! ambiguous bank. A bank the table does not reference is refused, as the
 //! importer rejects roots outside the table.
+//!
+//! The tall-grass field-effect sheet is located like any other sheet. Its
+//! palette, `gFieldEffectObjectPalette1`, is bound through a field-effect
+//! template and is not in that table, so it is located separately and must
+//! match exactly one place in the ROM.
 
 use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
 use super::locate::{only_one_matching, slice_at_addr, to_offset, u16_at_addr, u32_at_addr};
-use super::plan::{PalettePlan, ReportLine, Resolution, SpritePlan};
+use super::palettes::locate_unique;
+use super::plan::{PalettePlan, ReportLine, Resolution, SpritePlan, SymbolExpectation};
 use super::tilesets::len32;
 use super::Context;
+use crate::extract::scope::{GENERAL_1_PALETTE_ID, TALL_GRASS_IMAGE_ID};
 
 /// One `struct SpritePalette`: a pointer, a `u16` tag, and two bytes of
 /// padding.
@@ -53,6 +60,7 @@ pub fn locate(
         .ids_with_prefix("sprite/")
         .into_iter()
         .filter(|id| !id.starts_with("sprite/palette/"))
+        .chain([TALL_GRASS_IMAGE_ID.to_owned()])
         .map(ImageQuery::raw)
         .collect();
     let sheets = locate_images(ctx, &queries, report)?;
@@ -128,10 +136,18 @@ pub fn locate(
         });
     }
 
+    let field_effect_palettes = locate_unique(
+        ctx,
+        &[GENERAL_1_PALETTE_ID.to_owned()],
+        &|_| SymbolExpectation::Exact("gFieldEffectObjectPalette1".to_owned()),
+        report,
+    )?;
+
     Ok(SpritePlan {
         palette_table: table.start,
         sheets,
         palettes,
+        field_effect_palettes,
     })
 }
 
@@ -225,8 +241,16 @@ mod tests {
     use rom_import::fixture::RomFixture;
 
     use super::{locate, PaletteTable, RECORD_BYTES};
+    use crate::extract::scope::{GENERAL_1_PALETTE_ID, TALL_GRASS_IMAGE_ID};
     use crate::gen_rom_profile::error::GenRomProfileError;
-    use crate::gen_rom_profile::tests::with_context;
+    use crate::gen_rom_profile::plan::{Resolution, SymbolExpectation};
+    use crate::gen_rom_profile::tests::{cross_check_ld_map, distinctive_tiles, with_context};
+
+    /// Where the fixture plants the tall-grass sheet and its palette.
+    const GRASS_SHEET_AT: usize = 0x2_0000;
+    const GRASS_PALETTE_AT: usize = 0x2_1000;
+    /// The tall-grass sheet is five frames of 2x2 tiles.
+    const GRASS_TILES: usize = 20;
 
     const SEED: &str = "sprite/palette/a_seed";
     const TARGET: &str = "sprite/palette/z_target";
@@ -271,6 +295,16 @@ mod tests {
     /// palettes, and a ROM planting the table `records` and the palettes at
     /// `target_copies`.
     fn fixture(records: &[Vec<u8>], target_copies: &[usize]) -> (Vec<u8>, Vec<PackEntry>) {
+        fixture_with_grass_palette(records, target_copies, &[GRASS_PALETTE_AT])
+    }
+
+    /// [`fixture`] with the field-effect palette planted at each of
+    /// `grass_palette_copies`.
+    fn fixture_with_grass_palette(
+        records: &[Vec<u8>],
+        target_copies: &[usize],
+        grass_palette_copies: &[usize],
+    ) -> (Vec<u8>, Vec<PackEntry>) {
         let seed = colors(0x0100);
         let target = colors(0x0200);
         let sheet_ids = crate::extract::scope::sprite_sheet_ids();
@@ -281,6 +315,21 @@ mod tests {
                 image_entry_from_tiles(id.clone(), &sheet_art(index), 4, 8, 8, None).expect("sheet")
             })
             .collect();
+        let grass_tiles = distinctive_tiles(GRASS_TILES);
+        entries.push(
+            image_entry_from_tiles(
+                TALL_GRASS_IMAGE_ID.into(),
+                &grass_tiles,
+                4,
+                80,
+                16,
+                Some((2, 2)),
+            )
+            .expect("tall grass"),
+        );
+        let grass_palette = colors(0x0300);
+        entries
+            .push(palette_entry(GENERAL_1_PALETTE_ID.into(), &grass_palette).expect("general 1"));
         entries.push(palette_entry(SEED.into(), &seed).expect("seed"));
         entries.push(palette_entry(TARGET.into(), &target).expect("target"));
         // Fixed banks alias the planted seed; these tests vary only TARGET.
@@ -297,6 +346,10 @@ mod tests {
         }
         for &at in target_copies {
             rom = rom.write(at, &bytes(&target));
+        }
+        rom = rom.write(GRASS_SHEET_AT, &grass_tiles);
+        for &at in grass_palette_copies {
+            rom = rom.write(at, &bytes(&grass_palette));
         }
         let table: Vec<u8> = records.concat();
         (rom.write(0x4000, &table).finish(), entries)
@@ -508,5 +561,105 @@ mod tests {
                 assert!(named.contains(&addr), "{} not named", palette.id);
             }
         });
+    }
+
+    const GRASS_RECORDS: [(u32, u16); 2] = [(0x0800_2000, 0x1100), (0x0800_3000, 0x1101)];
+
+    /// The two live records, then the terminator the importer stops at.
+    fn grass_records() -> Vec<Vec<u8>> {
+        GRASS_RECORDS
+            .iter()
+            .map(|&(data, tag)| record(data, tag))
+            .chain([terminator()])
+            .collect()
+    }
+
+    #[test]
+    fn the_tall_grass_sheet_and_palette_are_located_outside_the_object_event_table() {
+        let (rom, entries) = fixture(&grass_records(), &[0x3000]);
+        with_context("sprite-tall-grass", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            let plan = locate(ctx, &mut report).expect("located");
+
+            let sheet = plan
+                .sheets
+                .iter()
+                .find(|sheet| sheet.id == TALL_GRASS_IMAGE_ID)
+                .expect("the tall-grass sheet");
+            assert_eq!(sheet.addr, 0x0802_0000);
+            assert_eq!(
+                (sheet.width, sheet.height, sheet.pack_bit_depth),
+                (80, 16, 4)
+            );
+            assert_eq!((sheet.metatile_width, sheet.metatile_height), (2, 2));
+            assert_eq!(sheet.tile_count, 20);
+
+            assert_eq!(plan.field_effect_palettes.len(), 1);
+            let palette = &plan.field_effect_palettes[0];
+            assert_eq!(palette.id, GENERAL_1_PALETTE_ID);
+            assert_eq!(palette.addr, 0x0802_1000);
+            assert_eq!(palette.color_count, 16);
+            assert!(
+                plan.palettes.iter().all(|p| p.id != GENERAL_1_PALETTE_ID),
+                "the object-event palette table does not name it"
+            );
+
+            let line = report
+                .iter()
+                .find(|line| line.id == GENERAL_1_PALETTE_ID)
+                .expect("a report line");
+            assert_eq!(line.resolution, Resolution::UniqueSignature);
+            assert_eq!(
+                line.symbol,
+                SymbolExpectation::Exact("gFieldEffectObjectPalette1".to_owned())
+            );
+        });
+    }
+
+    #[test]
+    fn a_tall_grass_palette_stored_twice_is_ambiguous() {
+        let (rom, entries) = fixture_with_grass_palette(
+            &grass_records(),
+            &[0x3000],
+            &[GRASS_PALETTE_AT, GRASS_PALETTE_AT + 0x1000],
+        );
+        with_context("sprite-tall-grass-twice", &rom, entries, |ctx| {
+            let err = locate(ctx, &mut Vec::new()).unwrap_err();
+            assert!(
+                matches!(&err, GenRomProfileError::Ambiguous { id, .. } if id == GENERAL_1_PALETTE_ID),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_tall_grass_palette_absent_from_the_rom_is_not_found() {
+        let (rom, entries) = fixture_with_grass_palette(&grass_records(), &[0x3000], &[]);
+        with_context("sprite-tall-grass-absent", &rom, entries, |ctx| {
+            let err = locate(ctx, &mut Vec::new()).unwrap_err();
+            assert!(
+                matches!(&err, GenRomProfileError::NotFound { id } if id == GENERAL_1_PALETTE_ID),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn the_tall_grass_roots_need_their_global_map_symbols() {
+        for id in [TALL_GRASS_IMAGE_ID, GENERAL_1_PALETTE_ID] {
+            let (rom, entries) = fixture(&grass_records(), &[0x3000]);
+            with_context("sprite-tall-grass-map", &rom, entries, |ctx| {
+                let mut report = Vec::new();
+                locate(ctx, &mut report).expect("located");
+                cross_check_ld_map("sprite-tall-grass-map", &mut report, &[])
+                    .expect("a correct map names both roots");
+                let err = cross_check_ld_map("sprite-tall-grass-map", &mut report, &[id])
+                    .expect_err("a root missing from the map is a mismatch");
+                assert!(
+                    matches!(&err, GenRomProfileError::MapMismatch { id: bad, .. } if bad == id),
+                    "{id}: {err}"
+                );
+            });
+        }
     }
 }

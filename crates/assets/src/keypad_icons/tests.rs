@@ -132,3 +132,12 @@ fn the_real_pack_draws_every_icon_inside_its_rectangle() {
         assert!(painted > 0, "icon {id} is blank");
     }
 }
+
+#[test]
+fn a_huge_offset_leaves_the_sheet_instead_of_wrapping() {
+    let sheet = sheet_with(&[(0, 0, 5)]);
+    assert_eq!(sheet.pixel(1, u32::MAX - 7, 0), None);
+    assert_eq!(sheet.pixel(10, 0, u32::MAX - 15), None);
+    assert_eq!(sheet.pixel(1, u32::MAX, 0), None);
+    assert_eq!(sheet.pixel(0, 0, u32::MAX), None);
+}
