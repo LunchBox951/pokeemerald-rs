@@ -372,12 +372,18 @@ fn stat_labels_are_admitted_only_where_the_other_scripts_are_ported() {
             Err(BattleError::UnscoreableMoveEffect(move_id))
         };
         assert_eq!(setup, expected_setup, "{move_id:?} setup");
-        let expected_viability =
-            if has_dedicated_stat_drop_handler || move_id == MoveId::DEFENSE_CURL {
-                Ok(())
-            } else {
-                Err(BattleError::UnscoreableMoveEffect(move_id))
-            };
+        let has_dedicated_evasion_drop_handler = matches!(
+            dex.move_data(move_id).unwrap().effect,
+            MoveEffect::EVASION_DOWN | MoveEffect::EVASION_DOWN_2
+        );
+        let expected_viability = if has_dedicated_stat_drop_handler
+            || has_dedicated_evasion_drop_handler
+            || move_id == MoveId::DEFENSE_CURL
+        {
+            Ok(())
+        } else {
+            Err(BattleError::UnscoreableMoveEffect(move_id))
+        };
         assert_eq!(viability, expected_viability, "{move_id:?} viability");
     }
 }
