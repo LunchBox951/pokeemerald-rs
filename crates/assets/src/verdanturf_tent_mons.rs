@@ -479,7 +479,6 @@ mod tests {
         );
         assert_eq!(first.species(), SpeciesId::GOLDEEN);
         assert_eq!(second.species(), SpeciesId::GOLDEEN);
-        // Waterfall, Mud Sport, Supersonic, Double Team.
         assert_eq!(
             first.moves(),
             [
@@ -489,7 +488,6 @@ mod tests {
                 MoveId::DOUBLE_TEAM
             ]
         );
-        // Peck, Supersonic, Psybeam, Rain Dance.
         assert_eq!(
             second.moves(),
             [
@@ -576,18 +574,15 @@ mod tests {
 
     #[test]
     fn unusual_fields_are_kept_as_upstream_has_them() {
-        // Magikarp: an empty fourth move slot, kept in place.
         let magikarp = set(6);
         assert_eq!(
             magikarp.moves(),
             [MoveId::SPLASH, MoveId::FLAIL, MoveId::TACKLE, MoveId::NONE]
         );
         assert_eq!(magikarp.ev_spread(), TentEvSpread::ATTACK);
-        // Magnemite trains all six stats.
         let magnemite = set(33);
         assert_eq!(magnemite.ev_spread().bits(), 0x3f);
         assert_eq!(magnemite.ev_spread().selected_count(), 6);
-        // Pelipper's spread selects nothing.
         let pelipper = set(34);
         assert_eq!(pelipper.ev_spread(), TentEvSpread::NONE);
         assert_eq!(pelipper.ev_spread().selected_count(), 0);
@@ -603,7 +598,6 @@ mod tests {
         assert_eq!(TentEvSpread::SPEED.bits(), 8);
         assert_eq!(TentEvSpread::SP_ATTACK.bits(), 16);
         assert_eq!(TentEvSpread::SP_DEFENSE.bits(), 32);
-        // Zigzagoon: Attack and HP.
         let zigzagoon = set(1).ev_spread();
         assert!(zigzagoon.contains(TentEvSpread::ATTACK));
         assert!(zigzagoon.contains(TentEvSpread::HP));
