@@ -30009,6 +30009,14 @@
       "status": "pending"
     },
     "src/data/battle_frontier/apprentice.h": {
+      "artifacts": {
+        "sValidApprenticeMoves": {
+          "reason": "sValidApprenticeMoves (src/data/battle_frontier/apprentice.h:571-930) re-expressed as a move-indexed accessor, is_valid_apprentice_move: all 355 slots listed in upstream, 297 TRUE and 58 FALSE (MOVE_NONE FALSE), kept as listed rather than inferred from power, category or multi-hit behaviour (Double Slap TRUE, Comet Punch FALSE; Aerial Ace TRUE, Icicle Spear FALSE), out-of-range moves refused as an error distinct from a valid but ineligible move. Table only: apprentice question generation, dialogue, trainer rosters and battles are not modelled.",
+          "rust_target": "crates/assets/src/apprentice_moves.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
