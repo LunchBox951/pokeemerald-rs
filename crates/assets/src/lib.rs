@@ -9,7 +9,8 @@
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
 //! egg-move lists (see [`egg_moves`]), the enemy battler elevation table (see
 //! [`enemy_elevation`]), the Battle Arena per-move mind ratings (see
-//! [`arena_mind_ratings`]), the species/move/ability display text
+//! [`arena_mind_ratings`]), the Battle Frontier held-item index lookup (see
+//! [`frontier_held_items`]), the species/move/ability display text
 //! (see [`species_names`], [`move_names`], [`abilities`]), the Trainer Easy
 //! Chat vocabulary group (see [`easy_chat`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
@@ -65,6 +66,7 @@ pub mod event_scripts;
 pub mod evolution;
 pub mod experience;
 pub mod fonts;
+pub mod frontier_held_items;
 pub mod hidden_item_flags;
 pub mod items;
 pub mod keypad_icons;
@@ -134,6 +136,9 @@ pub use fonts::{
     FontGlyphSheet, FontId, FontImageRef, Glyph, GlyphSource, GlyphSources, OwnedFontGlyphSheet,
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
     SHEET_HEIGHT, SHEET_WIDTH,
+};
+pub use frontier_held_items::{
+    frontier_held_item, FrontierHeldItemError, FrontierItemIndex, FRONTIER_HELD_ITEM_COUNT,
 };
 pub use keypad_icons::KeypadIconSheet;
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
