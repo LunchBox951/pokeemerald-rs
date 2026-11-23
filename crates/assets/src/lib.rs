@@ -25,9 +25,10 @@
 //! [`battle_pike_wild_mons`]), the Battle Pyramid floor-item and Pickup
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
-//! starting positions (see [`slot_machine_reels`]), and the region-map
-//! section grid (see [`region_map_layout`]); more data follows as the crate
-//! fills out.
+//! starting positions (see [`slot_machine_reels`]), the region-map section
+//! grid (see [`region_map_layout`]), and the Battle Palace per-nature
+//! move-group, target and flavor tables (see [`battle_palace`]); more data
+//! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
 //! audio-extraction backends emit into (S-4) live in [`audio`].
@@ -54,6 +55,7 @@ pub mod audio;
 pub mod battle_anim;
 pub mod battle_factory_styles;
 pub mod battle_moves;
+pub mod battle_palace;
 pub mod battle_pike_wild_mons;
 pub mod battle_pyramid_items;
 pub mod bundled_overworld;
@@ -110,6 +112,10 @@ pub use audio::{
 pub use battle_factory_styles::{FactoryStyle, FACTORY_LISTED_STYLE_COUNT};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
+};
+pub use battle_palace::{
+    battle_palace_flavor_text, battle_palace_move_group_likelihood, battle_palace_move_target,
+    BattlePalaceError, MoveGroupLikelihood, PalaceFlavorText, PalaceTarget, NATURES_COUNT,
 };
 pub use battle_pike_wild_mons::{
     pike_header, pike_wild_mon, PikeLevelDecrement, PikeLevelMode, PikeWildMon, PikeWildMonError,
