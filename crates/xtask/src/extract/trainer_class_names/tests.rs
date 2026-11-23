@@ -426,3 +426,21 @@ fn class_names_are_extracted_from_the_real_checkout() {
     assert_eq!(table.name(TrainerClass::PARASOL_LADY).unwrap().len(), 13);
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn an_octal_literal_is_refused_instead_of_read_as_decimal() {
+    // C reads `010` as 8; reading it as 10 would pass the identity check on the wrong index.
+    assert_eq!(super::number("010"), None);
+    assert_eq!(super::number("00"), None);
+    assert_eq!(super::number("0"), Some(0));
+    assert_eq!(super::number("10"), Some(10));
+    assert_eq!(super::number("0x0A"), Some(10));
+
+    let octal = constants(&in_order()).replace(
+        "#define TRAINER_CLASS_BLACK_BELT 12 ",
+        "#define TRAINER_CLASS_BLACK_BELT 012 ",
+    );
+    assert_ne!(octal, constants(&in_order()));
+    let (file, _) = fault(build_with(&octal, &names(&in_order())));
+    assert_eq!(file, File::Constants);
+}

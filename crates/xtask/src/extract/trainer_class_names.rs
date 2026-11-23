@@ -161,10 +161,12 @@ fn build(charmap: &str, constants: &str, names: &str) -> Located<Vec<u8>> {
     Ok(table.encode())
 }
 
-/// A C integer literal, decimal or `0x` hexadecimal.
+/// A C integer literal, decimal or `0x` hexadecimal. A longer literal with a
+/// leading `0` is octal in C, so it is refused instead of read as decimal.
 fn number(text: &str) -> Option<usize> {
     match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         Some(hex) => usize::from_str_radix(hex, 16).ok(),
+        None if text.len() > 1 && text.starts_with('0') => None,
         None => text.parse().ok(),
     }
 }
