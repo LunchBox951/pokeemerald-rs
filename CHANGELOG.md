@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.144.0] - 2026-11-23
+
+- Trainer battles on Route 103 now use your whole party: when your lead faints, a healthy reserve is sent out, and every Pokémon that fought keeps its changes after the battle, as in the original game. A trainer battle does not start while one of your healthy Pokémon cannot take part yet.
+
 ## [0.0.143.0] - 2026-11-23
 
 - General improvements in preparation for the Route 103 trainers' defeat lines. The asset pack format changed, so the game asks you to import your ROM again once.
@@ -637,6 +641,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
+[0.0.144.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e4071950fffc09a11102ef9f9a020d18bceb1806...dev
 [0.0.143.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/554b8126a0a9db6ac4cd4c7c1b2f97e34a1d126c...dev
 [0.0.142.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/b3c32a4a9d54b8fb9a5f5987ce0836e113029d55...dev
 [0.0.141.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ca9e7b40b003094ffe20f40b304439c4eb92634a...dev

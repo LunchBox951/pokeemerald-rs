@@ -61,6 +61,8 @@ use engine::overworld::{
     trainer_facing_movement_type, Direction, ObjectEventState, TilePos, WALK_FRAMES_PER_TILE,
 };
 
+use super::PartyReserves;
+
 /// How long the exclamation-mark icon animates, in frames:
 /// `sSpriteAnim_Icons1`'s single `ANIMCMD_FRAME(0, 60)`
 /// (`trainer_see.c:150-154`). The icon outlives it by
@@ -157,7 +159,7 @@ enum ApproachStage {
 /// than built at the end -- see that trigger method's own docs for why
 /// (refusals must not cost a hundred frames of cutscene, and the RNG stream
 /// is unaffected either way).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct SightApproach {
     /// The local ID of the live collection entry that was selected: every
     /// walk, turn and write-back of this approach lands on that entry
@@ -182,6 +184,8 @@ pub(super) struct SightApproach {
     /// Which trainer that fight is against, for the defeated flag
     /// [`crate::flow::overworld_phase::OverworldPhase::advance_sight_trainer_battle_frame`] sets on a win.
     trainer_id: TrainerId,
+    /// The saved members beside the lead that the fight was built with.
+    reserves: PartyReserves,
     /// Where in the sequence this approach currently is.
     stage: ApproachStage,
 }
@@ -198,6 +202,7 @@ impl SightApproach {
         intro: &'static str,
         battle: battle::Battle,
         trainer_id: TrainerId,
+        reserves: PartyReserves,
     ) -> Self {
         Self {
             local_id,
@@ -206,6 +211,7 @@ impl SightApproach {
             intro,
             battle,
             trainer_id,
+            reserves,
             stage: ApproachStage::LockHandoff {
                 frames_left: LOCK_HANDOFF_FRAMES_AT_REST,
             },
