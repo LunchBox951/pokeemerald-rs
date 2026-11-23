@@ -79,6 +79,16 @@ const ALWAYS_HIT_EVASION_RANDOM_STAGE: i8 = 2;
 const ALWAYS_HIT_ACCURACY_RANDOM_STAGE: i8 = -2;
 const ALWAYS_HIT_BONUS_THRESHOLD: u16 = 100;
 
+/// `AI_CV_SpAtkUp` compares the user's raw Special Attack stage with 9
+/// (`data/battle_ai_scripts.s:967`-`:984`); as a signed offset that is 3.
+const SP_ATK_UP_BOOSTED_STAGE: i8 = 3;
+const SP_ATK_UP_FULL_HP_PERCENT: u32 = 100;
+const SP_ATK_UP_FULL_HP_BONUS_THRESHOLD: u16 = 128;
+const SP_ATK_UP_BOOSTED_PENALTY_THRESHOLD: u16 = 100;
+const SP_ATK_UP_HEALTHY_HP_PERCENT: u32 = 70;
+const SP_ATK_UP_LOW_HP_PERCENT: u32 = 40;
+const SP_ATK_UP_LOW_HP_PENALTY_THRESHOLD: u16 = 70;
+
 const AI_EFFECTIVENESS_QUARTER: u32 = 10;
 const AI_EFFECTIVENESS_QUARTER_WITH_STAB: u32 = 15;
 const AI_EFFECTIVENESS_HALF: u32 = 20;
@@ -218,7 +228,8 @@ enum ScoreableEffect {
     UnchangedAfterPrologue(MoveEffect),
     /// Any other shared stat-stage label (see [`ai_stat_label`]). Its
     /// `AI_CheckViability` and `AI_SetupFirstTurn` branches are not ported,
-    /// except that Defense Curl has no viability branch.
+    /// except that Defense Curl has no viability branch and Special Attack-up
+    /// has `AI_CV_SpAtkUp`.
     StatLabel(MoveEffect, StatChangeEffect),
 }
 
@@ -274,8 +285,12 @@ impl ScoreableEffect {
             Self::UnchangedAfterPrologue(effect) => effect,
             Self::StatLabel(effect, _) => {
                 return !flags.contains(AiFlags::SETUP_FIRST_TURN)
-                    && (effect == MoveEffect::DEFENSE_CURL
-                        || !flags.contains(AiFlags::CHECK_VIABILITY));
+                    && (matches!(
+                        effect,
+                        MoveEffect::DEFENSE_CURL
+                            | MoveEffect::SPECIAL_ATTACK_UP
+                            | MoveEffect::SPECIAL_ATTACK_UP_2
+                    ) || !flags.contains(AiFlags::CHECK_VIABILITY));
             }
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
             Self::Hit | Self::AttackDown | Self::DefenseDown | Self::Attract => return true,
@@ -1090,8 +1105,14 @@ fn score_viability(
         ScoreableEffect::HighRiskForDamage => {
             return Err(BattleError::UnscoreableMoveEffect(move_id))
         }
+        ScoreableEffect::StatLabel(
+            MoveEffect::SPECIAL_ATTACK_UP | MoveEffect::SPECIAL_ATTACK_UP_2,
+            _,
+        ) => {
+            score_special_attack_up_viability(scores, slot, user, rng);
+        }
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
-        // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
+        // (`data/battle_ai_scripts.s:652-776`); every other remaining label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
         ScoreableEffect::Paralyze
         | ScoreableEffect::Confuse
@@ -1130,6 +1151,34 @@ fn score_always_hit_viability(
     };
     if rolls && random_roll_is_at_least(rng, ALWAYS_HIT_BONUS_THRESHOLD) {
         scores.adjust(slot, SLIGHTLY_ENCOURAGE);
+    }
+}
+
+/// `AI_CV_SpAtkUp` (`data/battle_ai_scripts.s:967`-`:984`).
+fn score_special_attack_up_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    let hp_percent = current_hp_percent(user);
+    if user.stages().sp_attack.offset() < SP_ATK_UP_BOOSTED_STAGE {
+        if hp_percent == SP_ATK_UP_FULL_HP_PERCENT
+            && random_roll_is_at_least(rng, SP_ATK_UP_FULL_HP_BONUS_THRESHOLD)
+        {
+            scores.adjust(slot, ENCOURAGE);
+        }
+    } else if random_roll_is_at_least(rng, SP_ATK_UP_BOOSTED_PENALTY_THRESHOLD) {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+    }
+
+    if hp_percent > SP_ATK_UP_HEALTHY_HP_PERCENT {
+        return;
+    }
+    if hp_percent < SP_ATK_UP_LOW_HP_PERCENT
+        || random_roll_is_at_least(rng, SP_ATK_UP_LOW_HP_PENALTY_THRESHOLD)
+    {
+        scores.adjust(slot, DISCOURAGE);
     }
 }
 
@@ -2513,5 +2562,7 @@ mod leech_seed_tests;
 mod prologue_tests;
 #[cfg(test)]
 mod quick_attack_tests;
+#[cfg(test)]
+mod special_attack_up_viability_tests;
 #[cfg(test)]
 mod stat_stage_tests;
