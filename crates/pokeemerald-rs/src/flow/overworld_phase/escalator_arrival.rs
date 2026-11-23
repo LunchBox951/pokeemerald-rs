@@ -143,7 +143,7 @@ impl OverworldPhase {
             pack: &self.connection_pack,
             source: self.pack_source.clone(),
             departed: self.map_id,
-            departed_objects: &self.object_events,
+            departed_objects: Some(&self.object_events),
         };
         let pre_step_player: PlayerState = self.player;
         let outcome = advance_or_skip_for_preempt(
