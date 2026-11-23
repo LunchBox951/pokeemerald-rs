@@ -9,7 +9,7 @@
 //! scripting battler and the afflicted battler as the effect battler.
 
 use assets::{AbilityId, Effectiveness};
-use battle::{BattleEvent, ChangedStat, LoafMessage, Status1};
+use battle::{BattleEvent, ChangedStat, CuredCondition, LoafMessage, Status1};
 
 use super::attract;
 use super::context::{BattleBuffer, BufferOp, NarrationContext, Side, StatusName};
@@ -72,6 +72,20 @@ fn status_buffer(status: Status1) -> Result<BattleBuffer, NarrationError> {
     }
 }
 
+/// The status name `BattleScript_AbilityCuredStatus` buffers for a cured
+/// condition (`gStatusConditionString`, `src/battle_message.c:1304`-`:1310`).
+const fn condition_buffer(condition: CuredCondition) -> BattleBuffer {
+    BattleBuffer::Status(match condition {
+        CuredCondition::Poison => StatusName::Poison,
+        CuredCondition::Sleep => StatusName::Sleep,
+        CuredCondition::Paralysis => StatusName::Paralysis,
+        CuredCondition::Burn => StatusName::Burn,
+        CuredCondition::Freeze => StatusName::Ice,
+        CuredCondition::Confusion => StatusName::Confusion,
+        CuredCondition::Infatuation => StatusName::Love,
+    })
+}
+
 /// The requests for `event`, updating `narrator`'s active battlers first.
 pub(super) fn requests(
     narrator: &mut Narrator,
@@ -109,6 +123,9 @@ pub(super) fn requests(
         )]);
     }
     if let Some(requests) = yawn_protection_results(narrator, event) {
+        return Ok(requests);
+    }
+    if let Some(requests) = ability_cure_results(narrator, event) {
         return Ok(requests);
     }
     if let Some(requests) = status_results(narrator, event) {
@@ -474,6 +491,27 @@ fn yawn_protection_results(
         .with_ability(holder, ability);
     context.scripting = Some(holder);
     Some(vec![table(id::PKMNSXMADEITINEFFECTIVE, context)])
+}
+
+/// `BattleScript_AbilityCuredStatus` (`data/battle_scripts_1.s:4215`-`:4219`):
+/// the cured battler is the scripting battler and its ability, which the event
+/// carries, is the one the message names.
+fn ability_cure_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
+    let BattleEvent::AbilityCuredStatus {
+        by_player,
+        ability,
+        condition,
+    } = *event
+    else {
+        return None;
+    };
+    let side = Side::user(by_player);
+    let mut context = narrator
+        .context()
+        .with_ability(side, ability)
+        .with_buffer(0, condition_buffer(condition));
+    context.scripting = Some(side);
+    Some(vec![table(id::PKMNSXCUREDITSYPROBLEM, context)])
 }
 
 /// Flame Body's contact burn and its Synchronize reflection

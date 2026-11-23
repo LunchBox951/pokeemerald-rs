@@ -86,7 +86,7 @@ impl Battle {
             by_player: attacker_is_player,
             move_id,
         });
-        self.record_cancelled_move(attacker_is_player, move_id)?;
+        self.finish_cancelled_move(attacker_is_player, move_id, events)?;
         Ok(true)
     }
 

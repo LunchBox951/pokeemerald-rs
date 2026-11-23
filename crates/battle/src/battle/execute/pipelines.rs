@@ -349,6 +349,9 @@ impl Battle {
             });
             hits_landed += 1;
             self.apply_contact_abilities(attacker_is_player, move_id, rng, events)?;
+            // Each strike ends in `MOVEEND_NEXT_TARGET`, whose range includes the
+            // immunity pass (`data/battle_scripts_1.s:637`).
+            self.apply_move_end_immunity(events);
         }
         Ok(MultiHitResult {
             hits_landed,

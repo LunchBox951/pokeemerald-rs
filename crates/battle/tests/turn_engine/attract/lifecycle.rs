@@ -1,9 +1,9 @@
 //! Infatuation ends with either battler's time on the field, and an
-//! infatuated Oblivious holder is refused at admission.
+//! infatuated Oblivious holder is admitted and cured at its first move end.
 
 use super::*;
 use assets::AbilityId;
-use battle::{BattleError, BattleOutcome};
+use battle::{BattleOutcome, CuredCondition};
 
 /// A landing Tackle: accuracy, non-critical, damage roll, discarded
 /// secondary-effect draw.
@@ -54,24 +54,73 @@ fn an_infatuated_battler_that_faints_keeps_nothing() {
     assert!(!battle.player().volatiles().infatuated());
 }
 
-#[test]
-fn an_infatuated_oblivious_holder_is_refused_before_any_draw() {
-    let holder = infatuated_by(mon(ILLUMISE, FEMALE, &[SPLASH]), BattlerSide::Player);
-    let mut rng = SequenceRng::new([]);
+fn cured_oblivious() -> BattleEvent {
+    BattleEvent::AbilityCuredStatus {
+        by_player: false,
+        ability: AbilityId::OBLIVIOUS,
+        condition: CuredCondition::Infatuation,
+    }
+}
 
-    let result = Battle::new(
-        Dex::new(),
+fn splash(by_player: bool) -> [BattleEvent; 2] {
+    [
+        BattleEvent::UsedMove {
+            by_player,
+            move_id: SPLASH,
+        },
+        BattleEvent::NothingHappened {
+            by_player,
+            move_id: SPLASH,
+        },
+    ]
+}
+
+#[test]
+fn an_infatuated_oblivious_holder_is_cured_once_its_move_ends() {
+    let holder = infatuated_by(mon(ILLUMISE, FEMALE, &[SPLASH]), BattlerSide::Player);
+
+    let (battle, events, rng) = wild_turn(
         mon(MUDKIP, MALE, &[SPLASH]),
         holder,
-        false,
-        &mut rng,
+        &[&PREFIX, &[LOVE_LETS_MOVE_THROUGH]],
     );
 
-    assert!(matches!(
-        result,
-        Err(BattleError::UnportedAbilityInteraction(
-            AbilityId::OBLIVIOUS
-        ))
-    ));
-    assert_eq!(rng.draws(), 0);
+    rng.assert_exhausted();
+    assert_eq!(
+        events,
+        [
+            vec![in_love(false)],
+            splash(false).to_vec(),
+            vec![cured_oblivious()],
+            splash(true).to_vec(),
+        ]
+        .concat()
+    );
+    assert!(!battle.enemy().volatiles().infatuated());
+}
+
+#[test]
+fn an_oblivious_holder_immobilized_by_love_is_cured_after_the_cancelled_move() {
+    let holder = infatuated_by(mon(ILLUMISE, FEMALE, &[SPLASH]), BattlerSide::Player);
+
+    let (battle, events, rng) = wild_turn(
+        mon(MUDKIP, MALE, &[SPLASH]),
+        holder,
+        &[&PREFIX, &[LOVE_IMMOBILIZES]],
+    );
+
+    rng.assert_exhausted();
+    assert_eq!(
+        events,
+        [
+            vec![
+                in_love(false),
+                immobilized(false, SPLASH),
+                cured_oblivious()
+            ],
+            splash(true).to_vec(),
+        ]
+        .concat()
+    );
+    assert!(!battle.enemy().volatiles().infatuated());
 }

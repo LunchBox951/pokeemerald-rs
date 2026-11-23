@@ -10,6 +10,7 @@ use crate::error::BattleError;
 use crate::stat_change::ChangedStat;
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
+use crate::status_immunity::CuredCondition;
 
 use super::BattleOutcome;
 
@@ -920,6 +921,20 @@ pub enum BattleEvent {
         by_player: bool,
         /// The primary status Shed Skin cured.
         status: Status1,
+    },
+    /// `STRINGID_PKMNSXCUREDITSYPROBLEM`, `BattleScript_AbilityCuredStatus`
+    /// (`data/battle_scripts_1.s:4215`-`:4219`): the move-end immunity pass
+    /// (`ABILITYEFFECT_IMMUNITY`, `pokeemerald/src/battle_util.c:2873`-
+    /// `:2951`) cured a condition the holder's ability forbids. The holder
+    /// may have carried it from before the battle, from a Trace copy, or
+    /// from a status it kept across a switch.
+    AbilityCuredStatus {
+        /// Whether the cured battler is the player's.
+        by_player: bool,
+        /// The holder's current ability, which names the cure in the message.
+        ability: AbilityId,
+        /// The condition cleared.
+        condition: CuredCondition,
     },
     /// `STRINGID_PKMNRAISEDSPEED`, `BattleScript_SpeedBoostActivates`
     /// (`data/battle_scripts_1.s:3965-3969`): a living Speed Boost holder

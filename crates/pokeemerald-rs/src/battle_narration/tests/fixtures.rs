@@ -275,6 +275,7 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (321, "Player defeated\n{B_TRAINER1_CLASS} {B_TRAINER1_NAME}!\\p"),
     (346, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nmade it ineffective!"),
     (355, "{B_ATK_NAME_WITH_PREFIX}'s {B_ATK_ABILITY}\nprevents {B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY} from working!"),
+    (356, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\ncured its {B_BUFF1} problem!"),
 ];
 
 pub(super) const SPECIALS: &[(&str, &str)] = &[

@@ -3,7 +3,9 @@
 
 use assets::items::ItemId;
 use assets::{AbilityId, Effectiveness, MoveId};
-use battle::{BattleEvent, BattleOutcome, ChangedStat, LoafMessage, StatStage, Status1};
+use battle::{
+    BattleEvent, BattleOutcome, ChangedStat, CuredCondition, LoafMessage, StatStage, Status1,
+};
 
 use super::fixtures::{
     battler, narrator, render, request, scene, upstream_fixture, Fixture, RATTATA, SPECIALS,
@@ -773,6 +775,77 @@ fn a_shed_skin_bad_poison_cure_narrates_as_poison() {
                 },
             );
             assert_eq!(toxic, expected, "counter {counter}, by_player {by_player}");
+        }
+    }
+}
+
+/// `BattleScript_AbilityCuredStatus` prints `STRINGID_PKMNSXCUREDITSYPROBLEM`
+/// (356, not Shed Skin's 312) with the cured battler as the scripting
+/// battler and the condition's `gStatusConditionString` name in buffer 1.
+#[test]
+fn a_status_immunity_cure_names_its_holder_ability_and_condition() {
+    for (ability, shown, condition, name) in [
+        (
+            AbilityId::IMMUNITY,
+            "IMMUNITY",
+            CuredCondition::Poison,
+            "poison",
+        ),
+        (
+            AbilityId::INSOMNIA,
+            "INSOMNIA",
+            CuredCondition::Sleep,
+            "sleep",
+        ),
+        (
+            AbilityId::VITAL_SPIRIT,
+            "VITAL SPIRIT",
+            CuredCondition::Sleep,
+            "sleep",
+        ),
+        (
+            AbilityId::LIMBER,
+            "LIMBER",
+            CuredCondition::Paralysis,
+            "paralysis",
+        ),
+        (
+            AbilityId::WATER_VEIL,
+            "WATER VEIL",
+            CuredCondition::Burn,
+            "burn",
+        ),
+        (
+            AbilityId::MAGMA_ARMOR,
+            "MAGMA ARMOR",
+            CuredCondition::Freeze,
+            "ice",
+        ),
+        (
+            AbilityId::OWN_TEMPO,
+            "OWN TEMPO",
+            CuredCondition::Confusion,
+            "confusion",
+        ),
+        (
+            AbilityId::OBLIVIOUS,
+            "OBLIVIOUS",
+            CuredCondition::Infatuation,
+            "love",
+        ),
+    ] {
+        for (by_player, holder) in [(true, "TORCHIC"), (false, "Wild RATTATA")] {
+            let mut narrator = narrator(BattleKind::Wild);
+            let event = BattleEvent::AbilityCuredStatus {
+                by_player,
+                ability,
+                condition,
+            };
+            assert_eq!(
+                lines(&narrate(&mut narrator, &[event])),
+                [format!("{holder}'s {shown}\ncured its {name} problem!")],
+                "{ability:?}, by_player {by_player}"
+            );
         }
     }
 }

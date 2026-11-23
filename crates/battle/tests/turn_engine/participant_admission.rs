@@ -1,10 +1,11 @@
-//! Both constructors refuse move-end-cured status/ability pairs
-//! (`battle_util.c:2873-2951`) and always-refused abilities (Intimidate,
-//! Drizzle, Drought, Sand Stream), before any RNG draw.
+//! Both constructors refuse always-refused abilities (Intimidate, Drizzle,
+//! Drought, Sand Stream) before any RNG draw, and admit every status or
+//! volatile pairing the move-end immunity pass cures (`battle_util.c:2873-2951`).
 
 use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::{AbilityId, MoveId, SpeciesId};
+use battle::battle::BattlerSide;
 use battle::{Battle, BattleError, BattlePokemon, Dex, Status1};
 
 const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
@@ -20,7 +21,7 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 16] {
+fn refused() -> [(BattlePokemon, AbilityId); 6] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
@@ -31,6 +32,13 @@ fn refused() -> [(BattlePokemon, AbilityId); 16] {
         (healthy(SpeciesId::KYOGRE), AbilityId::DRIZZLE),
         (healthy(SpeciesId::GROUDON), AbilityId::DROUGHT),
         (healthy(SpeciesId::TYRANITAR), AbilityId::SAND_STREAM),
+    ]
+}
+
+/// Every pairing the move-end immunity pass cures: a holder, its ability and
+/// the condition it carries.
+fn cured() -> Vec<(BattlePokemon, AbilityId)> {
+    let mut pairings = vec![
         (
             mon(SpeciesId::PERSIAN, 0, Status1::Paralysed),
             AbilityId::LIMBER,
@@ -69,13 +77,18 @@ fn refused() -> [(BattlePokemon, AbilityId); 16] {
             mon(SpeciesId::MANKEY, 0, Status1::Asleep { turns: 3 }),
             AbilityId::VITAL_SPIRIT,
         ),
-        {
-            let mut spinda = healthy(SpeciesId::SPINDA);
-            assert_eq!(spinda.ability(), AbilityId::OWN_TEMPO);
-            spinda.volatiles_mut().set_confusion(3);
-            (spinda, AbilityId::OWN_TEMPO)
-        },
-    ]
+    ];
+    let mut spinda = healthy(SpeciesId::SPINDA);
+    assert_eq!(spinda.ability(), AbilityId::OWN_TEMPO);
+    spinda.volatiles_mut().set_confusion(3);
+    pairings.push((spinda, AbilityId::OWN_TEMPO));
+    let mut illumise = healthy(SpeciesId::ILLUMISE);
+    assert_eq!(illumise.ability(), AbilityId::OBLIVIOUS);
+    illumise
+        .volatiles_mut()
+        .set_infatuated_by(BattlerSide::Enemy);
+    pairings.push((illumise, AbilityId::OBLIVIOUS));
+    pairings
 }
 
 fn assert_refused_without_draws(
@@ -88,6 +101,21 @@ fn assert_refused_without_draws(
         Err(BattleError::UnportedAbilityInteraction(found)) if *found == ability
     ));
     assert_eq!(rng.draws(), 0, "refusal precedes every constructor draw");
+}
+
+/// A trainer battle admits a participant, except that its AI cannot read a
+/// two-ability player's ability: that error is separate from admission and
+/// precedes every draw.
+fn assert_admitted_or_ambiguous(
+    result: &Result<Battle, BattleError>,
+    ability: AbilityId,
+    rng: &SequenceRng,
+) {
+    match result {
+        Ok(_) => rng.assert_exhausted(),
+        Err(BattleError::AmbiguousPlayerAbility(_)) => assert_eq!(rng.draws(), 0),
+        Err(error) => panic!("{ability:?}: {error:?}"),
+    }
 }
 
 fn wild(
@@ -381,7 +409,8 @@ fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
         healthy(SpeciesId::ZIGZAGOON).speed_for_turn_order(),
         "the active pair must not tie on Speed, so construction draws no tiebreak and admission_script(false) fits"
     );
-    for (index, (mut bad, _)) in refused().into_iter().enumerate() {
+    let pairings = || refused().into_iter().chain(cured());
+    for (index, (mut bad, _)) in pairings().enumerate() {
         bad.apply_damage(u32::MAX);
         assert!(bad.is_fainted());
         let mut rng = SequenceRng::new(admission_script(false));
@@ -394,7 +423,7 @@ fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
         )
         .unwrap();
         rng.assert_exhausted();
-        let (mut bad, _) = refused().into_iter().nth(index).unwrap();
+        let (mut bad, _) = pairings().nth(index).unwrap();
         bad.apply_damage(u32::MAX);
         let mut rng = SequenceRng::new(admission_script(false));
         trainer(
@@ -409,30 +438,70 @@ fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
 }
 
 #[test]
-fn confusion_is_refused_only_for_own_tempo() {
-    let mut zigzagoon = healthy(SpeciesId::ZIGZAGOON);
-    zigzagoon.volatiles_mut().set_confusion(3);
-    let enemy = healthy(SpeciesId::ZIGZAGOON);
-    assert_eq!(
-        zigzagoon.speed_for_turn_order(),
-        enemy.speed_for_turn_order(),
-        "the mirror fixture ties on Speed, so construction draws the seed and the order tiebreak"
-    );
-    let mut rng = SequenceRng::new(admission_script(true));
-    let battle = wild(zigzagoon, vec![], enemy, false, &mut rng).unwrap();
-    assert!(battle.player().volatiles().confused());
-    rng.assert_exhausted();
+fn every_cured_pairing_is_admitted_on_every_participant_path() {
+    for (index, (holder, ability)) in cured().into_iter().enumerate() {
+        assert_eq!(holder.ability(), ability);
+        let holder = || cured().remove(index).0;
+        let opponent = || healthy(SpeciesId::ZIGZAGOON);
+        let lead = || healthy(SpeciesId::MUDKIP);
 
-    let spinda = healthy(SpeciesId::SPINDA);
-    let enemy = healthy(SpeciesId::ZIGZAGOON);
-    assert_eq!(
-        spinda.speed_for_turn_order(),
-        enemy.speed_for_turn_order(),
-        "Spinda ties Zigzagoon on Speed, so construction draws the seed and the order tiebreak"
-    );
-    let mut rng = SequenceRng::new(admission_script(true));
-    wild(spinda, vec![], enemy, false, &mut rng).unwrap();
-    rng.assert_exhausted();
+        let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+        let battle = wild(holder(), vec![], opponent(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+        assert_eq!(
+            battle.player().status1(),
+            holder().status1(),
+            "construction cures nothing: the pass runs at a move end"
+        );
+
+        let mut rng = SequenceRng::new(admission_script_for(&opponent(), &holder()));
+        wild(opponent(), vec![], holder(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+
+        let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+        wild(lead(), vec![holder()], opponent(), false, &mut rng).unwrap();
+        rng.assert_exhausted();
+
+        let mut rng = SequenceRng::new(admission_script_for(&holder(), &opponent()));
+        let result = trainer(holder(), vec![], vec![opponent()], &mut rng);
+        assert_admitted_or_ambiguous(&result, ability, &rng);
+
+        let mut rng = SequenceRng::new(admission_script_for(&lead(), &holder()));
+        trainer(lead(), vec![], vec![holder()], &mut rng).unwrap();
+        rng.assert_exhausted();
+
+        let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+        trainer(
+            lead(),
+            vec![],
+            vec![opponent(), opponent(), holder()],
+            &mut rng,
+        )
+        .unwrap();
+        rng.assert_exhausted();
+
+        let mut rng = SequenceRng::new(admission_script_for(&lead(), &opponent()));
+        let result = trainer(lead(), vec![holder()], vec![opponent()], &mut rng);
+        assert_admitted_or_ambiguous(&result, ability, &rng);
+    }
+}
+
+#[test]
+fn confusion_is_admitted_for_every_holder_including_own_tempo() {
+    for species in [SpeciesId::ZIGZAGOON, SpeciesId::SPINDA] {
+        let mut holder = healthy(species);
+        holder.volatiles_mut().set_confusion(3);
+        let enemy = healthy(SpeciesId::ZIGZAGOON);
+        assert_eq!(
+            holder.speed_for_turn_order(),
+            enemy.speed_for_turn_order(),
+            "the fixture ties on Speed, so construction draws the seed and the order tiebreak"
+        );
+        let mut rng = SequenceRng::new(admission_script(true));
+        let battle = wild(holder, vec![], enemy, false, &mut rng).unwrap();
+        assert!(battle.player().volatiles().confused());
+        rng.assert_exhausted();
+    }
 }
 
 #[test]

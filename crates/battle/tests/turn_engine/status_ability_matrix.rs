@@ -1,8 +1,8 @@
-//! This Status1-only matrix pins the Limber (paralysis), Immunity (poison),
-//! Water Veil (burn), and Magma Armor (freeze) admission refusals (`battle_util.c:2873-2951`). Confused Own Tempo is also
-//! refused, as its move-end cure is unmodelled; `participant_admission.rs`
-//! covers that volatile. Every other ability here is admitted, whether
-//! modelled or deferred.
+//! This Status1-only matrix admits every ability with every status at
+//! construction: Limber (paralysis), Immunity (poison), Water Veil (burn) and
+//! Magma Armor (freeze) hold the status they forbid until the move-end cure
+//! clears it (`battle_util.c:2873-2951`; `status_immunity.rs` plays the
+//! cure), and every other ability is admitted whether modelled or deferred.
 //!
 //! Upstream: Guts and Marvel Scale stat multipliers (`pokemon.c:3211-3214`),
 //! Shed Skin (`battle_util.c:2620-2640`), Synchronize (`battle_util.c:2971-2986`),
@@ -12,7 +12,7 @@
 
 use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId, SpeciesId};
-use battle::{Battle, BattleError, BattlePokemon, Dex, Status1};
+use battle::{Battle, BattlePokemon, Dex, Status1};
 
 const STATUSES: [Status1; 8] = [
     Status1::Healthy,
@@ -25,87 +25,35 @@ const STATUSES: [Status1; 8] = [
     Status1::Frozen,
 ];
 
-/// Columns: name, species, saved ability slot, expected ability, and the one
-/// status whose constructor admission is refused, if any.
-const MATRIX: [(&str, SpeciesId, u8, AbilityId, Option<Status1>); 13] = [
-    ("guts", SpeciesId::RATTATA, 1, AbilityId::GUTS, None),
+/// Columns: name, species, saved ability slot, and expected ability.
+const MATRIX: [(&str, SpeciesId, u8, AbilityId); 13] = [
+    ("guts", SpeciesId::RATTATA, 1, AbilityId::GUTS),
     (
         "marvel scale",
         SpeciesId::MILOTIC,
         0,
         AbilityId::MARVEL_SCALE,
-        None,
     ),
-    (
-        "shed skin",
-        SpeciesId::METAPOD,
-        0,
-        AbilityId::SHED_SKIN,
-        None,
-    ),
-    (
-        "synchronize",
-        SpeciesId::ABRA,
-        0,
-        AbilityId::SYNCHRONIZE,
-        None,
-    ),
-    (
-        "limber",
-        SpeciesId::PERSIAN,
-        0,
-        AbilityId::LIMBER,
-        Some(Status1::Paralysed),
-    ),
-    (
-        "immunity",
-        SpeciesId::SNORLAX,
-        0,
-        AbilityId::IMMUNITY,
-        Some(Status1::Poisoned),
-    ),
-    (
-        "early bird",
-        SpeciesId::DODUO,
-        1,
-        AbilityId::EARLY_BIRD,
-        None,
-    ),
-    ("insomnia", SpeciesId::DROWZEE, 0, AbilityId::INSOMNIA, None),
+    ("shed skin", SpeciesId::METAPOD, 0, AbilityId::SHED_SKIN),
+    ("synchronize", SpeciesId::ABRA, 0, AbilityId::SYNCHRONIZE),
+    ("limber", SpeciesId::PERSIAN, 0, AbilityId::LIMBER),
+    ("immunity", SpeciesId::SNORLAX, 0, AbilityId::IMMUNITY),
+    ("early bird", SpeciesId::DODUO, 1, AbilityId::EARLY_BIRD),
+    ("insomnia", SpeciesId::DROWZEE, 0, AbilityId::INSOMNIA),
     (
         "vital spirit",
         SpeciesId::MANKEY,
         0,
         AbilityId::VITAL_SPIRIT,
-        None,
     ),
-    (
-        "water veil",
-        SpeciesId::GOLDEEN,
-        1,
-        AbilityId::WATER_VEIL,
-        Some(Status1::Burned),
-    ),
-    (
-        "magma armor",
-        SpeciesId::SLUGMA,
-        0,
-        AbilityId::MAGMA_ARMOR,
-        Some(Status1::Frozen),
-    ),
-    (
-        "flash fire",
-        SpeciesId::VULPIX,
-        0,
-        AbilityId::FLASH_FIRE,
-        None,
-    ),
+    ("water veil", SpeciesId::GOLDEEN, 1, AbilityId::WATER_VEIL),
+    ("magma armor", SpeciesId::SLUGMA, 0, AbilityId::MAGMA_ARMOR),
+    ("flash fire", SpeciesId::VULPIX, 0, AbilityId::FLASH_FIRE),
     (
         "natural cure",
         SpeciesId::CHANSEY,
         0,
         AbilityId::NATURAL_CURE,
-        None,
     ),
 ];
 
@@ -126,45 +74,26 @@ fn opponent() -> BattlePokemon {
 }
 
 #[test]
-fn the_status1_matrix_refuses_exactly_the_limber_immunity_water_veil_and_magma_armor_cures() {
-    for (name, species, slot, ability, refused) in MATRIX {
+fn the_status1_matrix_admits_every_status_and_keeps_it_until_a_move_ends() {
+    for (name, species, slot, ability) in MATRIX {
         for status in STATUSES {
-            // Immunity's cure covers bad poison too, so it refuses every
-            // counter beside its one listed status (`battle_util.c:2878`-`:2883`).
-            let refuses = refused == Some(status)
-                || (ability == AbilityId::IMMUNITY
-                    && matches!(status, Status1::BadPoisoned { .. }));
             let mon = holder(species, slot, status);
             assert_eq!(mon.ability(), ability, "{name} fixture ability");
-            let mon_speed = mon.speed_for_turn_order();
             let enemy = opponent();
             assert_ne!(
-                mon_speed,
+                mon.speed_for_turn_order(),
                 enemy.speed_for_turn_order(),
                 "{name} with {status:?} fixture Speeds must not tie"
             );
-            // A refusal draws nothing, so its script is oversupplied on
-            // purpose; an admission draws only the seed.
-            let mut rng = SequenceRng::new(if refuses {
-                vec![0, 0]
-            } else {
-                admission_script(false)
-            });
-            let result = Battle::new(Dex::new(), mon, enemy, false, &mut rng);
-            if refuses {
-                assert!(
-                    matches!(
-                        result,
-                        Err(BattleError::UnportedAbilityInteraction(found)) if found == ability
-                    ),
-                    "{name} with {status:?} must be refused"
-                );
-                assert_eq!(rng.draws(), 0, "{name} refusal precedes every draw");
-            } else {
-                assert!(result.is_ok(), "{name} with {status:?} must be admitted");
-                assert_eq!(rng.draws(), 1, "{name} with {status:?} draws only the seed");
-                rng.assert_exhausted();
-            }
+            let mut rng = SequenceRng::new(admission_script(false));
+            let battle = Battle::new(Dex::new(), mon, enemy, false, &mut rng)
+                .unwrap_or_else(|error| panic!("{name} with {status:?}: {error:?}"));
+            assert_eq!(
+                battle.player().status1(),
+                status,
+                "{name} with {status:?}: construction cures nothing"
+            );
+            rng.assert_exhausted();
         }
     }
 }

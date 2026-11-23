@@ -155,12 +155,6 @@ pub struct Battle {
     /// The player's identity and badge limit; `None` skips the obedience
     /// gate (every Pokémon obeys).
     player_obedience: Option<crate::obedience::PlayerObedience>,
-    /// Whether the active enemy's faint has already run its reward step.
-    /// Upstream's `Cmd_getexp` runs once per faint; a forced replacement
-    /// refused by [`trace::ensure_trace_reentry_admissible`] leaves the
-    /// fainted member active, so a later faint pass must not pay it again.
-    /// Cleared when another enemy enters.
-    enemy_reward_settled: bool,
 }
 
 /// How `Cmd_attackcanceler`'s tail left one action.
@@ -342,13 +336,13 @@ impl Battle {
     /// participant, or the first move or ability validation error from the
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
-    /// lost a member before the battle. A non-fainted participant that is
-    /// Paralysed with Limber, Poisoned or badly poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
-    /// Vital Spirit, confused with Own Tempo, or holds Intimidate,
-    /// Drizzle, Drought or Sand Stream fails with
-    /// [`BattleError::UnportedAbilityInteraction`]; so does a Trace holder
-    /// that could copy an ability whose interaction with it, or with the
-    /// enemy's moves, is unmodelled. A Trace holder copies the opposing
+    /// lost a member before the battle. A non-fainted participant that holds
+    /// Intimidate, Drizzle, Drought or Sand Stream, or a seeded Liquid Ooze,
+    /// fails with [`BattleError::UnportedAbilityInteraction`]; so does a Trace
+    /// holder that could copy an ability whose interaction with it, or with the
+    /// enemy's moves, is unmodelled. A status or volatile that the holder's
+    /// ability forbids is admitted: the move-end immunity pass cures it.
+    /// A Trace holder copies the opposing
     /// ability before this returns; its [`BattleEvent::TracedAbility`] leads
     /// the first turn's events.
     /// Errors leave the RNG untouched.
@@ -443,7 +437,6 @@ impl Battle {
             acted_this_turn: [false; 2],
             pending_entry_events: Vec::new(),
             end_turn_cleanup_pending: false,
-            enemy_reward_settled: false,
             player_obedience: None,
         };
         battle.settle_battle_start_trace();
@@ -600,7 +593,6 @@ impl Battle {
             acted_this_turn: [false; 2],
             pending_entry_events: Vec::new(),
             end_turn_cleanup_pending: false,
-            enemy_reward_settled: false,
             player_obedience: None,
         };
         battle.settle_battle_start_trace();
@@ -907,9 +899,6 @@ impl Battle {
                 // The player's move was admitted against the outgoing defender.
                 secondary::ensure_admissible(&self.dex, move_id, &self.player, incoming)?;
             }
-            // A switch precedes every player move, so the entrant copies the
-            // ability the player holds now.
-            trace::ensure_trace_reentry_admissible(incoming, &self.player)?;
         }
         let chosen = ChosenMoves {
             player: match player_action {
@@ -1664,9 +1653,6 @@ impl Battle {
     }
 
     fn settle_enemy_reward(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
-        if std::mem::replace(&mut self.enemy_reward_settled, true) {
-            return Ok(());
-        }
         // `Cmd_getexp` case 2 zeroes the award and jumps past both the string
         // and `MonGainEVs` for a recipient already at the cap
         // (`src/battle_script_commands.c:3351`-`:3356`), and does the same
@@ -1751,10 +1737,8 @@ impl Battle {
     /// # Errors
     ///
     /// Returns [`BattleError::InvalidTrainerSwitch`] when this is not a
-    /// trainer battle or `slot` is not a healthy non-active member, and
-    /// [`BattleError::UnportedAbilityInteraction`] when the member is a Trace
-    /// holder whose status the player's ability forbids it to copy
-    /// ([`trace::ensure_trace_reentry_admissible`]); nothing changes then.
+    /// trainer battle or `slot` is not a healthy non-active member; nothing
+    /// changes then.
     fn switch_enemy_to(
         &mut self,
         slot: usize,
@@ -1763,7 +1747,7 @@ impl Battle {
         let BattleKind::Trainer(context) = &mut self.kind else {
             return Err(BattleError::InvalidTrainerSwitch(slot));
         };
-        trace::ensure_trace_reentry_admissible(context.switch_target(slot)?, &self.player)?;
+        context.switch_target(slot)?;
         // `Cmd_switchoutabilities` cures the leaving member before it returns
         // to its party record (`battle_script_commands.c:9590`-`:9603`). A
         // fainted member leaving for a forced replacement is already healthy.
@@ -1773,7 +1757,6 @@ impl Battle {
         self.enemy.clear_battle_scratch();
         context.switch_active(&mut self.enemy, slot)?;
         self.enemy.clear_battle_scratch();
-        self.enemy_reward_settled = false;
         // The departing member's own copy went with its scratch; the player's
         // battler is the only other holder, and `context` still borrows
         // `self.kind`.
@@ -1881,7 +1864,7 @@ impl Battle {
                 // the self-hit lands (`data/battle_scripts_1.s:3802`).
                 self.cancel_multi_turn_moves(player_is_attacker);
                 self.apply_self_hit(player_is_attacker, false, move_id, rng, events)?;
-                self.record_confusion_self_hit(player_is_attacker);
+                self.finish_confusion_self_hit(player_is_attacker, events);
                 return Ok(());
             }
         }
@@ -1898,7 +1881,7 @@ impl Battle {
                 by_player: player_is_attacker,
                 move_id,
             });
-            self.record_cancelled_move(player_is_attacker, move_id)?;
+            self.finish_cancelled_move(player_is_attacker, move_id, events)?;
             return Ok(());
         }
         // `CANCELER_IN_LOVE` follows paralysis and precedes the thaw
@@ -1950,7 +1933,7 @@ impl Battle {
                 by_player: player_is_attacker,
                 move_id,
             });
-            self.record_cancelled_move(player_is_attacker, move_id)?;
+            self.finish_cancelled_move(player_is_attacker, move_id, events)?;
             return Ok(());
         }
         match self.spend_pp_or_abort(player_is_attacker, move_id, slot, obeys, rng, events)? {
@@ -2010,7 +1993,7 @@ impl Battle {
                     by_player: player_is_attacker,
                     move_id,
                 });
-                self.record_cancelled_move(player_is_attacker, move_id)?;
+                self.finish_cancelled_move(player_is_attacker, move_id, events)?;
                 Ok(None)
             }
             FreezeCanceller::ThawsWithMove => Ok(Some(true)),
@@ -2040,7 +2023,7 @@ impl Battle {
             by_player: player_is_attacker,
             move_id,
         });
-        self.record_cancelled_move(player_is_attacker, move_id)?;
+        self.finish_cancelled_move(player_is_attacker, move_id, events)?;
         Ok(true)
     }
 
@@ -2096,7 +2079,7 @@ impl Battle {
             by_player: player_is_attacker,
             move_id,
         });
-        self.record_cancelled_move(player_is_attacker, move_id)?;
+        self.finish_cancelled_move(player_is_attacker, move_id, events)?;
         Ok(true)
     }
 
@@ -2129,7 +2112,7 @@ impl Battle {
                     by_player: player_is_attacker,
                     move_id,
                 });
-                self.record_cancelled_move(player_is_attacker, move_id)?;
+                self.finish_cancelled_move(player_is_attacker, move_id, events)?;
                 Ok(true)
             }
             SleepTick::WokeUp => {
@@ -2196,7 +2179,7 @@ impl Battle {
                         by_player: player_is_attacker,
                         move_id,
                     });
-                    self.record_cancelled_move(player_is_attacker, move_id)?;
+                    self.finish_cancelled_move(player_is_attacker, move_id, events)?;
                     return Ok(Admission::Ended);
                 }
             }
@@ -2255,7 +2238,7 @@ impl Battle {
             crate::obedience::Obedience::Obeys => Ok(Admission::Proceed),
             crate::obedience::Obedience::Loafs(message) => {
                 events.push(BattleEvent::Disobeyed { message });
-                self.record_cancelled_move(true, move_id)?;
+                self.finish_cancelled_move(true, move_id, events)?;
                 Ok(Admission::Ended)
             }
             crate::obedience::Obedience::UsesInstead { slot } => {
@@ -2273,12 +2256,12 @@ impl Battle {
                 self.player.set_status1(asleep);
                 self.cancel_multi_turn_moves(true);
                 events.push(BattleEvent::DisobedientNap);
-                self.record_cancelled_move(true, move_id)?;
+                self.finish_cancelled_move(true, move_id, events)?;
                 Ok(Admission::Ended)
             }
             crate::obedience::Obedience::HurtsItself => {
                 self.apply_self_hit(true, true, move_id, rng, events)?;
-                self.record_confusion_self_hit(true);
+                self.finish_confusion_self_hit(true, events);
                 Ok(Admission::Ended)
             }
         }
@@ -2326,6 +2309,10 @@ impl Battle {
             EnemyAction::Switch(slot) => {
                 self.acted_this_turn[1] = true;
                 self.switch_enemy_to(slot, events)?;
+                // `BattleScript_ActionSwitch` runs the immunity case after
+                // `switchineffects`, which queues a Trace copy but does not
+                // drain it (`data/battle_scripts_1.s:3103`-`:3121`).
+                self.apply_move_end_immunity(events);
                 self.resolve_trace_queue(events);
                 Ok(())
             }
@@ -2437,7 +2424,6 @@ mod tests {
             acted_this_turn: [false; 2],
             pending_entry_events: Vec::new(),
             end_turn_cleanup_pending: false,
-            enemy_reward_settled: false,
             player_obedience: None,
         };
         (battle, player_max_hp, player_move_max_pp)

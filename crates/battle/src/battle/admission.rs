@@ -1,10 +1,8 @@
-//! Participant admission ahead of constructor RNG, and again for an enemy
-//! Trace holder's return from the bench (`trace::ensure_trace_reentry_admissible`).
+//! Participant admission ahead of constructor RNG.
 
 use super::BattlePokemon;
 use crate::dex::Dex;
 use crate::error::BattleError;
-use crate::status1::Status1;
 use assets::{AbilityId, SpeciesId};
 
 /// Whether admission refuses `ability` whatever its holder's status or volatiles.
@@ -16,34 +14,22 @@ const fn always_refused(ability: AbilityId) -> bool {
 }
 
 /// Refuses a participant whose ability interaction the turn engine does not model:
-/// the move-end immunity cure (`battle_util.c:2873-2951`, which cures a Water Veil burn, a Magma Armor
-/// freeze, an Immunity poisoning, and wakes an Insomnia or Vital Spirit sleeper),
-/// Intimidate's entry and switch-in Attack drop (`:2559-2564`, `:3003-3016`, `:3074-3088`),
-/// or the switch-in weather setters
+/// Intimidate's entry and switch-in Attack drop (`battle_util.c:2559-2564`,
+/// `:3003-3016`, `:3074-3088`), or the switch-in weather setters
 /// Drizzle, Sand Stream, and Drought (`:2532-2558`), whose weather lifecycle is unmodelled.
 /// A seeded Liquid Ooze holder is refused too: the inverted drain
-/// (`data/battle_scripts_1.s:3275`-`:3276`) is unmodelled. So is an
-/// infatuated Oblivious holder, whose move-end cure (`battle_util.c:2923`-
-/// `:2941`) is unmodelled.
+/// (`data/battle_scripts_1.s:3275`-`:3276`) is unmodelled.
+///
+/// A status or volatile that the holder's ability forbids is admitted: the
+/// move-end immunity pass cures it (`battle_util.c:2873-2951`).
 ///
 /// # Errors
 ///
 /// Returns [`BattleError::UnportedAbilityInteraction`] for any refused combination.
 pub fn ensure_participant_admissible(participant: &BattlePokemon) -> Result<(), BattleError> {
     let ability = participant.ability();
-    let status = participant.status1();
-    let confused = participant.volatiles().confused();
-    let seeded = participant.volatiles().seeded();
-    let infatuated = participant.volatiles().infatuated();
     let unported_interaction = match ability {
-        AbilityId::LIMBER => status == Status1::Paralysed,
-        AbilityId::IMMUNITY => status.is_poisoned_any(),
-        AbilityId::WATER_VEIL => status == Status1::Burned,
-        AbilityId::MAGMA_ARMOR => status == Status1::Frozen,
-        AbilityId::OWN_TEMPO => confused,
-        AbilityId::OBLIVIOUS => infatuated,
-        AbilityId::LIQUID_OOZE => seeded,
-        AbilityId::INSOMNIA | AbilityId::VITAL_SPIRIT => status.is_asleep(),
+        AbilityId::LIQUID_OOZE => participant.volatiles().seeded(),
         _ => always_refused(ability),
     };
     if unported_interaction {

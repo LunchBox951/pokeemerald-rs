@@ -92,6 +92,8 @@ mod stat_changes;
 mod static_contact;
 #[path = "turn_engine/status_ability_matrix.rs"]
 mod status_ability_matrix;
+#[path = "turn_engine/status_immunity.rs"]
+mod status_immunity;
 #[path = "turn_engine/thaw_hit.rs"]
 mod thaw_hit;
 #[path = "turn_engine/trace.rs"]

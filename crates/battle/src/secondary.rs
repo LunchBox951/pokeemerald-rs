@@ -26,6 +26,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::leech_seed::is_leech_seed_effect;
 use crate::pokemon::BattlePokemon;
+use crate::status_immunity::cures_primary_status;
 
 /// Move effect shared by Poison Sting, Smog, Sludge, and Sludge Bomb.
 pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect::POISON_HIT;
@@ -233,10 +234,16 @@ fn burn_could_ever_land(defender: &BattlePokemon) -> bool {
 }
 
 /// Whether the defender's primary status, as read at an admission checkpoint,
-/// can still clear before the attacker's move executes.
+/// can still clear before the attacker's move executes: a sleeper or frozen
+/// defender can clear it on its own earlier action, and a defender whose
+/// ability forbids its status has it cured at that action's move end
+/// ([`cures_primary_status`]).
 fn status_may_clear(defender: &BattlePokemon) -> bool {
     let status = defender.status1();
-    status.is_healthy() || status.is_asleep() || status.is_frozen()
+    status.is_healthy()
+        || status.is_asleep()
+        || status.is_frozen()
+        || cures_primary_status(defender)
 }
 
 /// `MOVE_EFFECT_SPD_MINUS_1`'s silent guards on a secondary landing: Clear
@@ -279,8 +286,9 @@ fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
 /// ([`crate::status1::tick_sleep`], including Early Bird's two-turn
 /// decrement) before this attacker's move executes, and a frozen defender can
 /// thaw on its own canceller draw ([`crate::status1::draw_freeze_canceller`])
-/// the same way. Only a sleeper's or a frozen defender's status is skipped
-/// here, because no other primary status can clear mid-turn.
+/// the same way. An ability-forbidden status is cured at an earlier move's
+/// end ([`cures_primary_status`]). Only those statuses are skipped here,
+/// because no other primary status can clear mid-turn.
 #[must_use]
 fn poison_can_land_ignoring_status(move_type: Type, defender: &BattlePokemon) -> bool {
     let types = defender.types();
@@ -462,8 +470,7 @@ pub fn ensure_admissible(
             .move_type
             .battle_type()
             .ok_or(BattleError::UnsupportedMoveType(move_id))?;
-        let status_can_clear = defender.status1().is_asleep() || defender.status1().is_frozen();
-        let could_land = if status_can_clear {
+        let could_land = if status_may_clear(defender) {
             poison_can_land_ignoring_status(move_type, defender)
         } else {
             poison_can_land(move_type, defender)

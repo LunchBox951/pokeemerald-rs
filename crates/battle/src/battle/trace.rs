@@ -7,12 +7,11 @@
 //! branch draws from `Random()` to pick a target (`battle_util.c:3031`), so a
 //! singles copy never touches the RNG.
 //!
-//! A copy that would leave its holder with a status its new ability forbids is
-//! refused: at construction by [`ensure_copies_admissible`], and when a benched
-//! holder that gained a status on the field returns, by
-//! [`ensure_trace_reentry_admissible`]. Upstream cures that pairing at move end
-//! (`ABILITYEFFECT_IMMUNITY`, `battle_util.c:2873`-`:2951`), which the engine
-//! does not model.
+//! A copy that leaves its holder with a status or volatile its new ability
+//! forbids is admitted, as upstream plays it: the move-end immunity pass cures
+//! it (`ABILITYEFFECT_IMMUNITY`, `battle_util.c:2873`-`:2951`;
+//! `Battle::apply_move_end_immunity`). A copy never runs that pass itself, so
+//! the pairing stands until the next move ends.
 
 use assets::AbilityId;
 
@@ -57,12 +56,9 @@ impl Battle {
         while self.settle_next_trace(events) {}
     }
 
-    /// Every copy this drain makes is already admitted, so it checks no
-    /// status: the constructors screen each opening and replacement holder
-    /// ([`ensure_copies_admissible`]), a player holder cannot gain a status
-    /// between its entry and its copy, and an enemy holder returning from the
-    /// bench is screened by [`ensure_trace_reentry_admissible`] before it
-    /// enters.
+    /// Every copy this drain makes is already admitted, so it checks nothing:
+    /// the constructors screen each opening and replacement holder against the
+    /// abilities it can copy ([`ensure_copies_admissible`]).
     fn settle_next_trace(&mut self, events: &mut Vec<BattleEvent>) -> bool {
         for holder in [BattlerSide::Player, BattlerSide::Enemy] {
             let (holder_mon, source) = match holder {
@@ -96,9 +92,9 @@ impl Battle {
 /// opposing side's members carry natively, or, once an opposing Trace holder
 /// has copied from the holder's own side, one its own side's members carry.
 /// Each native Trace holder is checked as if it held each ability it can
-/// reach, both as a participant (a status or volatile that the copied ability
-/// cures at move end) and, for the enemy side, as an attacker or defender of
-/// the enemy's PP-positive moves (Serene Grace). Every ability a copy can
+/// reach, both as a participant (a seeded Liquid Ooze copy) and, for the enemy
+/// side, as an attacker or defender of the enemy's PP-positive moves
+/// (Serene Grace). Every ability a copy can
 /// yield was already admitted on its native holder, because the constructors
 /// check every participant first.
 ///
@@ -147,32 +143,6 @@ pub(super) fn ensure_copies_admissible(
         }
     }
     Ok(())
-}
-
-/// Refuses a switch that would send in a native Trace holder whose kept
-/// status the opposing battler's current ability forbids. Upstream cures that
-/// pairing at move end (`battle_util.c:2873`-`:2951`), which is unmodelled;
-/// a copy that stays queued is screened when it happens.
-///
-/// # Errors
-///
-/// Returns [`BattleError::UnportedAbilityInteraction`] for the refused
-/// pairing.
-pub(super) fn ensure_trace_reentry_admissible(
-    incoming: &BattlePokemon,
-    opponent: &BattlePokemon,
-) -> Result<(), BattleError> {
-    let copied = opponent.ability();
-    if incoming.native_ability() != AbilityId::TRACE
-        || opponent.is_fainted()
-        || copied == AbilityId::NONE
-    {
-        return Ok(());
-    }
-    let mut entering = incoming.clone();
-    entering.clear_battle_scratch();
-    entering.trace_ability(copied);
-    ensure_participant_admissible(&entering)
 }
 
 fn has_trace_holder(side: &[&BattlePokemon]) -> bool {
