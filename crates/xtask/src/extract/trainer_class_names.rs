@@ -6,14 +6,18 @@
 //! [`assets::TrainerClass`], as the charmap bytes `tools/preproc` gives `_()`
 //! (glyph tokens such as `{PKMN}` stay their charmap bytes) followed by the
 //! `EOS` it appends. `include/constants/trainers.h` supplies the class index of
-//! each designator, and the table must cover indices `0..66` exactly once, so a
-//! class added or renumbered upstream fails loudly instead of shifting a name.
+//! each designator, and the table must cover indices `0..66` exactly once, each
+//! define holding the index of the [`assets::TrainerClass`] constant of its
+//! name, so a class added, renumbered, or swapped upstream fails loudly instead
+//! of shifting a name.
 //! Nothing is compiled or executed.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use assets::{TrainerClassNameTable, TRAINER_CLASS_NAME_COUNT, TRAINER_CLASS_NAME_ROW_BYTES};
+use assets::{
+    TrainerClass, TrainerClassNameTable, TRAINER_CLASS_NAME_COUNT, TRAINER_CLASS_NAME_ROW_BYTES,
+};
 use pack_format::PackWriter;
 
 use super::text_source::{ident, is_punct, string_args, tokenize, Charmap, Fault, Tok, Token};
@@ -26,6 +30,83 @@ const NAMES_PATH: &str = "src/data/text/trainer_class_names.h";
 const TABLE_SYMBOL: &str = "gTrainerClassNames";
 const CLASS_PREFIX: &str = "TRAINER_CLASS_";
 const EOS: u8 = 0xFF;
+
+/// Each `TRAINER_CLASS_*` symbol beside the stable Rust identity it must
+/// equal, spelled once so the name and the constant cannot disagree.
+macro_rules! class_symbols {
+    ($($name:ident),+ $(,)?) => {
+        [$((concat!("TRAINER_CLASS_", stringify!($name)), TrainerClass::$name)),+]
+    };
+}
+
+const CLASS_SYMBOLS: [(&str, TrainerClass); TRAINER_CLASS_NAME_COUNT] = class_symbols!(
+    PKMN_TRAINER_1,
+    PKMN_TRAINER_2,
+    HIKER,
+    TEAM_AQUA,
+    PKMN_BREEDER,
+    COOLTRAINER,
+    BIRD_KEEPER,
+    COLLECTOR,
+    SWIMMER_M,
+    TEAM_MAGMA,
+    EXPERT,
+    AQUA_ADMIN,
+    BLACK_BELT,
+    AQUA_LEADER,
+    HEX_MANIAC,
+    AROMA_LADY,
+    RUIN_MANIAC,
+    INTERVIEWER,
+    TUBER_F,
+    TUBER_M,
+    LADY,
+    BEAUTY,
+    RICH_BOY,
+    POKEMANIAC,
+    GUITARIST,
+    KINDLER,
+    CAMPER,
+    PICNICKER,
+    BUG_MANIAC,
+    PSYCHIC,
+    GENTLEMAN,
+    ELITE_FOUR,
+    LEADER,
+    SCHOOL_KID,
+    SR_AND_JR,
+    WINSTRATE,
+    POKEFAN,
+    YOUNGSTER,
+    CHAMPION,
+    FISHERMAN,
+    TRIATHLETE,
+    DRAGON_TAMER,
+    NINJA_BOY,
+    BATTLE_GIRL,
+    PARASOL_LADY,
+    SWIMMER_F,
+    TWINS,
+    SAILOR,
+    COOLTRAINER_2,
+    MAGMA_ADMIN,
+    RIVAL,
+    BUG_CATCHER,
+    PKMN_RANGER,
+    MAGMA_LEADER,
+    LASS,
+    YOUNG_COUPLE,
+    OLD_COUPLE,
+    SIS_AND_BRO,
+    SALON_MAIDEN,
+    DOME_ACE,
+    PALACE_MAVEN,
+    ARENA_TYCOON,
+    FACTORY_HEAD,
+    PIKE_QUEEN,
+    PYRAMID_KING,
+    RS_PROTAG,
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum File {
@@ -89,7 +170,9 @@ fn number(text: &str) -> Option<usize> {
 }
 
 /// Every `TRAINER_CLASS_*` define and its index. The set must be exactly the
-/// indices `0..66`, one define each, so an added or renumbered class is refused.
+/// indices `0..66`, one define each, and each define must equal the
+/// [`TrainerClass`] constant of its name, so an added, renumbered, or swapped
+/// class is refused.
 fn parse_class_indices(text: &str) -> Result<HashMap<String, usize>, Fault> {
     let mut out: HashMap<String, usize> = HashMap::new();
     let mut taken = [false; TRAINER_CLASS_NAME_COUNT];
@@ -122,6 +205,19 @@ fn parse_class_indices(text: &str) -> Result<HashMap<String, usize>, Fault> {
         }
         if out.insert(name.to_owned(), value).is_some() {
             return Err(Fault::new(line, format!("`{name}` is defined twice")));
+        }
+        let (_, class) = CLASS_SYMBOLS
+            .iter()
+            .find(|(symbol, _)| *symbol == name)
+            .ok_or_else(|| Fault::new(line, format!("`{name}` names no `TrainerClass`")))?;
+        if usize::from(class.index()) != value {
+            return Err(Fault::new(
+                line,
+                format!(
+                    "`{name}` is {value}, but its `TrainerClass` identity is {}",
+                    class.index()
+                ),
+            ));
         }
     }
     if out.len() != TRAINER_CLASS_NAME_COUNT {

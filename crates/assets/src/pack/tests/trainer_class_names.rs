@@ -13,9 +13,11 @@ const RIVAL: [u8; 11] = [
     0x53, 0x54, 0x00, 0xCE, 0xCC, 0xBB, 0xC3, 0xC8, 0xBF, 0xCC, 0xFF,
 ];
 
-/// A distinct stream per ID, so a lookup that returns the wrong record fails.
+/// A distinct stream per ID, so a lookup that returns the wrong record fails:
+/// the ID's two decimal digits as the charmap digit glyphs `0xA1..=0xAA`.
 fn stream(id: u16) -> Vec<u8> {
-    vec![0xA1 + u8::try_from(id % 60).unwrap(), 0x00, 0xFF]
+    let digit = |d: u16| 0xA1 + u8::try_from(d).unwrap();
+    vec![digit(id / 10), digit(id % 10), 0xFF]
 }
 
 fn streams() -> Vec<Vec<u8>> {
@@ -65,6 +67,12 @@ fn the_inventory_is_one_row_of_thirteen_bytes_per_class() {
 #[test]
 fn canonical_bytes_decode_and_reencode_identically() {
     let streams = streams();
+    let distinct: std::collections::HashSet<&Vec<u8>> = streams.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        streams.len(),
+        "fixture streams must be distinct"
+    );
     let bytes = canonical(&streams);
     assert_eq!(bytes.len(), 8 + 66 * (2 + 4 + 3));
     let table = TrainerClassNameTable::decode(&bytes).unwrap();
@@ -177,6 +185,15 @@ fn header_and_record_faults_are_refused() {
     assert_eq!(
         TrainerClassNameTable::decode(&bad),
         Err(TrainerClassNameError::DuplicateId { id: 1 })
+    );
+    // Records 0 and 1 swapped whole, IDs and streams together: every ID is
+    // present once, but the wire order is not class-index order.
+    let mut bad = good.clone();
+    bad[8..26].rotate_left(9);
+    assert_eq!(bad[8..10], [1, 0]);
+    assert_eq!(
+        TrainerClassNameTable::decode(&bad),
+        Err(TrainerClassNameError::OutOfOrder { id: 1 })
     );
     let mut bad = good.clone();
     bad[10..14].copy_from_slice(&u32::MAX.to_le_bytes());

@@ -58,6 +58,11 @@ pub enum TrainerClassNameError {
         /// Offending ID.
         id: u16,
     },
+    /// A record is not at its class index in the wire order.
+    OutOfOrder {
+        /// The ID found where a lower or higher index belongs.
+        id: u16,
+    },
     /// A class has no record.
     MissingId {
         /// First absent ID.
@@ -101,6 +106,7 @@ impl fmt::Display for TrainerClassNameError {
             Self::TrailingBytes => write!(f, "bytes follow the last record"),
             Self::IdOutOfRange { id } => write!(f, "id {id} is out of range"),
             Self::DuplicateId { id } => write!(f, "id {id} is duplicated"),
+            Self::OutOfOrder { id } => write!(f, "id {id} is out of class-index order"),
             Self::MissingId { id } => write!(f, "id {id} is missing"),
             Self::MalformedString { id, detail } => write!(f, "id {id}: {detail}"),
             Self::NameTooLong { id, len } => write!(
@@ -227,7 +233,18 @@ impl<'a> TrainerClassNameTable<'a> {
         if reader.pos != bytes.len() {
             return Err(TrainerClassNameError::TrailingBytes);
         }
-        Self::from_entries(records)
+        // IDs are validated first so a duplicate or out-of-range ID keeps its
+        // own error; only then is the wire order checked against the index.
+        let ids: Vec<u16> = records.iter().map(|&(id, _)| id).collect();
+        let table = Self::from_entries(records)?;
+        if let Some(&id) = ids
+            .iter()
+            .zip(0u16..)
+            .find_map(|(id, at)| (*id != at).then_some(id))
+        {
+            return Err(TrainerClassNameError::OutOfOrder { id });
+        }
+        Ok(table)
     }
 
     /// The canonical encoding, independent of construction order.
@@ -261,8 +278,8 @@ impl AssetPack {
     ///
     /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
     /// non-raw entry; [`PackError::TrainerClassNameDecode`] when the payload is
-    /// truncated, malformed, sparse, duplicated, out of range, over-wide, or
-    /// has an unterminated string.
+    /// truncated, malformed, sparse, duplicated, out of range, out of
+    /// class-index order, over-wide, or has an unterminated string.
     pub fn trainer_class_names(&self) -> Result<TrainerClassNameTable<'_>, PackError> {
         let bytes = self.raw(TABLE_PACK_ID)?;
         TrainerClassNameTable::decode(bytes).map_err(|source| PackError::TrainerClassNameDecode {

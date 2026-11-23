@@ -24,8 +24,10 @@ const CHARMAP: &str = "\
 PKMN = 53 54
 ";
 
+/// The real upstream symbol of each class, so the fixture header agrees with
+/// the stable [`TrainerClass`] identities.
 fn symbol(index: usize) -> String {
-    format!("TRAINER_CLASS_C{index:02}")
+    CLASS_SYMBOLS[index].0.to_owned()
 }
 
 /// The body each class carries: a distinct letter, so a swapped row fails.
@@ -148,7 +150,7 @@ fn a_duplicate_or_unknown_row_designator_is_refused() {
     assert_eq!(file, File::Names);
     assert!(fault_.detail.contains("appears twice"), "{fault_:?}");
 
-    let text = names(&in_order()).replace("TRAINER_CLASS_C09]", "TRAINER_CLASS_NOPE]");
+    let text = names(&in_order()).replace(&format!("{}]", symbol(9)), "TRAINER_CLASS_NOPE]");
     let (_, fault_) = fault(build_with(&constants(&in_order()), &text));
     assert!(fault_.detail.contains("not a trainer class"), "{fault_:?}");
 }
@@ -178,8 +180,8 @@ fn a_changed_added_or_repeated_class_define_is_refused() {
 
     // An expression instead of a literal.
     let expr = base.replace(
-        "#define TRAINER_CLASS_C04  0x4\n",
-        "#define TRAINER_CLASS_C04 (0x3 + 1)\n",
+        "#define TRAINER_CLASS_PKMN_BREEDER  0x4\n",
+        "#define TRAINER_CLASS_PKMN_BREEDER (0x3 + 1)\n",
     );
     let (_, fault_) = fault(build_with(&expr, &names(&in_order())));
     assert!(fault_.detail.contains("integer literal"), "{fault_:?}");
@@ -187,19 +189,46 @@ fn a_changed_added_or_repeated_class_define_is_refused() {
 }
 
 #[test]
-fn a_swapped_define_moves_the_name_with_its_index() {
-    // Swapping the header's values for C05 and C06 must swap their streams.
+fn a_swapped_or_renamed_define_is_refused_against_the_rust_identity() {
+    // Swapping LADY and BEAUTY keeps 0..66 covered once each, but `LADY`
+    // would then name index 21 while `TrainerClass::LADY` stays 20.
+    assert_eq!(TrainerClass::LADY.index(), 20);
+    assert_eq!(TrainerClass::BEAUTY.index(), 21);
     let swapped = constants_with(&in_order(), |index| match index {
-        5 => 6,
-        6 => 5,
+        20 => 21,
+        21 => 20,
         other => other,
     });
-    let bytes = build_with(&swapped, &names(&in_order())).unwrap();
-    let table = TrainerClassNameTable::decode(&bytes).unwrap();
-    // The row spelled under C05 now sits at index 6, and the reverse.
-    assert_eq!(table.name(TrainerClass(6)), Some(&expected(5)[..]));
-    assert_eq!(table.name(TrainerClass(5)), Some(&expected(6)[..]));
-    assert_eq!(table.name(TrainerClass(7)), Some(&expected(7)[..]));
+    let (file, fault_) = fault(build_with(&swapped, &names(&in_order())));
+    assert_eq!(file, File::Constants);
+    assert!(
+        fault_.detail.contains("`TRAINER_CLASS_LADY` is 21")
+            && fault_.detail.contains("identity is 20"),
+        "{fault_:?}"
+    );
+    assert!(fault_.line > 0);
+
+    // A define renamed to a symbol no `TrainerClass` constant carries.
+    let renamed = constants(&in_order()).replace(
+        "#define TRAINER_CLASS_LASS ",
+        "#define TRAINER_CLASS_LASSIE ",
+    );
+    let (file, fault_) = fault(build_with(&renamed, &names(&in_order())));
+    assert_eq!(file, File::Constants);
+    assert!(
+        fault_.detail.contains("`TRAINER_CLASS_LASSIE` names no"),
+        "{fault_:?}"
+    );
+}
+
+#[test]
+fn every_class_symbol_spells_its_rust_identity_in_index_order() {
+    for (index, (symbol, class)) in CLASS_SYMBOLS.iter().enumerate() {
+        assert_eq!(usize::from(class.index()), index, "{symbol}");
+        assert!(symbol.starts_with(CLASS_PREFIX), "{symbol}");
+    }
+    assert_eq!(CLASS_SYMBOLS[20].0, "TRAINER_CLASS_LADY");
+    assert_eq!(CLASS_SYMBOLS[65].0, "TRAINER_CLASS_RS_PROTAG");
 }
 
 #[test]
@@ -229,18 +258,18 @@ fn a_changed_row_width_or_second_initializer_is_refused() {
 fn malformed_rows_and_trailing_text_are_refused() {
     for (from, to, needle) in [
         (
-            "_(\"d\"),\n    [TRAINER_CLASS_C04]",
-            "_(\"d\")\n    [TRAINER_CLASS_C04]",
+            "_(\"d\"),\n    [TRAINER_CLASS_PKMN_BREEDER]",
+            "_(\"d\")\n    [TRAINER_CLASS_PKMN_BREEDER]",
             "comma",
         ),
         (
-            "[TRAINER_CLASS_C03] = _(",
-            "[TRAINER_CLASS_C03] = X(",
+            "[TRAINER_CLASS_TEAM_AQUA] = _(",
+            "[TRAINER_CLASS_TEAM_AQUA] = X(",
             "unexpected shape",
         ),
         (
-            "[TRAINER_CLASS_C03] = _(",
-            "[TRAINER_CLASS_C03] _(",
+            "[TRAINER_CLASS_TEAM_AQUA] = _(",
+            "[TRAINER_CLASS_TEAM_AQUA] _(",
             "unexpected shape",
         ),
         ("};\n", "};\nint tail;\n", "after the class-name table"),
