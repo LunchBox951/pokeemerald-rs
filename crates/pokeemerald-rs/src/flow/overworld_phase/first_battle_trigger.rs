@@ -9,6 +9,7 @@ use engine::overworld::MapRuntime;
 use platform::ButtonState;
 
 use crate::flow::battle_finalize::finalize_battle_turn;
+use crate::flow::battle_sequence::TurnPolicy;
 use crate::flow::first_battle;
 use crate::flow::lead_screen::ensure_lead_can_battle;
 
@@ -126,11 +127,15 @@ impl OverworldPhase {
         };
         let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
         // The start consumes its copy; the lent original returns on rejection.
-        match first_battle::start_first_battle(lead.clone(), player_trainer_id, &mut self.rng) {
+        let mut staged_rng = self.rng.clone();
+        match first_battle::start_first_battle(lead.clone(), player_trainer_id, &mut staged_rng) {
             Ok(battle) => {
                 let battle = battle.with_player_obedience(self.player_obedience());
-                match self.open_wild_battle_text(&battle) {
-                    Ok(sequence) => self.battle_sequence = sequence,
+                match self.open_wild_battle_text(&battle, TurnPolicy::FirstUsableMove, &[], false) {
+                    Ok(sequence) => {
+                        self.battle_sequence = sequence;
+                        self.rng = staged_rng;
+                    }
                     Err(error) => {
                         eprintln!("first battle: can't play its text ({error})");
                         self.restore_lead_battler(lead);
@@ -139,6 +144,9 @@ impl OverworldPhase {
                     }
                 }
                 self.active_battle = Some(ActiveBattle::First(battle));
+                // `CB2_StartFirstBattle` counts the start once its transition is done
+                // (`pokeemerald/src/battle_setup.c:943-944`); a rejected start returned above.
+                self.count_wild_battle_start();
                 // The first battle restarts wild-encounter immunity like any battle
                 // (`pokeemerald/src/battle_setup.c:941`).
                 self.wild.restart_immunity_steps();

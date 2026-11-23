@@ -66,13 +66,6 @@ pub enum BattleError {
     /// draws and before that move is announced or spends PP.
     UnportedAbilityInteraction(AbilityId),
 
-    /// A traded Mew or Deoxys above its obedience limit, reported before the
-    /// first obedience draw: upstream's fateful-encounter check
-    /// (`IsBattlerModernFatefulEncounter`, `src/battle_util.c:3913`-`:3934`)
-    /// needs record data the port does not carry. Every other disobedience
-    /// outcome is modelled.
-    UnportedDisobedience,
-
     /// A participant holds an item whose in-battle effect no pipeline models,
     /// reported by the pre-turn and constructor screens before any draw.
     UnsupportedHeldItem(ItemId),
@@ -178,7 +171,6 @@ impl fmt::Display for BattleError {
                 "move `{}` produced an unsupported secondary effect",
                 id.0
             ),
-            Self::UnportedDisobedience => write!(f, "unmodelled disobedience outcome"),
             Self::UnportedAbilityInteraction(id) => write!(
                 f,
                 "ability `{}` alters this battle in an unmodelled way",

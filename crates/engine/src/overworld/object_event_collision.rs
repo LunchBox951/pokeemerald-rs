@@ -8,6 +8,7 @@
 
 use crate::overworld::collision::{directionally_impassable, elevation_mismatch};
 use crate::overworld::direction::Direction;
+use crate::overworld::map_runtime::ConnectedMapData;
 use crate::overworld::metatile_behavior::MB_NORMAL;
 use crate::overworld::player::TilePos;
 
@@ -72,14 +73,15 @@ impl Occupant {
 
 /// Returns what refuses `mover` stepping one tile toward `direction`, or `None` if nothing does.
 ///
-/// Terrain comes from `terrain`, an unbound [`MapRuntime`](crate::overworld::MapRuntime): a
-/// tile off the decoded grid is impassable, since an object never walks onto a connected map's
-/// cells (`GetMapBorderIdAt` would accept the connected map's backup band, `fieldmap.c:522-557`,
-/// which no checkpoint movement range reaches). Elevation and standing-tile edges are the
-/// mover's own. `occupants` are the other objects; the mover is not among them.
+/// Terrain comes from `terrain`, an unbound [`MapRuntime`](crate::overworld::MapRuntime), and
+/// from `maps` for the neighbours' rows the backup layout keeps around it
+/// ([`MapRuntime::metatile_cell_in_band`](crate::overworld::MapRuntime::metatile_cell_in_band)):
+/// a tile outside both is impassable. Elevation and standing-tile edges are the mover's own.
+/// `occupants` are the other objects; the mover is not among them.
 #[must_use]
 pub fn collision_in_direction(
     terrain: &crate::overworld::MapRuntime<'_>,
+    maps: &dyn ConnectedMapData,
     mover: &ObjectEventState,
     range: Option<MovementRange>,
     direction: Direction,
@@ -95,10 +97,14 @@ pub fn collision_in_direction(
     if range.is_some_and(|range| !range.contains(to)) {
         return Some(NpcCollision::OutsideRange);
     }
-    let Some(cell) = terrain.metatile_cell(x, y) else {
+    let Some(cell) = terrain.metatile_cell_in_band(x, y, maps) else {
         return Some(NpcCollision::Impassable);
     };
-    let behavior_at = |(x, y): TilePos| terrain.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
+    let behavior_at = |(x, y): TilePos| {
+        terrain
+            .metatile_behavior_in_band(x, y, maps)
+            .unwrap_or(MB_NORMAL)
+    };
     if cell.collision != 0
         || directionally_impassable(behavior_at(from), behavior_at(to), direction)
     {
@@ -151,6 +157,7 @@ impl ObjectEventCollection {
             });
         collision_in_direction(
             &context.terrain,
+            context.connected_maps,
             &self.entries[mover_index].state,
             range,
             direction,
