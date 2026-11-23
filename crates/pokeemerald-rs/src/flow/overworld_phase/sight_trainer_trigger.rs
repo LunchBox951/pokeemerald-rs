@@ -507,10 +507,11 @@ impl OverworldPhase {
         // module docs, "Nothing is built before the whole party is
         // screened").
         // The pre-flight refuses a trainer this cone cannot fight before the saved party is
-        // inspected, so the per-frame retry of a refused cone logs nothing and draws nothing.
+        // inspected, and a healthy saved member that cannot join refuses the fight next. The
+        // per-frame retry of a refused cone logs nothing and draws nothing either way.
         let started =
             npc_trainer_battle::preflight_npc_trainer_battle(&lead, trainer_id).and_then(|()| {
-                let (player_reserves, reserves) = self.trainer_party_reserves(trainer_id);
+                let (player_reserves, reserves) = self.trainer_party_reserves(trainer_id)?;
                 npc_trainer_battle::start_npc_trainer_battle_with_reserves(
                     lead,
                     player_reserves,
@@ -540,7 +541,7 @@ impl OverworldPhase {
                     eprintln!(
                         "sight trainer: can't start against trainer {trainer_id:?} ({error}) -- \
                          refused before any draw (a held-item party or lead, an unimplemented \
-                         moveset, or a fainted lead)"
+                         moveset, a fainted lead, or a healthy saved member that cannot join)"
                     );
                 }
                 SightTrainerOutcome::Refused

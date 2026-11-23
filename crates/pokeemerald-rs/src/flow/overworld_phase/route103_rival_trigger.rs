@@ -369,8 +369,16 @@ impl OverworldPhase {
         };
         let trainer = route103_rival::route103_rival_for(rival, starter);
         // The saved party behind the lead goes in with it; the start consumes the copies, and
-        // the lent originals return through `file_trainer_party`.
-        let (player_reserves, reserves) = self.trainer_party_reserves(trainer);
+        // the lent originals return through `file_trainer_party`. A healthy saved member that
+        // cannot join refuses the fight here, before any draw.
+        let (player_reserves, reserves) = match self.trainer_party_reserves(trainer) {
+            Ok(party) => party,
+            Err(error) => {
+                eprintln!("route 103 rival: can't start ({error})");
+                self.restore_lead_battler(lead);
+                return;
+            }
+        };
         match npc_trainer_battle::start_npc_trainer_battle_with_reserves(
             lead.clone(),
             player_reserves,

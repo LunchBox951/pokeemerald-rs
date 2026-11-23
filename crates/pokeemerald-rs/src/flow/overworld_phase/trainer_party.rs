@@ -1,25 +1,26 @@
 //! The saved party behind a trainer battle's lead: the Route 103 rival and the sight
-//! trainers hand over the active member and every eligible saved reserve, and a finished
+//! trainers hand over the active member and every healthy saved reserve, and a finished
 //! fight files each member that entered back into its own saved slot.
 //!
 //! The roster, the per-slot owners and the reconciliation are the wild flow's
-//! ([`OverworldPhase::wild_reserve_owners`], [`OverworldPhase::file_battle_party`]), so a
+//! ([`OverworldPhase::saved_reserve_owners`], [`OverworldPhase::file_battle_party`]), so a
 //! reserve merges under the same secure-record and hidden-HP rules and members that never
 //! enter, eggs and undecodable records keep their saved bytes. What a trainer adds is the
 //! pre-flight against the trainer's own party for each reserve
-//! ([`npc_trainer_battle::ensure_reserve_can_enter`]), so a reserve the battle crate would
-//! refuse after the party's OT-id draws is left out beforehand instead.
+//! ([`npc_trainer_battle::ensure_reserve_can_enter`]).
 //!
-//! A [`battle::BattleOutcome::PlayerLost`] ends in a white-out only when no healthy saved
-//! member was left out of the roster: the battle reports the loss once its roster has
-//! fainted, and upstream's loss is the whole party's HP total reaching zero
-//! (`Cmd_checkteamslost`, `pokeemerald/src/battle_script_commands.c:3534-3564`).
+//! A trainer battle is refused, before any draw, while a saved member that upstream counts
+//! toward the party's HP total cannot join the roster
+//! ([`NpcTrainerBattleError::UnplayablePartyMember`]). A started battle's roster is
+//! therefore every member with HP, so its [`battle::BattleOutcome::PlayerLost`] is the
+//! whole party's HP total reaching zero (`Cmd_checkteamslost`,
+//! `pokeemerald/src/battle_script_commands.c:3534-3564`) and always ends in the white-out.
 
 use assets::trainers::TrainerId;
 use battle::{BattleOutcome, BattlePokemon, Dex};
 
 use crate::flow::battle_finalize::PartyBattleEnd;
-use crate::flow::npc_trainer_battle;
+use crate::flow::npc_trainer_battle::{self, NpcTrainerBattleError};
 use crate::party::LoadedLead;
 
 use super::OverworldPhase;
@@ -29,14 +30,9 @@ use super::OverworldPhase;
 /// `owners` holds one owner per [`battle::Battle::player_members`] position after the
 /// first, so position `i + 1` is `owners[i]`'s saved slot. A member that never enters keeps
 /// the owner's untouched record.
-///
-/// `unplayable_member_remains` is set when a saved member that upstream counts toward the
-/// party's HP total could not join the roster, so the battle's own exhaustion is not the
-/// party's.
 #[derive(Debug, Default)]
 pub(in crate::flow) struct PartyReserves {
     owners: Vec<LoadedLead>,
-    unplayable_member_remains: bool,
 }
 
 /// A finished trainer battle's party once filed into the save.
@@ -44,45 +40,46 @@ pub(in crate::flow) struct PartyReserves {
 pub(super) struct FiledParty {
     entered_owners: Vec<LoadedLead>,
     files_party: bool,
-    unplayable_member_remains: bool,
 }
 
 impl OverworldPhase {
-    /// The saved members other than the lead that can be sent out against `trainer`, with
-    /// the battlers lent for the battle in the same order. A reserve the trainer's party
-    /// cannot be fought with is left out and keeps its saved bytes.
+    /// Every healthy saved member other than the lead, as the reserves of a fight with
+    /// `trainer`, with the battlers lent for the battle in the same order. Draws nothing
+    /// and logs nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`NpcTrainerBattleError::UnplayablePartyMember`] when a saved member that counts
+    /// toward the party's HP total cannot join the roster: one
+    /// [`OverworldPhase::saved_reserve_owners`] reports, or one the trainer's party cannot
+    /// be fought with ([`npc_trainer_battle::ensure_reserve_can_enter`]).
     pub(super) fn trainer_party_reserves(
         &self,
         trainer: TrainerId,
-    ) -> (Vec<BattlePokemon>, PartyReserves) {
+    ) -> Result<(Vec<BattlePokemon>, PartyReserves), NpcTrainerBattleError> {
         let dex = Dex::new();
-        let (candidates, mut unplayable_member_remains) = self.wild_reserve_owners(&dex);
+        let (candidates, unplayable) = self.saved_reserve_owners(&dex);
+        if let Some(reason) = unplayable.into_iter().next() {
+            return Err(NpcTrainerBattleError::UnplayablePartyMember(reason));
+        }
         let mut owners = Vec::new();
         let mut lent = Vec::new();
         for mut owner in candidates {
-            if let Err(error) =
-                npc_trainer_battle::ensure_reserve_can_enter(trainer, owner.battler())
-            {
-                eprintln!(
-                    "trainer battle: slot {} can't enter the fight ({error}) -- left out",
-                    owner.slot()
-                );
-                unplayable_member_remains = true;
-                continue;
-            }
+            npc_trainer_battle::ensure_reserve_can_enter(trainer, owner.battler()).map_err(
+                |error| {
+                    NpcTrainerBattleError::UnplayablePartyMember(format!(
+                        "slot {} can't enter the fight ({error})",
+                        owner.slot()
+                    ))
+                },
+            )?;
             // Classified against its own record like the lead, so its award is boosted too.
             let record = *owner.record();
             let battler = owner.take_battler();
             lent.push(self.classified_against_record(Some(&record), battler));
             owners.push(owner);
         }
-        (
-            lent,
-            PartyReserves {
-                owners,
-                unplayable_member_remains,
-            },
-        )
+        Ok((lent, PartyReserves { owners }))
     }
 
     /// Files a finished trainer battle's party: the lead returns to its owner and each
@@ -96,11 +93,8 @@ impl OverworldPhase {
         let PartyBattleEnd {
             members, entered, ..
         } = end;
-        let PartyReserves {
-            owners,
-            unplayable_member_remains,
-        } = reserves;
-        let files_party = !owners.is_empty() || unplayable_member_remains;
+        let PartyReserves { owners } = reserves;
+        let files_party = !owners.is_empty();
         // The lead is filed into its saved slot whenever a party is saved, so a lone lead's
         // experience and PP reach the save like an entered reserve's. An unsaved party
         // (count 0) has no slot to file into.
@@ -110,7 +104,6 @@ impl OverworldPhase {
         FiledParty {
             entered_owners,
             files_party,
-            unplayable_member_remains,
         }
     }
 
@@ -125,9 +118,8 @@ impl OverworldPhase {
         let FiledParty {
             entered_owners,
             files_party,
-            unplayable_member_remains,
         } = filed;
-        if outcome == Some(BattleOutcome::PlayerLost) && !unplayable_member_remains {
+        if outcome == Some(BattleOutcome::PlayerLost) {
             self.white_out();
         } else if files_party {
             self.select_lead_after_wild_battle(&Dex::new(), entered_owners);

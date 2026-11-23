@@ -237,23 +237,35 @@ impl OverworldPhase {
 
     /// The saved members other than the lead that may be sent out, in slot order, each with
     /// its own owner, and whether a member that counts toward upstream's party HP total was
-    /// left out. Every slot is inspected, not only the stored count's prefix
-    /// (`SetBattlePartyIds` scans all six, `pokeemerald/src/battle_controllers.c:591-606`),
-    /// and an unsaved party (count 0) has no reserves. Left out, and so retained untouched:
-    /// eggs and Bad Eggs (a failed checksum is one), records that are empty, fainted
-    /// members, and the members that have HP but cannot join: valid records that do not
-    /// decode into a battler, and members the battle engine cannot play yet
-    /// ([`ensure_lead_can_battle`]).
+    /// left out, which is logged. The roster and the left-out members are
+    /// [`Self::saved_reserve_owners`]'s.
     pub(super) fn wild_reserve_owners(&self, dex: &Dex) -> (Vec<LoadedLead>, bool) {
+        let (owners, unplayable) = self.saved_reserve_owners(dex);
+        for reason in &unplayable {
+            eprintln!("battle reserve: {reason} -- left out");
+        }
+        (owners, !unplayable.is_empty())
+    }
+
+    /// The saved members other than the lead that may be sent out, in slot order, each with
+    /// its own owner, and one description per member that counts toward upstream's party HP
+    /// total but cannot join. Nothing is logged. Every slot is inspected, not only the
+    /// stored count's prefix (`SetBattlePartyIds` scans all six,
+    /// `pokeemerald/src/battle_controllers.c:591-606`), and an unsaved party (count 0) has
+    /// no reserves. Left out, and so retained untouched: eggs and Bad Eggs (a failed
+    /// checksum is one), records that are empty, fainted members, and the members that have
+    /// HP but cannot join: valid records that do not decode into a battler, and members the
+    /// battle engine cannot play yet ([`ensure_lead_can_battle`]).
+    pub(super) fn saved_reserve_owners(&self, dex: &Dex) -> (Vec<LoadedLead>, Vec<String>) {
         let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
         let Some(lead_slot) = self.lead.as_ref().map(LoadedLead::slot) else {
-            return (Vec::new(), false);
+            return (Vec::new(), Vec::new());
         };
         if stored == 0 {
-            return (Vec::new(), false);
+            return (Vec::new(), Vec::new());
         }
         let mut owners = Vec::new();
-        let mut unplayable_member_remains = false;
+        let mut unplayable = Vec::new();
         for (slot, record) in self.save1.player_party.iter().enumerate() {
             if slot == lead_slot {
                 continue;
@@ -265,8 +277,7 @@ impl OverworldPhase {
                 Err(PartyError::Egg | PartyError::Substructures(_)) => continue,
                 Err(error) => {
                     if record.hp != 0 && crate::party::record_has_validated_species(record) {
-                        eprintln!("battle reserve: slot {slot}'s record {error} -- left out");
-                        unplayable_member_remains = true;
+                        unplayable.push(format!("slot {slot}'s record {error}"));
                     }
                     continue;
                 }
@@ -275,15 +286,12 @@ impl OverworldPhase {
                 continue;
             }
             if let Err(error) = ensure_lead_can_battle(owner.battler()) {
-                eprintln!(
-                    "battle reserve: slot {slot} can't enter a battle ({error:?}) -- left out"
-                );
-                unplayable_member_remains = true;
+                unplayable.push(format!("slot {slot} can't enter a battle ({error:?})"));
                 continue;
             }
             owners.push(owner);
         }
-        (owners, unplayable_member_remains)
+        (owners, unplayable)
     }
 
     /// The ability party slot 0 brings to wild level selection: the saved slot even when it

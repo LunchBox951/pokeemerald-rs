@@ -24,9 +24,10 @@
 //!
 //! [`start_npc_trainer_battle_with_reserves`] starts a fight whose player side has saved
 //! reserves behind the lead. Every healthy reserve gets the lead's pre-flight against the
-//! trainer's whole party before the first draw ([`ensure_reserve_can_enter`] is the
-//! screen the flow applies to leave one out instead), because the battle crate only
-//! refuses a reserve after the party's OT-id draws.
+//! trainer's whole party before the first draw, because the battle crate only refuses a
+//! reserve after the party's OT-id draws. [`ensure_reserve_can_enter`] is that screen for
+//! one member; the flow runs it per saved slot and refuses the fight, naming the slot
+//! ([`NpcTrainerBattleError::UnplayablePartyMember`]).
 //!
 //! # Held-item parties
 //!
@@ -70,6 +71,9 @@ pub enum NpcTrainerBattleError {
     Battle(BattleError),
     /// A trainer or species name has no Gen III encoding for its character.
     UnnamedCharacter { name: &'static str, character: char },
+    /// A saved party member with HP cannot join the fight, described by the text. The
+    /// battle's roster would not be the whole party, so its loss would not be the party's.
+    UnplayablePartyMember(String),
 }
 
 impl core::fmt::Display for NpcTrainerBattleError {
@@ -80,6 +84,9 @@ impl core::fmt::Display for NpcTrainerBattleError {
                 f,
                 "name `{name}` contains `{character}`, which has no Gen-3 charmap byte"
             ),
+            Self::UnplayablePartyMember(reason) => {
+                write!(f, "a healthy saved party member can't take part: {reason}")
+            }
         }
     }
 }
@@ -88,7 +95,7 @@ impl std::error::Error for NpcTrainerBattleError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Battle(error) => Some(error),
-            Self::UnnamedCharacter { .. } => None,
+            Self::UnnamedCharacter { .. } | Self::UnplayablePartyMember(_) => None,
         }
     }
 }

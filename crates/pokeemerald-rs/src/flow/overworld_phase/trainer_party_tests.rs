@@ -297,31 +297,97 @@ fn a_reserve_is_filed_into_its_own_non_contiguous_slot() {
     assert_eq!(phase.lead_slot_for_test(), Some(3));
 }
 
-/// A saved member the trainer's party cannot be fought with (a two-ability Voltorb under a
-/// `CheckBadMove` trainer) is left out of the roster, keeps its bytes, and is a healthy
-/// member the loss then cannot ignore: the fight starts rather than being refused.
-#[test]
-fn a_reserve_the_trainer_cannot_face_is_left_out_with_its_bytes() {
-    let lead = overwhelming_treecko_lead();
+/// A two-ability Voltorb the `CheckBadMove` fixture trainers cannot be fought with: healthy,
+/// so upstream's party HP total counts it.
+pub(super) fn reserve_the_trainer_cannot_face() -> BattlePokemon {
     let voltorb = mon(VOLTORB, 20, vec![MoveId::TACKLE]);
-    let records = [saved(&lead), saved(&voltorb)];
-    let mut phase = rival_phase(&records, 0, lead);
-    assert_eq!(
-        rival_roster(&phase),
-        Some((0, 1)),
-        "only the lead is on the roster"
+    assert!(
+        crate::flow::lead_screen::ensure_lead_can_battle(&voltorb).is_ok(),
+        "setup: only the trainer pre-flight refuses it"
     );
-    let before = phase.save1.player_party[1].to_bytes();
+    voltorb
+}
 
+/// An Intimidate Mightyena, which no battle can field yet: healthy, so upstream's party HP
+/// total counts it.
+pub(super) fn reserve_no_battle_can_field() -> BattlePokemon {
+    let mightyena = mon(SpeciesId::MIGHTYENA, 50, vec![MoveId::SCRATCH]);
+    assert!(battle::ensure_participant_admissible(&mightyena).is_err());
+    mightyena
+}
+
+/// A Route 103 phase facing the rival with `records` filed and A pressed once.
+fn rival_phase_after_the_press(records: &[Pokemon], lead: BattlePokemon) -> OverworldPhase {
+    let mut phase = route_103_phase_facing_the_rival();
+    file_party(&mut phase, records, 0, lead);
+    phase.step(pressed(Buttons::A));
+    phase
+}
+
+/// The rival's fight is refused while `unplayable`, healthy, sits in the saved party: no
+/// battle, no draw, no saved byte changed, the lead still in the party. Once that member
+/// has fainted the HP total no longer counts it and the same press starts the fight.
+fn assert_rival_refuses_while_healthy(unplayable: &BattlePokemon) {
+    let lead = frail(TREECKO);
+    let records = [saved(&lead), saved(unplayable)];
+    let phase = rival_phase_after_the_press(&records, lead.clone());
+
+    assert!(!phase.is_rival_battle_active(), "the fight must not start");
+    assert_eq!(phase.rival_battle_outcome(), None);
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(RIVAL_SEED).state(),
+        "the refusal must draw nothing"
+    );
+    assert_eq!(phase.lead_for_test(), Some(&lead), "the lead stays put");
+    for (slot, record) in records.iter().enumerate() {
+        assert_eq!(phase.save1.player_party[slot].to_bytes(), record.to_bytes());
+    }
+    assert_eq!(phase.save1.money, 2001);
+
+    let mut fainted = unplayable.clone();
+    fainted.apply_damage(fainted.stats().max_hp);
+    let control = rival_phase_after_the_press(&[saved(&lead), saved(&fainted)], lead);
+    assert_eq!(
+        rival_roster(&control),
+        Some((0, 1)),
+        "control: with that member fainted the lead fights alone"
+    );
+}
+
+/// A healthy saved member the trainer's party cannot be fought with (a two-ability Voltorb
+/// under a `CheckBadMove` trainer) refuses the fight: a battle without it could report a
+/// loss while the party still has HP.
+#[test]
+fn a_healthy_reserve_the_trainer_cannot_face_refuses_the_rival_battle() {
+    assert_rival_refuses_while_healthy(&reserve_the_trainer_cannot_face());
+}
+
+/// A healthy saved member no battle can field yet refuses the fight the same way.
+#[test]
+fn a_healthy_reserve_no_battle_can_field_refuses_the_rival_battle() {
+    assert_rival_refuses_while_healthy(&reserve_no_battle_can_field());
+}
+
+/// A frail lead backed only by a healthy reserve that cannot join: the party is not
+/// exhausted when the lead faints, so no fight may end in a defeat.
+#[test]
+fn verify_excluded_healthy_reserve_does_not_let_the_fight_end_in_defeat() {
+    let lead = frail(TREECKO);
+    let records = [saved(&lead), saved(&reserve_the_trainer_cannot_face())];
+    let mut phase = rival_phase_after_the_press(&records, lead);
     for _ in 0..64 {
         phase.step(ButtonState::new());
         if phase.rival_battle_outcome().is_some() {
             break;
         }
     }
-
-    assert_eq!(phase.rival_battle_outcome(), Some(BattleOutcome::PlayerWon));
-    assert_eq!(phase.save1.player_party[1].to_bytes(), before);
+    assert!(decoded(&phase.save1.player_party[1]).current_hp() > 0);
+    assert_ne!(
+        phase.rival_battle_outcome(),
+        Some(BattleOutcome::PlayerLost),
+        "the fight ended as a loss with a healthy saved member left"
+    );
 }
 
 /// A lone lead has no reserve to file, but it is a participating member too: its saved slot

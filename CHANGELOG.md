@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.144.0] - 2026-11-23
 
-- Trainer battles on Route 103 now use your whole party: when your lead faints, a healthy reserve is sent out, and every Pokémon that fought keeps its changes after the battle, as in the original game.
+- Trainer battles on Route 103 now use your whole party: when your lead faints, a healthy reserve is sent out, and every Pokémon that fought keeps its changes after the battle, as in the original game. A trainer battle does not start while one of your healthy Pokémon cannot take part yet.
 
 ## [0.0.143.0] - 2026-11-23
 

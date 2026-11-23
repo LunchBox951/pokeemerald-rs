@@ -7,7 +7,8 @@ use platform::{ButtonState, Buttons};
 
 use super::super::test_support::pressed;
 use super::super::trainer_party_tests::{
-    decoded, file_party, frail, healthy_reserve, rival_reward, saved,
+    decoded, file_party, frail, healthy_reserve, reserve_no_battle_can_field,
+    reserve_the_trainer_cannot_face, rival_reward, saved, RIVAL_SEED,
 };
 use super::super::ActiveBattle;
 use super::support::*;
@@ -102,4 +103,59 @@ fn a_fainted_sight_trainer_lead_sends_out_the_saved_reserve_and_files_both_slots
         Ok(true),
         "the synthetic override keys the flag to the stand-in trainer"
     );
+}
+
+/// The cone's fight is refused while `unplayable`, healthy, sits in the saved party: no
+/// approach, no draw, no saved byte changed, the lead still in the party, on every frame
+/// spent in the cone. Once that member has fainted the HP total no longer counts it and
+/// the same cone starts the approach.
+fn assert_cone_refuses_while_healthy(unplayable: &battle::BattlePokemon) {
+    let (rx, ry) = RHETT_TILE;
+    let stand_in = assets::trainers::TrainerId(STAND_IN_TRAINER);
+    let lead = frail(assets::SpeciesId(277));
+    let records = [saved(&lead), saved(unplayable)];
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    file_party(&mut phase, &records, 0, lead.clone());
+    phase.synthetic_sight_trainer = Some(stand_in);
+
+    for _ in 0..3 {
+        phase.step(ButtonState::new());
+        assert!(phase.sight_approach.is_none(), "no approach may start");
+        assert!(!phase.is_sight_trainer_battle_active());
+        assert_eq!(
+            phase.rng.state(),
+            engine::rng::Rng::new(RIVAL_SEED).state(),
+            "the refusal must draw nothing"
+        );
+    }
+    assert_eq!(phase.sight_trainer_battle_outcome(), None);
+    assert_eq!(phase.lead_for_test(), Some(&lead), "the lead stays put");
+    for (slot, record) in records.iter().enumerate() {
+        assert_eq!(phase.save1.player_party[slot].to_bytes(), record.to_bytes());
+    }
+    assert_eq!(phase.save1.money, 2001);
+
+    let mut fainted = unplayable.clone();
+    fainted.apply_damage(fainted.stats().max_hp);
+    let mut control = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    file_party(&mut control, &[saved(&lead), saved(&fainted)], 0, lead);
+    control.synthetic_sight_trainer = Some(stand_in);
+    control.step(ButtonState::new());
+    assert!(
+        control.sight_approach.is_some(),
+        "control: with that member fainted the cone starts the approach"
+    );
+}
+
+/// A healthy saved member the trainer's party cannot be fought with refuses the cone's
+/// fight: a battle without it could report a loss while the party still has HP.
+#[test]
+fn a_healthy_reserve_the_trainer_cannot_face_refuses_the_sight_trainer_battle() {
+    assert_cone_refuses_while_healthy(&reserve_the_trainer_cannot_face());
+}
+
+/// A healthy saved member no battle can field yet refuses the cone's fight the same way.
+#[test]
+fn a_healthy_reserve_no_battle_can_field_refuses_the_sight_trainer_battle() {
+    assert_cone_refuses_while_healthy(&reserve_no_battle_can_field());
 }
