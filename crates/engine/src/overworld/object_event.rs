@@ -387,11 +387,17 @@ impl ObjectEventState {
 
     /// Commits a one-tile walk immediately without collision checks or elevation changes. The
     /// tile it leaves stays held for collision until [`Self::settle_previous_position`].
+    ///
+    /// Coordinates saturate at the `i32` bounds, as in [`Self::translate`]: a walk outward from a
+    /// boundary tile faces `direction` and stays on that tile.
     pub const fn walk(&mut self, direction: Direction) {
         self.facing = direction;
         self.previous_position = self.position;
         let (dx, dy) = direction.delta();
-        self.position = (self.position.0 + dx, self.position.1 + dy);
+        self.position = (
+            self.position.0.saturating_add(dx),
+            self.position.1.saturating_add(dy),
+        );
     }
 
     /// Settles the previous tile onto the current one without changing facing, as the
@@ -409,7 +415,8 @@ impl ObjectEventState {
     }
 
     /// Starts a normal-speed walk: commits the destination as [`Self::walk`] does and runs the
-    /// action's first frame. [`Self::advance_step`] runs the rest.
+    /// action's first frame, with the same boundary saturation. [`Self::advance_step`] runs the
+    /// rest.
     pub const fn begin_normal_walk(&mut self, direction: Direction) {
         self.walk(direction);
         self.step = Some(StepAction::begin(StepKind::Walk, direction));
@@ -1359,6 +1366,47 @@ mod tests {
         assert_eq!(state.previous_position(), (5, 6));
 
         assert_eq!(state.template_position(), (5, 5));
+    }
+
+    #[test]
+    fn walking_outward_at_a_coordinate_boundary_stays_on_it() {
+        let cases = [
+            (Direction::East, (i32::MAX, 0), (i32::MAX, 0)),
+            (Direction::West, (i32::MIN, 0), (i32::MIN, 0)),
+            (Direction::South, (0, i32::MAX), (0, i32::MAX)),
+            (Direction::North, (0, i32::MIN), (0, i32::MIN)),
+        ];
+        for (direction, shift, boundary) in cases {
+            let mut walked = ObjectEventState::from_template(&object(1, 0, 0, 3, "0"));
+            walked.translate(shift);
+            let mut started = walked;
+
+            walked.walk(direction);
+            assert_eq!(walked.position(), boundary, "{direction:?} walk");
+            assert_eq!(walked.previous_position(), boundary, "{direction:?} walk");
+            assert_eq!(walked.facing(), direction);
+
+            started.begin_normal_walk(direction);
+            assert_eq!(started.position(), boundary, "{direction:?} begin");
+            assert_eq!(started.previous_position(), boundary, "{direction:?} begin");
+            assert_eq!(started.facing(), direction);
+            assert!(started.step().is_some());
+        }
+    }
+
+    #[test]
+    fn walking_onto_a_coordinate_boundary_moves_normally() {
+        let mut state = ObjectEventState::from_template(&object(1, 0, 0, 3, "0"));
+        state.translate((i32::MAX - 1, 0));
+        state.walk(Direction::East);
+        assert_eq!(state.position(), (i32::MAX, 0));
+        assert_eq!(state.previous_position(), (i32::MAX - 1, 0));
+
+        let mut state = ObjectEventState::from_template(&object(1, 0, 0, 3, "0"));
+        state.translate((0, i32::MIN + 1));
+        state.begin_normal_walk(Direction::North);
+        assert_eq!(state.position(), (0, i32::MIN));
+        assert_eq!(state.previous_position(), (0, i32::MIN + 1));
     }
 
     #[test]
