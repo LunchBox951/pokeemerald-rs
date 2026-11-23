@@ -13,7 +13,11 @@
 //!   [`remove_through_verified_handle`], and
 //!   [`remove_through_verified_handle_with`]: verify a path still reaches an
 //!   identity and delete through that same handle, reporting a
-//!   [`VerifiedRemoval`].
+//!   [`VerifiedRemoval`]. A volume whose file IDs follow reusable
+//!   directory-entry slots (FAT, exFAT) fails closed. On other volumes an
+//!   equal ID shows only that the path reaches that ID now; it proves the
+//!   original only if the caller kept a handle open since recording the
+//!   identity (see [`remove_through_open_handle`]).
 //! - [`delete_through_handle`] and
 //!   [`delete_through_handle_ignoring_read_only`]: the delete alone, for a
 //!   handle the caller has already verified.
@@ -351,7 +355,12 @@ unsafe fn set_file_information<T>(
 /// Removes the file `identity` names if `path` still reaches it, deleting
 /// through the same handle the identity check opens so no re-lookup of
 /// `path` occurs between the check and the delete. A path that now reaches a
-/// different object is left alone ([`VerifiedRemoval::NotOurs`]). A path
+/// different object is left alone ([`VerifiedRemoval::NotOurs`]). On a
+/// volume whose file IDs follow reusable directory-entry slots (FAT, exFAT)
+/// the identity proves nothing, so nothing is deleted and the call fails; on
+/// any volume, a caller that closed its handle after recording `identity` has
+/// no lifetime witness ([`remove_through_open_handle`] names the residual
+/// case). A path
 /// that reaches nothing at all is an error (`NotFound`), not `NotOurs`; a
 /// caller that treats a vanished path as already clean opens through
 /// [`open_for_verified_delete`] and maps `NotFound` itself before
@@ -359,7 +368,8 @@ unsafe fn set_file_information<T>(
 ///
 /// # Errors
 ///
-/// The open, identity query, or delete failing, including `NotFound`.
+/// The open, identity query, or delete failing, including `NotFound`, or
+/// [`remove_through_open_handle`]'s refusal on an unstable-ID volume.
 pub fn remove_through_verified_handle(
     path: &Path,
     identity: WindowsFileIdentity,
@@ -388,17 +398,213 @@ pub fn remove_through_verified_handle_with(
 /// for a `handle` already opened by [`open_for_verified_delete`]: deletes
 /// the object it refers to only if its identity is `identity`.
 ///
+/// What an equal identity proves is bounded. The delete is refused unless the
+/// volume answers [`volume_supports_open_by_file_id`] yes, because FAT and
+/// exFAT IDs follow directory-entry slots that a replacement created after the
+/// original was removed can occupy. On a volume that answers yes, equality
+/// shows only that `handle` reaches the object with that ID *now*. It is a
+/// proof of ownership only if the caller held a handle to the original open
+/// from the moment it recorded `identity` until this call. A caller that
+/// closed its handle in between has no such witness: even on a stable-ID
+/// volume an ID can be reused after its object is gone (an NTFS file-reference
+/// sequence number can wrap once an MFT record is recycled enough times), and
+/// a replacement holding the recycled ID compares equal and is deleted. This
+/// function cannot detect that case; keeping the handle open across the
+/// reopen is the caller's to do.
+///
 /// # Errors
 ///
-/// The identity query or delete failing.
+/// [`std::io::ErrorKind::Unsupported`] when the volume's file IDs follow
+/// reusable directory-entry slots, nothing deleted; otherwise the volume or
+/// identity query or the delete failing.
 pub fn remove_through_open_handle(
     handle: &std::fs::File,
     identity: WindowsFileIdentity,
     before_delete: impl FnOnce(&std::fs::File),
 ) -> std::io::Result<VerifiedRemoval> {
+    if !volume_has_stable_ids(handle)? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "the volume's file IDs follow directory-entry slots a replacement can reuse, \
+             so a matching file ID does not prove the file is the original",
+        ));
+    }
     if WindowsFileIdentity::of(handle)? != identity {
         return Ok(VerifiedRemoval::NotOurs);
     }
     before_delete(handle);
     delete_through_handle(handle)
+}
+
+/// [`volume_supports_open_by_file_id`] for [`remove_through_open_handle`]. A
+/// test can force the answer on the current thread
+/// (`forced_stable_ids`), standing in for the FAT or exFAT volume it cannot
+/// create, so the public entry's use of the answer is what the test drives.
+fn volume_has_stable_ids(handle: &std::fs::File) -> std::io::Result<bool> {
+    #[cfg(test)]
+    if let Some(forced) = forced_stable_ids::get() {
+        return Ok(forced);
+    }
+    volume_supports_open_by_file_id(handle)
+}
+
+/// The test-only override read by [`volume_has_stable_ids`].
+#[cfg(test)]
+mod forced_stable_ids {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FORCED: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn get() -> Option<bool> {
+        FORCED.with(Cell::get)
+    }
+
+    /// Forces the answer to `answer` until the returned guard drops.
+    pub(super) fn force(answer: bool) -> Guard {
+        FORCED.with(|forced| forced.set(Some(answer)));
+        Guard
+    }
+
+    pub(super) struct Guard;
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FORCED.with(|forced| forced.set(None));
+        }
+    }
+}
+
+#[cfg(test)]
+mod verified_removal_tests {
+    use super::{
+        forced_stable_ids, open_for_verified_delete, remove_through_open_handle,
+        volume_supports_open_by_file_id, VerifiedRemoval, WindowsFileIdentity,
+    };
+    use std::path::PathBuf;
+
+    /// A directory private to one test of this process.
+    fn private_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("win-fs-removal-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        dir
+    }
+
+    /// On a volume whose file IDs follow reusable directory slots (FAT,
+    /// exFAT), a matching identity is no proof the file is the original, so
+    /// the file the path reaches is kept. The matching identity here is the
+    /// worst case: a replacement that landed in the freed slot. The public
+    /// entry is driven with the volume answer forced to "no stable IDs", so
+    /// dropping the check from it fails this test.
+    #[test]
+    fn a_matching_identity_on_a_reusable_id_volume_deletes_nothing() {
+        let dir = private_dir("reusable-ids");
+        let path = dir.join("partial.bin");
+        std::fs::write(&path, b"x").unwrap();
+        let handle = open_for_verified_delete(&path).unwrap();
+        let identity = WindowsFileIdentity::of(&handle).unwrap();
+        let mut hook_ran = false;
+        let removal = {
+            let _forced = forced_stable_ids::force(false);
+            remove_through_open_handle(&handle, identity, |_| hook_ran = true)
+        };
+        drop(handle);
+        let survived = path.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        let refused = removal.expect_err("a reusable-ID volume must refuse the delete");
+        assert_eq!(refused.kind(), std::io::ErrorKind::Unsupported);
+        assert!(!hook_ran, "the refusal comes before the delete window");
+        assert!(survived, "the file was deleted on identity alone");
+    }
+
+    /// With the volume answer forced to "stable IDs", the public entry
+    /// deletes the verified file whatever the runner's real volume is.
+    #[test]
+    fn a_matching_identity_on_a_stable_id_volume_deletes_the_file() {
+        let dir = private_dir("stable-ids");
+        let path = dir.join("partial.bin");
+        std::fs::write(&path, b"x").unwrap();
+        let handle = open_for_verified_delete(&path).unwrap();
+        let identity = WindowsFileIdentity::of(&handle).unwrap();
+        let removal = {
+            let _forced = forced_stable_ids::force(true);
+            remove_through_open_handle(&handle, identity, |_| {})
+        };
+        drop(handle);
+        let survived = path.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(
+                removal,
+                Ok(VerifiedRemoval::Unlinked | VerifiedRemoval::Pending)
+            ),
+            "{removal:?}"
+        );
+        assert!(
+            !survived,
+            "the verified file is gone once its handle closes"
+        );
+    }
+
+    /// With the volume answer forced to "stable IDs", a different object is
+    /// left alone and the original is removed.
+    #[test]
+    fn the_public_entry_deletes_the_original_and_spares_a_replacement() {
+        let dir = private_dir("public-entry");
+        let original = dir.join("original.bin");
+        let other = dir.join("other.bin");
+        std::fs::write(&original, b"x").unwrap();
+        std::fs::write(&other, b"y").unwrap();
+        let identity =
+            WindowsFileIdentity::of(&open_for_verified_delete(&original).unwrap()).unwrap();
+        let forced = forced_stable_ids::force(true);
+        let other_handle = open_for_verified_delete(&other).unwrap();
+        let spared = remove_through_open_handle(&other_handle, identity, |_| {});
+        drop(other_handle);
+        let other_survived = other.exists();
+        let original_handle = open_for_verified_delete(&original).unwrap();
+        let removed = remove_through_open_handle(&original_handle, identity, |_| {});
+        drop(original_handle);
+        let original_survived = original.exists();
+        drop(forced);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(matches!(spared, Ok(VerifiedRemoval::NotOurs)), "{spared:?}");
+        assert!(other_survived);
+        assert!(
+            matches!(
+                removed,
+                Ok(VerifiedRemoval::Unlinked | VerifiedRemoval::Pending)
+            ),
+            "{removed:?}"
+        );
+        assert!(!original_survived);
+    }
+
+    /// Unforced, the public entry takes its answer from the volume the file
+    /// is on: it refuses exactly when that volume lacks stable IDs, so a
+    /// runner whose temp directory is FAT or exFAT sees the refusal and one
+    /// on NTFS or `ReFS` sees the delete.
+    #[test]
+    fn the_public_entry_follows_the_volumes_own_answer() {
+        let dir = private_dir("volume-answer");
+        let path = dir.join("partial.bin");
+        std::fs::write(&path, b"x").unwrap();
+        let handle = open_for_verified_delete(&path).unwrap();
+        let identity = WindowsFileIdentity::of(&handle).unwrap();
+        let stable = volume_supports_open_by_file_id(&handle).unwrap();
+        let removal = remove_through_open_handle(&handle, identity, |_| {});
+        drop(handle);
+        let survived = path.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        if stable {
+            assert!(removal.is_ok(), "{removal:?}");
+            assert!(!survived);
+        } else {
+            let refused = removal.expect_err("an unstable-ID volume must refuse");
+            assert_eq!(refused.kind(), std::io::ErrorKind::Unsupported);
+            assert!(survived, "the file was deleted on identity alone");
+        }
+    }
 }
