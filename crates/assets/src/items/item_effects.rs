@@ -149,8 +149,8 @@ impl ItemEffect {
     /// scan tests overlapping bits rather than looking up one flag's argument:
     /// once the item sets the queried bit, it returns the first counted flag at
     /// or below that bit, so several queries can return the same offset. The
-    /// exception is `ITEM4_REVIVE`: the scan clears it while it handles
-    /// `ITEM4_HEAL_HP`, so that query matches nothing.
+    /// exception is a flag the scan clears, `ITEM4_PP_UP` up front and
+    /// `ITEM4_REVIVE` at `ITEM4_HEAL_HP`: afterwards that query matches nothing.
     /// Counting a flag advances the offset but does not mean the flag has an
     /// argument byte: `PP_MAX` is counted without one, and the PP Max item's
     /// three argument bytes belong to the three friendship flags.
@@ -455,8 +455,9 @@ impl Default for ItemEffectTable {
 mod tests {
     use super::{
         neg, ItemEffect, ItemEffectSlot, ItemEffectTable, ITEM3_STATUS_ALL, ITEM4_EVO_STONE,
-        ITEM4_HEAL_HP, ITEM4_REVIVE, ITEM5_EV_DEF, ITEM5_FRIENDSHIP_ALL, ITEM5_FRIENDSHIP_HIGH,
-        ITEM5_FRIENDSHIP_LOW, ITEM5_FRIENDSHIP_MID, ITEM5_PP_MAX, ITEM_EFFECT_SLOTS,
+        ITEM4_HEAL_HP, ITEM4_PP_UP, ITEM4_REVIVE, ITEM5_EV_DEF, ITEM5_FRIENDSHIP_ALL,
+        ITEM5_FRIENDSHIP_HIGH, ITEM5_FRIENDSHIP_LOW, ITEM5_FRIENDSHIP_MID, ITEM5_PP_MAX,
+        ITEM_EFFECT_SLOTS,
     };
     use crate::error::AssetError;
     use crate::items::{ItemId, ItemTable};
@@ -640,6 +641,14 @@ mod tests {
         let revive = effect(ItemId::REVIVE);
         assert_eq!(revive.param_offset(4, ITEM4_HEAL_HP), 6);
         assert_eq!(revive.param_offset(4, ITEM4_REVIVE), 7);
+    }
+
+    #[test]
+    fn pp_up_bit_does_not_match_its_own_query() {
+        assert_eq!(effect(ItemId::PP_UP).param_offset(4, ITEM4_PP_UP), 8);
+        let pp_up_and_heal = ItemEffect::new(&[0, 0, 0, 0, ITEM4_PP_UP | ITEM4_HEAL_HP, 0, 20]);
+        assert_eq!(pp_up_and_heal.param_offset(4, ITEM4_HEAL_HP), 6);
+        assert_eq!(pp_up_and_heal.param_offset(4, ITEM4_PP_UP), 7);
     }
 
     #[test]
