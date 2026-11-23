@@ -59,6 +59,7 @@ mod live_battle_text;
 mod object_events;
 mod placement;
 mod play_time;
+mod rematch_steps;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
 mod sight_trainer_trigger;
@@ -1158,6 +1159,8 @@ mod pre_movement_arrow_elevation_tests;
 /// Random-facing object events driven by the production frame.
 #[cfg(test)]
 mod random_facing_tests;
+#[cfg(test)]
+mod rematch_steps_tests;
 #[cfg(test)]
 mod route103_rival_driver_tests;
 #[cfg(test)]

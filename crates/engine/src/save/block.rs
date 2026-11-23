@@ -93,6 +93,9 @@ const MONEY_OFFSET: usize = 0x490;
 const REGISTERED_ITEM_OFFSET: usize = 0x496;
 const BAG_ITEMS_OFFSET: usize = 0x560;
 const POKEBLOCKS_OFFSET: usize = 0x848;
+// `SaveBlock1::trainerRematchStepCounter`, a plain u16 between the unused bytes
+// and the rematch array (`pokeemerald/include/global.h:1013-1017`).
+const TRAINER_REMATCH_STEP_COUNTER_OFFSET: usize = 0x9C8;
 const FLAGS_OFFSET: usize = 0x1270;
 const VARS_OFFSET: usize = 0x139C;
 // `SaveBlock1::gameStats` (`pokeemerald/include/global.h:1022`).
@@ -675,6 +678,10 @@ pub struct SaveBlock1 {
     /// (`registeredItem`, `pokeemerald/include/global.h:1004`);
     /// [`ItemId::NONE`] means nothing is registered.
     pub registered_item: ItemId,
+    /// Steps taken since the last rematch roll, stored unencrypted at 0x9C8
+    /// (`trainerRematchStepCounter`, `pokeemerald/include/global.h:1015`); a
+    /// loaded value is kept as stored.
+    pub trainer_rematch_step_counter: u16,
     /// Plaintext bag contents.
     pub bag: Bag,
     /// Persistent flags and variables.
@@ -696,6 +703,7 @@ impl Default for SaveBlock1 {
             player_party: [Pokemon::default(); PARTY_SIZE],
             money: 0,
             registered_item: ItemId::NONE,
+            trainer_rematch_step_counter: 0,
             bag: Bag::default(),
             event_data: EventData::default(),
             player_object_event: SavedObjectEvent::default(),
@@ -760,6 +768,8 @@ impl SaveBlock1 {
             .copy_from_slice(&(self.money ^ encryption_key).to_le_bytes());
         base[REGISTERED_ITEM_OFFSET..REGISTERED_ITEM_OFFSET + SERIALIZED_U16_LEN]
             .copy_from_slice(&self.registered_item.index().to_le_bytes());
+        base[TRAINER_REMATCH_STEP_COUNTER_OFFSET..][..SERIALIZED_U16_LEN]
+            .copy_from_slice(&self.trainer_rematch_step_counter.to_le_bytes());
         base[BAG_ITEMS_OFFSET..BAG_ITEMS_OFFSET + BAG_LEN]
             .copy_from_slice(&self.bag.to_bytes(encryption_key));
         base[FLAGS_OFFSET..FLAGS_OFFSET + event_data::NUM_FLAG_BYTES]
@@ -826,6 +836,7 @@ impl SaveBlock1 {
             player_party,
             money: read_u32(bytes, MONEY_OFFSET) ^ encryption_key,
             registered_item: ItemId(read_u16(bytes, REGISTERED_ITEM_OFFSET)),
+            trainer_rematch_step_counter: read_u16(bytes, TRAINER_REMATCH_STEP_COUNTER_OFFSET),
             bag: Bag::from_bytes(bag_bytes, encryption_key),
             event_data: EventData::from_saved_state(flags, vars),
             game_stats: GameStats::from_bytes(
@@ -1763,6 +1774,47 @@ mod tests {
             &[0, 0],
             "clearing the registration writes the empty item"
         );
+    }
+
+    #[test]
+    fn save_block1_rematch_step_counter_round_trips_at_0x9c8_under_any_key() {
+        assert_eq!(SaveBlock1::default().trainer_rematch_step_counter, 0);
+        for key in [0, 0xA1B2_C3D4] {
+            for counter in [0_u16, 254, 255, 256, 0x1234, u16::MAX] {
+                let block = SaveBlock1 {
+                    trainer_rematch_step_counter: counter,
+                    ..SaveBlock1::default()
+                };
+                let bytes = block.to_bytes(key);
+                assert_eq!(&bytes[0x9C8..0x9CA], &counter.to_le_bytes());
+                assert_eq!(
+                    SaveBlock1::from_bytes(&bytes, key)
+                        .unwrap()
+                        .trainer_rematch_step_counter,
+                    counter,
+                    "key {key:#X}, counter {counter}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn save_block1_patch_bytes_writes_only_the_rematch_step_counter_bytes() {
+        let key = 0xA1B2_C3D4;
+        let mut bytes = SaveBlock1::default().to_bytes(key);
+        bytes[0x9BC..0xA30].fill(0x5A);
+        let mut block = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(block.trainer_rematch_step_counter, 0x5A5A);
+
+        block.trainer_rematch_step_counter = 0x1234;
+        let mut patched = bytes;
+        block.patch_bytes(&mut patched, key);
+
+        let changed: Vec<usize> = (0..bytes.len())
+            .filter(|&i| bytes[i] != patched[i])
+            .collect();
+        assert_eq!(changed, [0x9C8, 0x9C9]);
+        assert_eq!(&patched[0x9C8..0x9CA], &[0x34, 0x12]);
     }
 
     #[test]
