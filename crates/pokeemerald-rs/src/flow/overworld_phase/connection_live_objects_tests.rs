@@ -635,7 +635,7 @@ fn return_step(phase: &OverworldPhase) -> StepOutcome {
         pack: &phase.connection_pack,
         source: phase.pack_source.clone(),
         departed: phase.map_id,
-        departed_objects: &phase.object_events,
+        departed_objects: Some(&phase.object_events),
     };
     let mut probe = phase.player;
     probe.step(

@@ -52,6 +52,7 @@ fn run(
                 frozen: false,
                 player_dashing: dashing,
                 terrain: terrain.runtime(),
+                connected_maps: &crate::overworld::NoConnectedMaps,
                 player_previous_position: player,
                 player_elevation: crate::overworld::object_event_harness::FLOOR_ELEVATION,
             },
@@ -122,6 +123,7 @@ fn admitting_on_map_load_runs_no_callback_and_leaves_the_first_frame_one_callbac
         frozen: false,
         player_dashing: false,
         terrain: terrain.runtime(),
+        connected_maps: &crate::overworld::NoConnectedMaps,
         player_previous_position: FAR,
         player_elevation: crate::overworld::object_event_harness::FLOOR_ELEVATION,
     };
