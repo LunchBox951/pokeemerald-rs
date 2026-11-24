@@ -21466,6 +21466,12 @@
     },
     "include/constants/easy_chat.h": {
       "artifacts": {
+        "EC_WORD_EVENTS": {
+          "reason": "The EC_WORD_* indices of EC_GROUP_EVENTS (include/constants/easy_chat.h:1034-1062, EC_WORD_APPEAL 0 through EC_WORD_FRONTIER 28) are the associated constants of assets::easy_chat_events::EventsWordIndex. The Trainer and Greetings indices are modelled separately in assets::easy_chat (TrainerWordIndex, GreetingsWordIndex). The EC_GROUP_* group ids and the words of every group other than Trainer, Greetings and Events are not modelled.",
+          "rust_target": "crates/assets/src/easy_chat_events.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "EC_WORD_GREETINGS": {
           "reason": "The EC_WORD_* indices of EC_GROUP_GREETINGS (include/constants/easy_chat.h:260-302, EC_WORD_THANKS 0 through EC_WORD_COUNT_ON 41) are the associated constants of assets::easy_chat::GreetingsWordIndex. The group id and every other group's words are not modelled.",
           "rust_target": "crates/assets/src/easy_chat.rs",
@@ -21886,7 +21892,7 @@
     "include/easy_chat.h": {
       "artifacts": {
         "EasyChatWordInfo": {
-          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91) is modelled only as per-group row shapes: assets::easy_chat::GreetingsWord and assets::easy_chat::TrainerWord each carry text (a charmap-notation str), alphabeticalOrder and enabled (a bool), with alphabeticalOrder typed as that group's own index (a GreetingsWordIndex whose domain is 0..41, a TrainerWordIndex whose domain is 0..26). The struct is shared by every Easy Chat group (easy_chat_group_status.h uses alphabetical indices past 41), so the general row type and index domain, and every other group's use of it, are not modelled.",
+          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91) is modelled only as per-group row shapes: assets::easy_chat::GreetingsWord, assets::easy_chat::TrainerWord and assets::easy_chat_events::EventsWord each carry text (a charmap-notation str), alphabeticalOrder and enabled (a bool), with alphabeticalOrder typed as that group's own index (a GreetingsWordIndex whose domain is 0..41, a TrainerWordIndex whose domain is 0..26, an EventsWordIndex whose domain is 0..28). The struct is shared by every Easy Chat group (easy_chat_group_status.h uses alphabetical indices past 41), so the general row type and index domain, and every other group's use of it, are not modelled.",
           "rust_target": "crates/assets/src/easy_chat.rs",
           "spec": "S-4",
           "status": "stubbed"
@@ -30209,7 +30215,10 @@
     "src/data/easy_chat/easy_chat_group_events.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gEasyChatGroup_Events (src/data/easy_chat/easy_chat_group_events.h:31-206) and the 29 gEasyChatWord_* texts (lines 1-29) extracted to assets::easy_chat_events::EventsGroup keyed by EventsWordIndex (EC_WORD_APPEAL..EC_WORD_FRONTIER, include/constants/easy_chat.h:1034-1062): text, alphabeticalOrder permutation and the enabled flag per row; all 29 words are enabled upstream, the link-themed ones included, and the {POKEBLOCK} charmap token is kept as a token. Other groups, easy_chat_groups.h, unlock state and the editor UI are not modelled, and nothing consumes the table yet.",
+      "rust_target": "crates/assets/src/easy_chat_events.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/easy_chat/easy_chat_group_feelings.h": {
       "category": "code.header",

@@ -27,9 +27,10 @@
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
 //! starting positions (see [`slot_machine_reels`]), the region-map section
-//! grid (see [`region_map_layout`]), and the Battle Palace per-nature
-//! move-group, target and flavor tables (see [`battle_palace`]); more data
-//! follows as the crate fills out.
+//! grid (see [`region_map_layout`]), the Battle Palace per-nature
+//! move-group, target and flavor tables (see [`battle_palace`]), and the Easy
+//! Chat Events word group (see [`easy_chat_events`]); more data follows as
+//! the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
 //! audio-extraction backends emit into (S-4) live in [`audio`].
@@ -63,6 +64,7 @@ pub mod berries;
 pub mod bundled_overworld;
 pub mod decorations;
 pub mod easy_chat;
+pub mod easy_chat_events;
 pub mod egg_moves;
 pub mod enemy_elevation;
 pub mod error;
