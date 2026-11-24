@@ -28,7 +28,8 @@
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
 //! starting positions (see [`slot_machine_reels`]), the region-map section
 //! grid (see [`region_map_layout`]), and the Battle Palace per-nature
-//! move-group, target and flavor tables (see [`battle_palace`]); more data
+//! move-group, target and flavor tables (see [`battle_palace`]), and the
+//! roaming Pokémon location sets (see [`roamer_locations`]); more data
 //! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -88,6 +89,7 @@ pub mod pokedex;
 pub mod pokenav_city_maps;
 pub mod region_map_layout;
 pub mod ribbon_descriptions;
+pub mod roamer_locations;
 pub mod script_refs;
 pub mod slot_machine_reels;
 pub mod species;
@@ -172,6 +174,10 @@ pub use pokenav_city_maps::{CityMapCatalog, CityMapEntry, CityMapId, CITY_MAP_CO
 pub use region_map_layout::{
     map_section_at, map_section_layout, RegionMapLayoutError, MAPSEC_NONE, REGION_MAP_HEIGHT,
     REGION_MAP_WIDTH,
+};
+pub use roamer_locations::{
+    roamer_location_set, roamer_location_sets, RoamerLocationError, RoamerLocationSet,
+    ROAMER_CANDIDATES_PER_SET, ROAMER_LOCATION_SET_COUNT,
 };
 pub use script_refs::{MapScriptTableRef, ScriptRef};
 
