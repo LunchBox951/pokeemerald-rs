@@ -340,8 +340,11 @@ fn a_level_swapped_out_of_its_quarantine_before_put_back_is_reported_where_it_we
     let created = super::create_directories(&level).unwrap();
     super::take_back::undo_created_directories_with_capture_hooks(
         &created,
-        &mut || fs::write(level.join("keep"), b"x").unwrap(),
+        &mut || {},
         &mut |stage, held| {
+            if stage == super::take_back::CaptureStage::BeforeCheck {
+                write_into_capture(held);
+            }
             if stage == super::take_back::CaptureStage::BeforeRestore {
                 rustix::fs::renameat(
                     held,

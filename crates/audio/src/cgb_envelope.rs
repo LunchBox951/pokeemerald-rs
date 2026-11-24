@@ -87,10 +87,13 @@ pub struct CgbEnvelope {
     echo_length: u8,
 }
 
+/// The sustain goal `CgbModVol` stores into its `u8` field (`m4a.c:921`). A
+/// full-byte `xSUST` operand can push the rounded-up product past 255, and the
+/// store keeps only the low byte instead of saturating.
 fn sustain_goal_of(goal: u8, sustain: u8) -> u8 {
     let scaled = u32::from(goal) * u32::from(sustain);
     let rounded_up = scaled.div_ceil(CGB_ENVELOPE_LEVELS);
-    u8::try_from(rounded_up.min(u32::from(u8::MAX))).unwrap_or(u8::MAX)
+    rounded_up.to_le_bytes()[0]
 }
 
 fn transition_frame_delay(period: u8) -> u16 {
@@ -117,7 +120,8 @@ impl CgbEnvelope {
         }
     }
 
-    /// Return the current envelope volume.
+    /// Return the current envelope volume. A sustain override can push it
+    /// past the goal maximum, anywhere in 0-255 (`m4a.c:921`).
     #[must_use]
     pub fn volume(&self) -> u8 {
         self.volume
@@ -311,15 +315,17 @@ impl CgbEnvelope {
             return (false, false);
         }
         self.latch_goal(live_goal);
-        if self.volume > self.sustain_goal {
-            self.volume -= 1;
-        }
-        let transitioned = if self.volume <= self.sustain_goal {
-            self.enter_sustain_start()
-        } else {
-            self.frames_until_step = u16::from(self.adsr.decay);
-            false
-        };
+        // `m4a.c:1119-1123`: decrement the byte first, then compare both
+        // operands as signed bytes, so a goal of 128 or more is negative and
+        // the volume wraps through zero before it can reach it.
+        self.volume = self.volume.wrapping_sub(1);
+        let transitioned =
+            if i8::from_ne_bytes([self.volume]) <= i8::from_ne_bytes([self.sustain_goal]) {
+                self.enter_sustain_start()
+            } else {
+                self.frames_until_step = u16::from(self.adsr.decay);
+                false
+            };
         (transitioned, true)
     }
 
@@ -351,10 +357,9 @@ impl CgbEnvelope {
             return (false, false);
         }
         self.latch_goal(live_goal);
-        if self.volume > 0 {
-            self.volume -= 1;
-        }
-        let transitioned = if self.volume == 0 {
+        // `m4a.c:1087-1088`: wrap the byte, then test it as signed.
+        self.volume = self.volume.wrapping_sub(1);
+        let transitioned = if i8::from_ne_bytes([self.volume]) <= 0 {
             self.enter_pseudo_echo_or_silence()
         } else {
             self.frames_until_step = u16::from(self.adsr.release);
@@ -497,6 +502,44 @@ mod tests {
     }
 
     #[test]
+    fn full_byte_sustain_keeps_decaying_under_upstream_signed_compare() {
+        // m4a.c:921 -> sustainGoal = (15*255+15)>>4 = 240 (s8 -16);
+        // m4a.c:1120-1123 decrements then compares (s8)vol <= -16, so the
+        // volume byte decays through zero and wraps up to 240 before sustain.
+        let mut env = plain_envelope(adsr(0, 1, 255, 0), 15);
+
+        let volumes = step_volumes::<34>(&mut env);
+
+        assert_eq!(volumes[..4], [15, 14, 13, 12]);
+        assert_eq!(volumes[15..18], [0, 255, 254]);
+        assert_eq!(volumes[30..], [241, 240, 240, 240]);
+    }
+
+    #[test]
+    fn sustain_goal_keeps_only_its_low_byte() {
+        // m4a.c:921 stores (31*255+15)>>4 = 495 into a u8: 495 - 256 = 239,
+        // which compares as s8 -17.
+        let mut immediate = plain_envelope(adsr(0, 0, 255, 0), 31);
+        immediate.step();
+        assert_eq!(immediate.volume(), 239);
+
+        let mut decaying = plain_envelope(adsr(0, 1, 255, 0), 31);
+        assert_eq!(step_volumes::<4>(&mut decaying), [31, 30, 29, 28]);
+    }
+
+    #[test]
+    fn sustain_goal_wraps_exactly_at_the_byte_boundary() {
+        // (16*255+15)>>4 = 255 fits, (17*255+15)>>4 = 271 -> 15.
+        let mut fits = plain_envelope(adsr(0, 0, 255, 0), 16);
+        fits.step();
+        assert_eq!(fits.volume(), 255);
+
+        let mut wraps = plain_envelope(adsr(0, 0, 255, 0), 17);
+        wraps.step();
+        assert_eq!(wraps.volume(), 15);
+    }
+
+    #[test]
     fn attack_period_paces_the_ramp() {
         let mut env = plain_envelope(adsr(2, 0, 15, 0), 4);
 
@@ -511,6 +554,65 @@ mod tests {
         let boundaries: Vec<u32> = (2..=256).filter(|_| env.step().1).collect();
 
         assert_eq!(boundaries, vec![256]);
+    }
+
+    #[test]
+    fn release_retires_when_volume_turns_negative_as_signed_byte() {
+        // (16*255+15)>>4 = 255 sustain volume; m4a.c:1087-1088 decrements to
+        // 254 then tests (s8)254 = -2 <= 0, so with no echo the voice retires.
+        let mut env = plain_envelope(adsr(0, 0, 255, 1), 16);
+        env.step();
+        assert_eq!(env.volume(), 255);
+
+        env.note_off();
+        env.step();
+        env.step();
+
+        assert!(!env.is_active());
+        assert_eq!(env.volume(), 0);
+    }
+
+    #[test]
+    fn release_signed_boundary_129_retires_at_once_128_keeps_ramping() {
+        // (16*129+15)>>4 = 129 decrements to 128 = (s8)-128 and retires;
+        // (16*128+15)>>4 = 128 decrements to 127 and keeps releasing.
+        let mut retires = plain_envelope(adsr(0, 0, 129, 1), 16);
+        retires.step();
+        assert_eq!(retires.volume(), 129);
+        retires.note_off();
+        retires.step();
+        retires.step();
+        assert!(!retires.is_active());
+        assert_eq!(retires.volume(), 0);
+
+        let mut keeps = plain_envelope(adsr(0, 0, 128, 1), 16);
+        keeps.step();
+        assert_eq!(keeps.volume(), 128);
+        keeps.note_off();
+        keeps.step();
+        keeps.step();
+        assert!(keeps.is_active());
+        assert_eq!(keeps.volume(), 127);
+    }
+
+    #[test]
+    fn release_from_a_negative_byte_enters_pseudo_echo() {
+        // Sustain volume 255 decrements to 254 = (s8)-2 and takes the echo
+        // start: floor (16*128+255)>>8 = 8, held for the echo length.
+        let mut env = CgbEnvelope::new(adsr(0, 0, 255, 1), 16, 128, 3);
+        env.step();
+        assert_eq!(env.volume(), 255);
+
+        env.note_off();
+        env.step();
+        env.step();
+
+        assert!(env.is_active());
+        assert_eq!(env.volume(), 8);
+        step_frames(&mut env, 2);
+        assert!(env.is_active());
+        env.step();
+        assert!(!env.is_active());
     }
 
     #[test]

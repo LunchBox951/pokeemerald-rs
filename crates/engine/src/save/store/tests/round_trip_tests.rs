@@ -526,3 +526,29 @@ fn menu_owned_state_survives_save_and_continue_without_disturbing_other_bytes() 
         );
     }
 }
+
+#[test]
+fn a_coin_balance_survives_save_and_load_without_disturbing_neighbouring_bytes() {
+    let mut block1 = sample_block1();
+    let block2 = sample_block2();
+    assert_ne!(
+        block2.encryption_key & 0xFFFF,
+        0,
+        "test needs a key low half"
+    );
+    let mut store = SaveStore::new();
+    store.save(&block1, &block2);
+    let before = store.base_block1.clone();
+
+    block1.coins.set(9999);
+    store.save(&block1, &block2);
+
+    let mut reopened = SaveStore::from_flash_image(store.flash_image()).expect("valid image");
+    let outcome = reopened.load();
+    assert_eq!(outcome.status, SaveStatus::Ok);
+    assert_eq!(outcome.block1.coins.get(), 9999);
+    assert_eq!(outcome.block1.money, block1.money);
+    assert_eq!(outcome.block1.registered_item, block1.registered_item);
+    assert_eq!(reopened.base_block1[..0x494], before[..0x494]);
+    assert_eq!(reopened.base_block1[0x496..], before[0x496..]);
+}

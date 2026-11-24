@@ -3,11 +3,13 @@
 //! at a time. The turn engine and the RNG adapter it shares with the overworld
 //! live in [`crate::flow::wild_encounter`].
 
-use crate::flow::battle_finalize::PartyBattleEnd;
+use crate::flow::battle_finalize::{finalize_party_battle_turn, PartyBattleEnd};
+use crate::flow::battle_sequence::TurnPolicy;
 use crate::flow::lead_screen::ensure_lead_can_battle;
 use crate::flow::wild_encounter;
 use crate::party::{LoadedLead, PartyError};
 use battle::Dex;
+use platform::ButtonState;
 
 use super::{ActiveBattle, OverworldPhase};
 
@@ -75,24 +77,45 @@ impl OverworldPhase {
 
     /// Advances a wild battle taken out of [`OverworldPhase::active_battle`] by
     /// one frame. Returns the battle while it continues, `None` once it has
-    /// ended or aborted. The turn is [`wild_encounter::advance_wild_battle`]'s;
-    /// the party's members return to their owners through
+    /// ended or aborted. The party's members return to their owners through
     /// [`OverworldPhase::complete_wild_battle`] before any white-out runs.
+    ///
+    /// A battle that plays its text ([`OverworldPhase::open_wild_battle_text`])
+    /// runs its turns through [`OverworldPhase::tick_battle_text`], with
+    /// `buttons` answering the prompts. The engine may have decided the result
+    /// turns earlier, yet nothing is filed, healed or warped until the sequence
+    /// reports that the last message is answered and its hold has elapsed. A
+    /// sequence that cannot continue ends the battle as a failed turn, so a
+    /// result the engine had already decided still stands. A battle without
+    /// text resolves one turn per frame ([`wild_encounter::advance_wild_battle`]).
     ///
     /// A [`battle::BattleOutcome::PlayerLost`] outcome, which the battle reports
     /// only once every member of its roster has fainted, runs
-    /// [`OverworldPhase::white_out`] in the same frame, so no frame observes a
-    /// fainted party. Every ending, a loss
+    /// [`OverworldPhase::white_out`] in the same frame as the ending, so no
+    /// frame observes a fainted party. Every ending, a loss
     /// included, then re-initialises the field tileset animations, as returning
     /// to the field does.
-    pub(super) fn advance_wild_battle_frame(&mut self, wild: WildBattle) -> Option<ActiveBattle> {
+    pub(super) fn advance_wild_battle_frame(
+        &mut self,
+        wild: WildBattle,
+        buttons: ButtonState,
+    ) -> Option<ActiveBattle> {
         let WildBattle {
             battle,
             reserves,
             unplayable_member_remains,
         } = wild;
         let mut slot = Some(battle);
-        let Some(end) = wild_encounter::advance_wild_battle(&mut slot, &mut self.rng) else {
+        let end = if self.battle_sequence.is_some() {
+            let battle = slot.as_mut()?;
+            match self.tick_battle_text(battle, buttons) {
+                None => None,
+                Some(turn_failed) => finalize_party_battle_turn(&mut slot, turn_failed),
+            }
+        } else {
+            wild_encounter::advance_wild_battle(&mut slot, &mut self.rng)
+        };
+        let Some(end) = end else {
             return slot.map(|battle| {
                 ActiveBattle::Wild(WildBattle {
                     battle,
@@ -131,21 +154,8 @@ impl OverworldPhase {
             members,
             entered,
         } = end;
-        let mut members = members.into_iter();
-        let lead = members
-            .next()
-            .expect("a battle always has an active member");
-        self.restore_lead_battler(lead);
         let files_party = !reserves.is_empty() || unplayable_member_remains;
-        let mut entered_owners = Vec::new();
-        for (member, mut owner) in members.zip(reserves).take(entered.saturating_sub(1)) {
-            owner.restore_battler(member);
-            self.save1.player_party[owner.slot()] = owner.merge_and_save(&dex);
-            entered_owners.push(owner);
-        }
-        if files_party {
-            self.flush_lead_to_save();
-        }
+        let entered_owners = self.file_battle_party(&dex, members, entered, reserves, files_party);
         if let Some(outcome) = outcome {
             eprintln!("wild battle: ended -- {outcome:?}");
         }
@@ -158,6 +168,36 @@ impl OverworldPhase {
         }
     }
 
+    /// Files a finished battle's party: position 0 returns to the lent lead, and each
+    /// reserve among the first `entered` members returns to its own owner and is merged
+    /// into its own saved slot. With `flushes_lead` the lead is flushed to the save as
+    /// well. Returns the owners that entered, whose live battlers carry state a save record
+    /// does not.
+    pub(super) fn file_battle_party(
+        &mut self,
+        dex: &Dex,
+        members: Vec<battle::BattlePokemon>,
+        entered: usize,
+        reserves: Vec<LoadedLead>,
+        flushes_lead: bool,
+    ) -> Vec<LoadedLead> {
+        let mut members = members.into_iter();
+        let lead = members
+            .next()
+            .expect("a battle always has an active member");
+        self.restore_lead_battler(lead);
+        let mut entered_owners = Vec::new();
+        for (member, mut owner) in members.zip(reserves).take(entered.saturating_sub(1)) {
+            owner.restore_battler(member);
+            self.save1.player_party[owner.slot()] = owner.merge_and_save(dex);
+            entered_owners.push(owner);
+        }
+        if flushes_lead {
+            self.flush_lead_to_save();
+        }
+        entered_owners
+    }
+
     /// The field lead once a wild battle has filed its party: the first usable saved slot,
     /// as [`Self::reselect_lead_from_save`] picks. A slot held by one of the `entered`
     /// owners keeps that owner, whose live battler carries the state a save record does not
@@ -166,7 +206,11 @@ impl OverworldPhase {
     /// and so does a selection that is only [`crate::party::select_active_battler`]'s
     /// fallback to a fainted slot 0: nothing usable decoded, so the lead that fought stays
     /// the lead rather than moving to another fainted member.
-    fn select_lead_after_wild_battle(&mut self, dex: &Dex, mut entered: Vec<LoadedLead>) {
+    pub(super) fn select_lead_after_wild_battle(
+        &mut self,
+        dex: &Dex,
+        mut entered: Vec<LoadedLead>,
+    ) {
         let selected = match LoadedLead::load(dex, &self.save1.player_party) {
             Ok(selected) => selected,
             Err(error) => {
@@ -193,23 +237,35 @@ impl OverworldPhase {
 
     /// The saved members other than the lead that may be sent out, in slot order, each with
     /// its own owner, and whether a member that counts toward upstream's party HP total was
-    /// left out. Every slot is inspected, not only the stored count's prefix
-    /// (`SetBattlePartyIds` scans all six, `pokeemerald/src/battle_controllers.c:591-606`),
-    /// and an unsaved party (count 0) has no reserves. Left out, and so retained untouched:
-    /// eggs and Bad Eggs (a failed checksum is one), records that are empty, fainted
-    /// members, and the members that have HP but cannot join: valid records that do not
-    /// decode into a battler, and members the battle engine cannot play yet
-    /// ([`ensure_lead_can_battle`]).
-    fn wild_reserve_owners(&self, dex: &Dex) -> (Vec<LoadedLead>, bool) {
+    /// left out, which is logged. The roster and the left-out members are
+    /// [`Self::saved_reserve_owners`]'s.
+    pub(super) fn wild_reserve_owners(&self, dex: &Dex) -> (Vec<LoadedLead>, bool) {
+        let (owners, unplayable) = self.saved_reserve_owners(dex);
+        for reason in &unplayable {
+            eprintln!("battle reserve: {reason} -- left out");
+        }
+        (owners, !unplayable.is_empty())
+    }
+
+    /// The saved members other than the lead that may be sent out, in slot order, each with
+    /// its own owner, and one description per member that counts toward upstream's party HP
+    /// total but cannot join. Nothing is logged. Every slot is inspected, not only the
+    /// stored count's prefix (`SetBattlePartyIds` scans all six,
+    /// `pokeemerald/src/battle_controllers.c:591-606`), and an unsaved party (count 0) has
+    /// no reserves. Left out, and so retained untouched: eggs and Bad Eggs (a failed
+    /// checksum is one), records that are empty, fainted members, and the members that have
+    /// HP but cannot join: valid records that do not decode into a battler, and members the
+    /// battle engine cannot play yet ([`ensure_lead_can_battle`]).
+    pub(super) fn saved_reserve_owners(&self, dex: &Dex) -> (Vec<LoadedLead>, Vec<String>) {
         let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
         let Some(lead_slot) = self.lead.as_ref().map(LoadedLead::slot) else {
-            return (Vec::new(), false);
+            return (Vec::new(), Vec::new());
         };
         if stored == 0 {
-            return (Vec::new(), false);
+            return (Vec::new(), Vec::new());
         }
         let mut owners = Vec::new();
-        let mut unplayable_member_remains = false;
+        let mut unplayable = Vec::new();
         for (slot, record) in self.save1.player_party.iter().enumerate() {
             if slot == lead_slot {
                 continue;
@@ -221,8 +277,7 @@ impl OverworldPhase {
                 Err(PartyError::Egg | PartyError::Substructures(_)) => continue,
                 Err(error) => {
                     if record.hp != 0 && crate::party::record_has_validated_species(record) {
-                        eprintln!("wild encounter: slot {slot}'s record {error} -- left out");
-                        unplayable_member_remains = true;
+                        unplayable.push(format!("slot {slot}'s record {error}"));
                     }
                     continue;
                 }
@@ -231,15 +286,50 @@ impl OverworldPhase {
                 continue;
             }
             if let Err(error) = ensure_lead_can_battle(owner.battler()) {
-                eprintln!(
-                    "wild encounter: slot {slot} can't enter a battle ({error:?}) -- left out"
-                );
-                unplayable_member_remains = true;
+                unplayable.push(format!("slot {slot} can't enter a battle ({error:?})"));
                 continue;
             }
             owners.push(owner);
         }
-        (owners, unplayable_member_remains)
+        (owners, unplayable)
+    }
+
+    /// The ability party slot 0 brings to wild level selection: the saved slot even when it
+    /// is fainted behind another battle lead, or the live lead of an unsaved party.
+    pub(super) fn slot_zero_wild_level_ability(&self) -> Option<assets::AbilityId> {
+        let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
+        if stored == 0 {
+            return self.lead_battler().map(battle::BattlePokemon::ability);
+        }
+        crate::party::slot_zero_wild_level_ability(&Dex::new(), &self.save1.player_party[..stored])
+    }
+
+    /// The flute flags, the Cleanse Tag and slot 0's ability that scale this step's
+    /// encounter rate (`ApplyFluteEncounterRateMod`, `ApplyCleanseTagEncounterRateMod`,
+    /// the ability steps, `src/wild_encounter.c:507-522`). The Tag is the item the saved
+    /// party slot 0 holds even when that slot is fainted, an egg, or not the battle
+    /// lead, or the live lead of an unsaved party. The ability is the same slot's, but an
+    /// egg has none (`:509`); this caller is the ordinary land check, which passes
+    /// `ignoreAbility = FALSE` (`:601`).
+    pub(super) fn encounter_rate_modifiers(
+        &self,
+    ) -> engine::overworld::wild_encounter::EncounterRateModifiers {
+        let flag_set = |flag| matches!(self.save1.event_data.flag_get(flag), Ok(true));
+        let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
+        let slot_zero_item = if stored == 0 {
+            self.lead_battler().map_or(
+                assets::items::ItemId::NONE,
+                battle::BattlePokemon::held_item,
+            )
+        } else {
+            crate::party::slot_zero_held_item(&self.save1.player_party[..stored])
+        };
+        engine::overworld::wild_encounter::EncounterRateModifiers {
+            encounter_up_flute: flag_set(engine::event_data::FLAG_SYS_ENC_UP_ITEM),
+            encounter_down_flute: flag_set(engine::event_data::FLAG_SYS_ENC_DOWN_ITEM),
+            slot_zero_holds_cleanse_tag: slot_zero_item == assets::items::ItemId::CLEANSE_TAG,
+            slot_zero_ability: self.slot_zero_wild_level_ability(),
+        }
     }
 
     /// Starts a wild battle from a fired encounter, taking the party lead into
@@ -311,11 +401,27 @@ impl OverworldPhase {
         ) {
             Ok(battle) => {
                 let battle = battle.with_player_obedience(self.player_obedience());
+                match self.open_wild_battle_text(
+                    &battle,
+                    TurnPolicy::Run,
+                    &reserves,
+                    unplayable_member_remains,
+                ) {
+                    Ok(sequence) => self.battle_sequence = sequence,
+                    Err(error) => {
+                        // The saved records were never touched, so dropping the
+                        // reserve owners and the unstarted battle undoes the start.
+                        eprintln!("wild encounter: can't play its text ({error})");
+                        self.restore_lead_battler(lead);
+                        return;
+                    }
+                }
                 self.active_battle = Some(ActiveBattle::Wild(WildBattle {
                     battle,
                     reserves,
                     unplayable_member_remains,
                 }));
+                self.count_wild_battle_start();
             }
             Err(error) => {
                 eprintln!("wild encounter: can't start a battle ({error:?})");

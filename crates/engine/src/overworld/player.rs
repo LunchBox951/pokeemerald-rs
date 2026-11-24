@@ -4,7 +4,7 @@ use assets::{MapId, MetatileCell};
 
 use super::collision::{directionally_impassable, elevation_mismatch, Collision};
 use super::direction::Direction;
-use super::map_runtime::{ConnectedMapData, MapRuntime};
+use super::map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime};
 use super::metatile_behavior::{
     is_forced_movement, is_forced_movement_input_tile, MB_EASTWARD_CURRENT, MB_ICE, MB_LONG_GRASS,
     MB_MUDDY_SLOPE, MB_NORMAL, MB_NORTHWARD_CURRENT, MB_SLIDE_EAST, MB_SLIDE_NORTH, MB_SLIDE_SOUTH,
@@ -239,12 +239,21 @@ pub enum StepOutcome {
     },
 }
 
+/// The live objects a landing's occupancy test reads.
+#[derive(Debug, Clone, Copy)]
+enum LandingObjects {
+    /// The current map's, read through its runtime when the collision is decided.
+    CurrentMap,
+    /// The objects a connection crossing carries, already asked about the landing tile.
+    Carried { occupied: bool },
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Landing {
     position: TilePos,
     cell: MetatileCell,
     destination_behavior: u8,
-    object_events_accessible: bool,
+    objects: LandingObjects,
     /// The connected map entered, or `None` for a same-map landing.
     to_map: Option<MapId>,
 }
@@ -255,25 +264,25 @@ impl Landing {
             position,
             cell,
             destination_behavior,
-            object_events_accessible: true,
+            objects: LandingObjects::CurrentMap,
             to_map: None,
         }
     }
 
     fn across_connection(
-        to_map: MapId,
-        position: TilePos,
+        crossing: ConnectionCrossing,
         cell: MetatileCell,
         destination_behavior: u8,
+        carried_object_occupies: bool,
     ) -> Self {
-        // `ConnectedMapData` exposes the neighbour's cells and behaviors, but
-        // not its object events.
         Self {
-            position,
+            position: crossing.position,
             cell,
             destination_behavior,
-            object_events_accessible: false,
-            to_map: Some(to_map),
+            objects: LandingObjects::Carried {
+                occupied: carried_object_occupies,
+            },
+            to_map: Some(crossing.target),
         }
     }
 }
@@ -999,11 +1008,15 @@ impl PlayerState {
         let destination_behavior = maps
             .metatile_behavior(crossing.target, crossing.position.0, crossing.position.1)
             .ok_or(Collision::Impassable)?;
+        // The destination's own templates have not spawned, so only the carried live set can
+        // occupy the landing tile.
+        let carried_object_occupies =
+            maps.carried_object_event_blocks(crossing, self.collision_elevation);
         Ok(Landing::across_connection(
-            crossing.target,
-            crossing.position,
+            crossing,
             cell,
             destination_behavior,
+            carried_object_occupies,
         ))
     }
 
@@ -1026,19 +1039,18 @@ impl PlayerState {
         if elevation_mismatch(self.collision_elevation, landing.cell.elevation) {
             return Some(Collision::ElevationMismatch);
         }
-        if landing.object_events_accessible
-            && blocking_object_event_at(
+        let object_event_occupies = match landing.objects {
+            LandingObjects::CurrentMap => blocking_object_event_at(
                 runtime,
                 landing.position.0,
                 landing.position.1,
                 self.collision_elevation,
                 event_data,
             )
-            .is_some()
-        {
-            return Some(Collision::ObjectEvent);
-        }
-        None
+            .is_some(),
+            LandingObjects::Carried { occupied } => occupied,
+        };
+        object_event_occupies.then_some(Collision::ObjectEvent)
     }
 
     /// `cadence` is the crossing's own pace -- the caller's, not the
