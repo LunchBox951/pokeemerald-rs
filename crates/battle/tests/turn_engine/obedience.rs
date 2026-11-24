@@ -113,6 +113,17 @@ fn the_eighth_badge_ends_obedience_checks() {
     assert_eq!(traded.draws, base.draws);
 }
 
+/// Level 100 exceeds badge 6's limit of 70, so only the eighth badge's
+/// exemption keeps the gate from drawing.
+#[test]
+fn the_eighth_badge_exempts_a_level_above_badge_six_limit() {
+    let base = baseline(100, &[255, 255, 255]);
+    let badged = PlayerObedience::new(PLAYER_ID, PLAYER_NAME, [true; 4]);
+    let traded = run(100, OTHER_ID, Some(badged), &[255, 255, 255]);
+    assert_eq!(traded.draws, base.draws);
+    assert_eq!(traded.events, base.events);
+}
+
 #[test]
 fn badge_two_raises_the_limit_past_the_pokemons_level() {
     let base = baseline(20, &[255, 255, 255]);
