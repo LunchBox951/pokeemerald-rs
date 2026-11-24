@@ -11,6 +11,7 @@ use rendering::Rgb888;
 use super::test_support::{
     image_meta, synthetic_overworld_pack_entries_for,
     synthetic_scene_result_with_connections_and_events, write_synthetic_pack, Entry,
+    NoConnectedMaps,
 };
 use super::{OverworldScene, PaletteStage};
 
@@ -79,7 +80,7 @@ fn seeded(scene: &OverworldScene) -> ObjectEventCollection {
     let mut objects = ObjectEventCollection::from_templates(scene.map_events().object_events);
     // Only an admitted object is drawn; map load admits the ones in view of the player.
     let _ = objects.admit_on_map_load(PLAYER_TILE, &EventData::new());
-    scene.update_object_elevations(&mut objects);
+    scene.seed_object_elevations(&mut objects);
     objects
 }
 
@@ -100,7 +101,7 @@ fn walk_east(scene: &OverworldScene, objects: &mut ObjectEventCollection) {
         .unwrap()
         .state_mut()
         .walk(Direction::East);
-    scene.update_object_elevations(objects);
+    scene.update_object_elevations(objects, &NoConnectedMaps);
 }
 
 fn npc_priority(scene: &OverworldScene, objects: &ObjectEventCollection) -> u8 {
@@ -252,7 +253,7 @@ fn finishing_a_walk_off_a_multi_level_cell_draws_at_the_destinations_priority() 
         .unwrap()
         .state_mut()
         .settle_previous_position();
-    scene.update_object_elevations(&mut objects);
+    scene.update_object_elevations(&mut objects, &NoConnectedMaps);
     assert_eq!(pair(&objects), (5, 5));
     assert_eq!(npc_priority(&scene, &objects), 2);
 
@@ -288,7 +289,7 @@ fn consecutive_walked_tiles_each_settle_before_the_next_through_compose_live() {
     assert_eq!(pair(&objects), (4, 4));
     let state = objects.get_mut(1).unwrap().state_mut();
     state.settle_previous_position();
-    scene.update_object_elevation(state);
+    scene.update_object_elevation(state, &NoConnectedMaps);
     assert_eq!(pair(&objects), (5, 5));
 
     // Tile two begins onto the transition cell, which keeps tile one's 5.

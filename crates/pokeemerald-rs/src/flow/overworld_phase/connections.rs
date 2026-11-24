@@ -58,6 +58,23 @@ pub(super) struct MapConnections<'a> {
     pub(super) departed_objects: Option<&'a ObjectEventCollection>,
 }
 
+impl<'a> MapConnections<'a> {
+    /// A resolver that only reads terrain: no crossing is asked about, and the live set stays
+    /// the caller's own borrow ([`Self::departed_objects`] is `None`).
+    pub(super) fn terrain_only(
+        pack: &'a OnceCell<assets::pack::AssetPack>,
+        source: crate::pack_source::PackSource,
+        map: assets::MapId,
+    ) -> Self {
+        Self {
+            pack,
+            source,
+            departed: map,
+            departed_objects: None,
+        }
+    }
+}
+
 impl MapConnections<'_> {
     /// The memoized pack, loading it on the first successful call.
     fn load_cached_pack(&self) -> Option<&assets::pack::AssetPack> {
@@ -608,7 +625,7 @@ impl OverworldPhase {
 /// and replaces them on a map change (`:1645-1673`).
 pub(super) fn seed_object_events(scene: &overworld::OverworldScene) -> ObjectEventCollection {
     let mut objects = ObjectEventCollection::from_templates(scene.map_events().object_events);
-    scene.update_object_elevations(&mut objects);
+    scene.seed_object_elevations(&mut objects);
     objects
 }
 

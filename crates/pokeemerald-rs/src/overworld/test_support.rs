@@ -6,6 +6,19 @@ use std::mem::size_of;
 use super::OverworldSceneError;
 use assets::{AssetPack, LayoutId, MapLayout};
 
+/// Connected maps that answer nothing, for a test whose objects stay on the scene's own grid.
+pub(crate) struct NoConnectedMaps;
+
+impl engine::overworld::ConnectedMapData for NoConnectedMaps {
+    fn dimensions(&self, _map: assets::MapId) -> Option<(u16, u16)> {
+        None
+    }
+
+    fn metatile_behavior(&self, _map: assets::MapId, _x: i32, _y: i32) -> Option<u8> {
+        None
+    }
+}
+
 /// One directory entry for [`write_synthetic_pack`]; a private copy of
 /// `assets::pack::tests`' own entry shape, which that module does not
 /// export.
@@ -40,6 +53,18 @@ impl super::OverworldScene {
             .into_iter()
             .filter(|entry| frame_block.contains(&entry.tile_index()))
             .collect()
+    }
+
+    /// Every OAM entry [`Self::compose_live`] would draw, in draw order.
+    #[must_use]
+    pub(crate) fn all_live_entries_for_test(
+        &self,
+        objects: &engine::overworld::object_event::ObjectEventCollection,
+        player: &engine::overworld::PlayerState,
+        event_data: &engine::event_data::EventData,
+    ) -> Vec<super::obj_vram::SheetSprite> {
+        self.sprites
+            .live_entries(objects, player, event_data, &self.grass)
     }
 
     /// The palette bank `graphics_id` is bound to.
@@ -923,6 +948,25 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
     sprite_paths: &[&str],
     with_tall_grass: bool,
 ) {
+    write_route101_oldale_layout_pack_with_route101_elevations(
+        path,
+        oldale_specials,
+        sprite_paths,
+        with_tall_grass,
+        &[],
+    );
+}
+
+/// [`write_route101_oldale_layout_pack_with`], with each of `route101_elevations` setting its
+/// cell's elevation on Route 101's 20x20 grid, so Oldale's backup band reads a different
+/// elevation than the ground the departed scene stood on.
+pub(crate) fn write_route101_oldale_layout_pack_with_route101_elevations(
+    path: &std::path::Path,
+    oldale_specials: &[((u16, u16), u8)],
+    sprite_paths: &[&str],
+    with_tall_grass: bool,
+    route101_elevations: &[((u16, u16), u8)],
+) {
     let rename = |mut e: Entry, layout: &str| {
         if e.id == "layout/map_test/map" {
             e.id = format!("layout/{layout}/map");
@@ -942,6 +986,24 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
             .filter(|e| e.id.starts_with("layout/map_test/"))
             .map(|e| rename(e, "route101")),
     );
+    let route101_grid = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/route101/map")
+        .expect("the Route 101 grid was just added");
+    for &((x, y), elevation) in route101_elevations {
+        assert!(
+            x < 20 && y < 20,
+            "elevated tile ({x}, {y}) must lie inside Route 101's 20x20 grid"
+        );
+        let cell = assets::MetatileCell {
+            metatile_id: 0,
+            collision: 0,
+            elevation,
+        }
+        .pack();
+        let idx = (usize::from(y) * 20 + usize::from(x)) * 2;
+        route101_grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    }
     entries.extend(
         synthetic_overworld_pack_entries_for("petalburg", 20, 20)
             .into_iter()

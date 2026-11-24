@@ -644,18 +644,38 @@ impl OverworldScene {
     /// (`ObjectEventUpdateElevation`, `event_object_movement.c:7759-7771`).
     /// Call it after creating `objects` and after they move, before
     /// [`Self::compose_live`], which only reads the settled elevations.
+    ///
+    /// A cell past this map's edge resolves through `maps`, the connected
+    /// maps' rows the backup layout keeps there ([`engine::overworld::MapRuntime::metatile_cell_in_band`]),
+    /// so an object a connection crossing carried over takes its cell's
+    /// elevation as the scheduler's own update does.
     pub fn update_object_elevations(
         &self,
         objects: &mut engine::overworld::object_event::ObjectEventCollection,
+        maps: &dyn engine::overworld::ConnectedMapData,
     ) {
-        self.sprites.update_object_elevations(objects);
+        sprites::update_object_elevations(objects, &self.runtime(), maps);
+    }
+
+    /// Settles the elevations of `objects` freshly seeded from this map's templates, which
+    /// stand on its own cells: no connection crossing has carried anything into a new
+    /// collection, so no neighbour's cell is read.
+    pub fn seed_object_elevations(
+        &self,
+        objects: &mut engine::overworld::object_event::ObjectEventCollection,
+    ) {
+        self.sprites.seed_object_elevations(objects);
     }
 
     /// [`Self::update_object_elevations`] for one object: the finish-step update
     /// (`DoGroundEffects_OnFinishStep`, `event_object_movement.c:8119-8132`) a driver
     /// that ends one walked tile and begins the next in a single frame runs between them.
-    pub fn update_object_elevation(&self, state: &mut engine::overworld::ObjectEventState) {
-        self.sprites.update_object_elevation(state);
+    pub fn update_object_elevation(
+        &self,
+        state: &mut engine::overworld::ObjectEventState,
+        maps: &dyn engine::overworld::ConnectedMapData,
+    ) {
+        sprites::update_object_elevation(state, &self.runtime(), maps);
     }
 
     /// [`Self::compose`] with object-event sprites drawn from `objects`' live

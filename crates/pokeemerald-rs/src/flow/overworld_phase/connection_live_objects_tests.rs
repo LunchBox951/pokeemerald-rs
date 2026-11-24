@@ -732,3 +732,86 @@ fn a_carried_npc_on_the_landing_tile_refuses_the_crossing() {
     assert!(entry_of(&phase, &templates[0]).is_active());
     assert_eq!(entry_of(&phase, &templates[0]).carried_from(), None);
 }
+
+/// A carried NPC standing on a cell of the entered map's backup band settles on the neighbour's
+/// elevation through the scene's own passes, not only the scheduler's (`ObjectEventUpdateElevation`
+/// reads `MapGridGetElevationAt`, which reads the backup layout, `event_object_movement.c:7759-7771`,
+/// `fieldmap.c:121-314`). Oldale's south band is Route 101's north rows; the NPC authored at
+/// elevation 3 on Route 101's row 0 crosses to Oldale's row 20, where Route 101's pack cell is 4,
+/// so it draws at OBJ priority 1 instead of the 2 an elevation 3 gives.
+#[test]
+fn a_carried_npc_on_a_band_cell_settles_on_the_neighbours_elevation_and_draw_order() {
+    const NPC_X: i16 = 11;
+    const BAND_ELEVATION: u8 = 4;
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-carried-band-elevation-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    crate::overworld::test_support::write_route101_oldale_layout_pack_with_route101_elevations(
+        &path,
+        &[],
+        &RETURNABLE_SPRITES,
+        false,
+        &[((NPC_X.try_into().unwrap(), 0), BAND_ELEVATION)],
+    );
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::test_support::synthetic_scene(20, 20),
+        ROUTE_101,
+        engine::overworld::PlayerState::new((LANDING_X, 0), 3, Direction::North),
+        None,
+    );
+    phase.pack_source =
+        crate::pack_source::PackSource::Test(Box::leak(path.clone().into_boxed_path()));
+    let templates: &'static [ObjectEvent] = Box::leak(vec![npc(9, NPC_X, 0)].into_boxed_slice());
+    phase.object_events = ObjectEventCollection::from_templates(templates);
+    idle(&mut phase, 1);
+    let departed = entry_of(&phase, &templates[0]).state();
+    assert_eq!(
+        (departed.elevation(), departed.previous_elevation()),
+        (3, 3),
+        "fixture precondition: the departed ground is elevation 3"
+    );
+
+    cross_north(&mut phase);
+    idle(&mut phase, 3);
+    std::fs::remove_file(path).expect("scratch pack");
+    let carried = entry_of(&phase, &templates[0]);
+    assert_eq!(carried.carried_from(), Some(ROUTE_101));
+    assert_eq!(
+        carried.state().position(),
+        (i32::from(NPC_X), 20),
+        "the NPC stands in Oldale's south band, past its grid"
+    );
+    assert_eq!(
+        (
+            carried.state().elevation(),
+            carried.state().previous_elevation()
+        ),
+        (BAND_ELEVATION, BAND_ELEVATION),
+        "the band cell's elevation, not the one the NPC carried over"
+    );
+
+    let (player, event_data) = (&phase.player, &phase.save1.event_data);
+    let npc_entries = phase.scene.live_entries_for_test(
+        &phase.object_events,
+        player,
+        event_data,
+        "OBJ_EVENT_GFX_YOUNGSTER",
+    );
+    assert_eq!(npc_entries.len(), 1, "the carried NPC is drawn");
+    assert_eq!(
+        npc_entries[0].priority(),
+        1,
+        "elevation 4 draws at priority 1"
+    );
+    let order = phase
+        .scene
+        .all_live_entries_for_test(&phase.object_events, player, event_data);
+    let position = |tile: u16| order.iter().position(|entry| entry.tile_index() == tile);
+    assert_eq!(
+        position(npc_entries[0].tile_index()),
+        Some(0),
+        "drawn ahead of the player, which stands at elevation 3"
+    );
+}
