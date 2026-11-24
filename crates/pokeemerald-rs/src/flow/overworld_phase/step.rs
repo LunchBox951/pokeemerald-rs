@@ -425,8 +425,9 @@ impl OverworldPhase {
             // before `self.sight_approach` existed and returned `None`
             // (PR #407 review).
             let player_was_moving = self.player.in_transit();
+            let trainer_was_moving = self.approaching_trainer_step_in_flight();
             self.tick_player_under_approach_lock();
-            if player_was_moving {
+            if player_was_moving || trainer_was_moving {
                 if let Some(approach) = &mut self.sight_approach {
                     approach.advance_lock_handoff(true);
                 }
@@ -563,7 +564,7 @@ impl OverworldPhase {
             pack: &self.connection_pack,
             source: self.pack_source.clone(),
             departed: self.map_id,
-            departed_objects: &self.object_events,
+            departed_objects: Some(&self.object_events),
         };
         // `interaction` preempts movement too (issue #435), and so do a
         // claimed fresh `START`, the pre-movement animated-door check

@@ -96,6 +96,8 @@
 //! - `pc-wallpaper/<style>/{tiles,tilemap}` and
 //!   `pc-wallpaper/<style>/palette/{frame,background}`
 //! - `field-message/table`
+//! - `trainer-defeat-speech/table`
+//! - `trainer-class-name/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
 //! - `party-menu/{image,palette,raw}/<name>`
 //! - `battle-anim/catalog`
@@ -146,6 +148,8 @@ mod text_window;
 mod tilesets;
 mod title;
 mod trainer_battler;
+mod trainer_class_names;
+mod trainer_defeat_speech;
 mod trainer_pic;
 pub(crate) mod voicegroups;
 mod wav;
@@ -235,6 +239,8 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     midi::extract_songs(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     field_message::extract_field_message(&upstream, &mut writer)?;
+    trainer_defeat_speech::extract_trainer_defeat_speech(&upstream, &mut writer)?;
+    trainer_class_names::extract_trainer_class_names(&upstream, &mut writer)?;
     let catalog = battle_anim::extract_battle_anim(&upstream, &mut writer)?;
     battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;
     battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
