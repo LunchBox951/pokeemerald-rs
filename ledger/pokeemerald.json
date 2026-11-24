@@ -21058,6 +21058,14 @@
       "status": "pending"
     },
     "include/bard_music.h": {
+      "artifacts": {
+        "BardSoundTemplate": {
+          "reason": "BardSoundTemplate fields (include/bard_music.h:12-18) as a typed slot plus length adjustment, unused and volume, with the six-slot word size from MAX_BARD_SOUNDS_PER_WORD. The rest of the header (BardSound, BardSong, pitch tables) is not ported and the file row stays pending.",
+          "rust_target": "crates/assets/src/bard_events.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -21466,6 +21474,12 @@
     },
     "include/constants/easy_chat.h": {
       "artifacts": {
+        "EC_WORD_EVENTS": {
+          "reason": "The EC_WORD_* indices of EC_GROUP_EVENTS (include/constants/easy_chat.h:1034-1062, EC_WORD_APPEAL 0 through EC_WORD_FRONTIER 28) are the associated constants of assets::easy_chat_events::EventsWordIndex. The Trainer and Greetings indices are modelled separately in assets::easy_chat (TrainerWordIndex, GreetingsWordIndex). The EC_GROUP_* group ids and the words of every group other than Trainer, Greetings and Events are not modelled.",
+          "rust_target": "crates/assets/src/easy_chat_events.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "EC_WORD_GREETINGS": {
           "reason": "The EC_WORD_* indices of EC_GROUP_GREETINGS (include/constants/easy_chat.h:260-302, EC_WORD_THANKS 0 through EC_WORD_COUNT_ON 41) are the associated constants of assets::easy_chat::GreetingsWordIndex. The group id and every other group's words are not modelled.",
           "rust_target": "crates/assets/src/easy_chat.rs",
@@ -21737,6 +21751,14 @@
       "status": "pending"
     },
     "include/constants/trainers.h": {
+      "artifacts": {
+        "FACILITY_CLASS": {
+          "reason": "The 82 FACILITY_CLASS_* values and FACILITY_CLASSES_COUNT (include/constants/trainers.h:123-206) are ported as FacilityClass constants. The RS_FACILITY_CLASS_* values, the TRAINER_PIC_* and TRAINER_CLASS_* groups, and the rest of the header are not claimed here.",
+          "rust_target": "crates/assets/src/facility_classes.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -21886,7 +21908,7 @@
     "include/easy_chat.h": {
       "artifacts": {
         "EasyChatWordInfo": {
-          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91) is modelled only as per-group row shapes: assets::easy_chat::GreetingsWord and assets::easy_chat::TrainerWord each carry text (a charmap-notation str), alphabeticalOrder and enabled (a bool), with alphabeticalOrder typed as that group's own index (a GreetingsWordIndex whose domain is 0..41, a TrainerWordIndex whose domain is 0..26). The struct is shared by every Easy Chat group (easy_chat_group_status.h uses alphabetical indices past 41), so the general row type and index domain, and every other group's use of it, are not modelled.",
+          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91) is modelled only as per-group row shapes: assets::easy_chat::GreetingsWord, assets::easy_chat::TrainerWord and assets::easy_chat_events::EventsWord each carry text (a charmap-notation str), alphabeticalOrder and enabled (a bool), with alphabeticalOrder typed as that group's own index (a GreetingsWordIndex whose domain is 0..41, a TrainerWordIndex whose domain is 0..26, an EventsWordIndex whose domain is 0..28). The struct is shared by every Easy Chat group (easy_chat_group_status.h uses alphabetical indices past 41), so the general row type and index domain, and every other group's use of it, are not modelled.",
           "rust_target": "crates/assets/src/easy_chat.rs",
           "spec": "S-4",
           "status": "stubbed"
@@ -28692,6 +28714,14 @@
       "status": "pending"
     },
     "src/bard_music.c": {
+      "artifacts": {
+        "sound_template_markers": {
+          "reason": "PREV_BARD_SOUND and NULL_BARD_SOUND (src/bard_music.c:6-10) as distinct Hold and End slots, upstream song ids 51 and 255. Group dispatch, sound calculation and playback are not ported and the file row stays pending.",
+          "rust_target": "crates/assets/src/bard_events.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -29889,6 +29919,32 @@
       "status": "pending"
     },
     "src/coins.c": {
+      "artifacts": {
+        "AddCoins": {
+          "reason": "coins.c:51-71. Coins::add refuses (false, balance unchanged) at or above MAX_COINS 9999 before touching the balance, so an imported balance over the cap (say 12000) stays as stored rather than being pulled down; from a balance below the cap it caps the total at 9999 and succeeds, so adding zero below the cap succeeds. Upstream's overflow guard (ownedCoins > ownedCoins + toAdd) compares int-promoted sums and never fires, so the sum is narrowed to u16 before the cap check and an add past 0xFFFF wraps (9998 + 60000 leaves 4462); Coins::add reproduces that with wrapping_add.",
+          "rust_target": "crates/engine/src/save/coins.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetCoins": {
+          "reason": "coins.c:41-44. Coins::get returns the plaintext balance; the stored u16 is XORed with the low 16 bits of SaveBlock2::encryption_key at the SaveBlock1 boundary (crates/engine/src/save/block.rs, offset 0x494, global.h:1003), so an imported value above MAX_COINS reads back as stored.",
+          "rust_target": "crates/engine/src/save/coins.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "RemoveCoins": {
+          "reason": "coins.c:73-82. Coins::remove succeeds and subtracts only when the balance covers the amount, else returns false with the balance unchanged; removing zero always succeeds, and a balance above MAX_COINS is not capped by a removal.",
+          "rust_target": "crates/engine/src/save/coins.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "SetCoins": {
+          "reason": "coins.c:46-49. Coins::set stores the u16 as given with no cap; the key's low 16 bits are applied when SaveBlock1 serializes (block.rs, offset 0x494). new_game.c:173's SetCoins(0) is SaveBlock1::default() holding Coins::default(). A lost encryption key clears the balance like money (store.rs clear_key_encrypted_fields).",
+          "rust_target": "crates/engine/src/save/coins.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -29981,7 +30037,10 @@
     "src/data/bard_music/events.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All 29 six-slot Events Bard templates (src/data/bard_music/events.h:3-236) in Events word-index order as phoneme ids, Hold and End slots with zero lengthAdjustment, unused and volume. Nothing consumes the table yet: Bard playback, the other word groups and the group dispatch are not ported.",
+      "rust_target": "crates/assets/src/bard_events.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/bard_music/feelings.h": {
       "category": "code.header",
@@ -30080,7 +30139,10 @@
     "src/data/battle_frontier/battle_frontier_exchange_corner.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All four reward lists (sFrontierExchangeCorner_Decor1, Decor2, Vitamins, HoldItems, src/data/battle_frontier/battle_frontier_exchange_corner.h:1-49) with their paired description lists (:51-99), including the repeated large-doll description and the gText_Exit entry that ends each list, as assets::frontier_exchange_corner::ExchangeCornerTable. The ITEM_LIST_END terminator is the Exit reward (raw_id 0xFFFF). Description text is transcribed from BattleFrontier_ExchangeServiceCorner_Text_*Desc in data/maps/BattleFrontier_ExchangeServiceCorner/scripts.inc. BP prices, purchases, icons and the src/field_specials.c FillFrontierExchangeCornerWindowAndItemIcon rendering are not modelled.",
+      "rust_target": "crates/assets/src/frontier_exchange_corner.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/battle_frontier/battle_frontier_mons.h": {
       "category": "code.header",
@@ -30143,7 +30205,10 @@
     "src/data/credits.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "Data only: the PAGE_* order, sCreditsEntryPointerTable (src/data/credits.h:385-786, 57 pages of ENTRIES_PER_PAGE = 5 slots, blank slots kept) and the sCreditsText_* English strings with each sCreditsEntry_* isTitle flag, re-expressed as crates/assets/src/credits.rs CREDITS_PAGES; the 19 sCreditsEntry_* rows no page references are kept as CREDITS_UNUSED_ENTRIES. The never-read leading byte of struct CreditsEntry is dropped. The roll itself (src/credits.c Task_UpdatePage paging, PrintCreditsText title/name colours and centring, bicycle scene, Pokemon slideshow, timing) is not modelled and src/credits.c stays pending.",
+      "rust_target": "crates/assets/src/credits.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/decoration/description.h": {
       "category": "code.header",
@@ -30209,7 +30274,10 @@
     "src/data/easy_chat/easy_chat_group_events.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gEasyChatGroup_Events (src/data/easy_chat/easy_chat_group_events.h:31-206) and the 29 gEasyChatWord_* texts (lines 1-29) extracted to assets::easy_chat_events::EventsGroup keyed by EventsWordIndex (EC_WORD_APPEAL..EC_WORD_FRONTIER, include/constants/easy_chat.h:1034-1062): text, alphabeticalOrder permutation and the enabled flag per row; all 29 words are enabled upstream, the link-themed ones included, and the {POKEBLOCK} charmap token is kept as a token. Other groups, easy_chat_groups.h, unlock state and the editor UI are not modelled, and nothing consumes the table yet.",
+      "rust_target": "crates/assets/src/easy_chat_events.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/easy_chat/easy_chat_group_feelings.h": {
       "category": "code.header",
@@ -30438,7 +30506,10 @@
     "src/data/lilycove_lady.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All tables in src/data/lilycove_lady.h (:1-468) extracted to assets::lilycove_lady::LilycoveLadyData: the 16 nine-word quizzes with answers and prizes (:22-288, QuizLadyQuiz; Easy Chat words kept as numeric u16 encodings, EC_MOVE2 and EC_EMPTY_WORD included), the six Favor requests with item lists ending in ITEM_NONE and prizes (:291-431, FavorLadyRequest), the five Contest Lady category records (:434-468, ContestLadyRecord: Pokémon name, category word, contest name, species, sprite) and the Lady and Pokémon OBJ_EVENT_GFX_* sprite IDs (:5-19) as numeric u16. The gText_FavorLady_*, gText_ContestLady_* and gText_*Contest strings (src/strings.c:615-619, :1595-1611) are transcribed as the record text. Quiz, Favor and Contest Lady selection, save state and record mixing (src/lilycove_lady.c) are not modelled.",
+      "rust_target": "crates/assets/src/lilycove_lady.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/object_events/base_oam.h": {
       "artifacts": {
@@ -30931,7 +31002,10 @@
     "src/data/pokemon/trainer_class_lookups.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gFacilityClassToPicIndex (src/data/pokemon/trainer_class_lookups.h:1-85) and gFacilityClassToTrainerClass (:87-171) ported as typed 82-entry tables over the FACILITY_CLASS_* values in include/constants/trainers.h, reusing TrainerPicId and TrainerClass from crates/assets/src/trainers.rs. Each has a checked lookup that rejects a facility class at or above FACILITY_CLASSES_COUNT. Data only: no consumer function (Battle Frontier trainer generation, trainer cards, portrait graphics, class display names) is ported.",
+      "rust_target": "crates/assets/src/facility_classes.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/tutor_learnsets.h": {
       "category": "code.header",
@@ -31458,6 +31532,20 @@
       "status": "pending"
     },
     "src/data/trade.h": {
+      "artifacts": {
+        "sIngameTradeMail": {
+          "reason": "All three sIngameTradeMail messages (src/data/trade.h:1053-1085) ported as nine numeric Easy Chat word IDs each; encoding follows include/constants/easy_chat.h:1116-1121 including internal species IDs and group 21 for EC_POKEMON_NATIONAL(MEOWTH). The zero-padded tenth slot is omitted because GetInGameTradeMail (src/trade.c:4597-4602) copies only MAIL_WORDS_COUNT=9. Mail construction and other src/trade.c runtime behavior remain pending.",
+          "rust_target": "crates/assets/src/ingame_trades.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sIngameTrades": {
+          "reason": "All four sIngameTrades records (src/data/trade.h:985-1051; struct src/trade.c:150-164; IDs include/constants/trade.h:8-11) ported with stable offer IDs, requested/offered species, nickname, IVs in HP/Atk/Def/Speed/SpAtk/SpDef order, ability selection, OT ID/name/gender, personality, contest conditions in Cool/Beauty/Cute/Smart/Tough order, held item, sheen and optional mail; mailNum -1 maps to no mail. The rest of src/data/trade.h (link-menu and trade-animation graphics, tilemaps, text, templates, shared data) is pending, and src/trade.c runtime behavior (Pokemon construction, specials, animation, save transaction) is not ported.",
+          "rust_target": "crates/assets/src/ingame_trades.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -32538,6 +32626,14 @@
       "status": "pending"
     },
     "src/field_specials.c": {
+      "artifacts": {
+        "IncrementBirthIslandRockStepCount": {
+          "reason": "field_specials.c:3377-3387, called from ProcessPlayerFieldInput on tookStep right after IncrementGameStat(GAME_STAT_STEPS) and before TryStartStepBasedScript (field_control_avatar.c:155-160). OverworldPhase::increment_birth_island_rock_step_count, run from count_took_step, advances VAR_DEOXYS_ROCK_STEP_COUNT (vars.h:72, a saved event var) on MAP_BIRTH_ISLAND_EXTERIOR only, as a u16 wrapping increment that stores zero once the result passes 99, so a loaded value of 99 or more resets rather than climbing and 0xFFFF wraps to zero with no panic and no RNG draw. A landing a coord event or door-shaped warp then claims is still counted; the forced landing, the escalator arrival's held walk-off and an unfinished crossing are not (take_stepped_onto), as for GAME_STAT_STEPS. Not modelled: the rock movement and palette (SetDeoxysRockPalette, the Deoxys triangle scripts), the puzzle outcome, the Deoxys encounter and the trip to the island.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/birth_island_rock.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -33451,7 +33547,7 @@
           "status": "stubbed"
         },
         "AddTextPrinterForMessage": {
-          "reason": "AddTextPrinterForMessage's text colors (menu.c:191-195: TEXT_COLOR_DARK_GRAY foreground, TEXT_COLOR_LIGHT_GRAY shadow) are modelled by reading palette indices 2/3 of the loaded message-box palette (text_window.c:93-97) for its callers' message boxes -- field NPC dialogue (src/field_message_box.c#ShowFieldMessage, #ShowFieldMessageFromBuffer) and Birch's speech (src/main_menu.c#birch_speech), issue #1372. Its gTextFlags.canABSpeedUpPrint write is modelled at those callers via Printer::with_ab_speed_up_print (issue #393), and its GetPlayerTextSpeedDelay() speed is tracked under src/menu.c#GetPlayerTextSpeedDelay. The TEXT_COLOR_WHITE background argument is modelled as TextColors::MESSAGE_BOX's background index 1, the window interior the frame tiles already draw (glyph background pixels paint only once a HIGHLIGHT selects another background). NOT modelled: the shared window-0/gStringVar4 printer global it prints into; the parent file stays pending. The window palette is now mapped per glyph: NpcDialog/IntroScene pass the loaded message-box palette to textbox::compose_window_ops, which draws each glyph with the TextColors it carries -- defaulting to TEXT_COLOR_DARK_GRAY/TEXT_COLOR_LIGHT_GRAY at palette indices 2/3 (menu.c:191-195, text_window.c:93-97) -- so inline COLOR/SHADOW/HIGHLIGHT controls recolour only later glyphs; FrameAssets::glyph_colors remains only as the fixed-role helper for menu callers.",
+          "reason": "AddTextPrinterForMessage's text colors (menu.c:191-195: TEXT_COLOR_DARK_GRAY foreground, TEXT_COLOR_LIGHT_GRAY shadow) are modelled by reading palette indices 2/3 of the loaded message-box palette (text_window.c:93-97) for its callers' message boxes -- field NPC dialogue (src/field_message_box.c#ShowFieldMessage, #ShowFieldMessageFromBuffer) and Birch's speech (src/main_menu.c#birch_speech), issue #1372. Its gTextFlags.canABSpeedUpPrint write is modelled at those callers via Printer::with_ab_speed_up_print (issue #393), and its GetPlayerTextSpeedDelay() speed is tracked under src/menu.c#GetPlayerTextSpeedDelay. The TEXT_COLOR_WHITE background argument is modelled as TextColors::MESSAGE_BOX's background index 1, the window interior the frame tiles already draw (glyph background pixels paint palette index 1 over earlier pixels, as upstream's GLYPH_COPY does for every nonzero mapped nibble, text.c:583-591, and a HIGHLIGHT selects another background). NOT modelled: the shared window-0/gStringVar4 printer global it prints into; the parent file stays pending. The window palette is now mapped per glyph: NpcDialog/IntroScene pass the loaded message-box palette to textbox::compose_window_ops, which draws each glyph with the TextColors it carries -- defaulting to TEXT_COLOR_DARK_GRAY/TEXT_COLOR_LIGHT_GRAY at palette indices 2/3 (menu.c:191-195, text_window.c:93-97) -- so inline COLOR/SHADOW/HIGHLIGHT controls recolour only later glyphs; FrameAssets::glyph_colors remains only as the fixed-role helper for menu callers.",
           "rust_target": "crates/pokeemerald-rs/src/textbox.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -35464,7 +35560,7 @@
           "status": "rewritten"
         },
         "RenderText": {
-          "reason": "The per-frame RENDER_STATE_HANDLE_CHAR loop -- newline, \\l/\\p prompt-scroll/prompt-clear wait-then-act states, glyph-id resolution via the decoded byte, and the reveal-delay countdown -- reimplemented as Printer::tick's frame-driven state machine (PrinterState). Faithful to upstream's unconditional reload before each consumed char ('delayCounter = textSpeed', or 3 in non-recorded auto-scroll mode, text.c:958-961; see the auto-scroll note at the end of this reason): a RENDER_REPEAT-class token (newline, no-op control code, skipped placeholder) reloads the reveal-delay counter and re-enters HANDLE_CHAR, so at Slow/Mid (textSpeed != 0) it costs one full reveal-delay period (3 frames in auto-scroll mode) rather than being frame-free, and the first glyph after a \\l scroll or \\p page clear resumes with the counter that reload left (textSpeed, or 3 in auto-scroll mode); at Fast/Instant (textSpeed == 0) those tokens stay free. Audio extended control codes (including the PLAY_* family) and PALETTE are consumed as documented no-ops; FONT, MIN_LETTER_SPACING and the colour controls are modelled, see below; see the module's 'Deliberately out of scope' docs. EXT_CTRL_CODE_PAUSE is no longer among them: it is a modelled render state -- PrinterState::Pause mirrors upstream's RENDER_STATE_PAUSE (text.c:1215-1220), counting the control code's argument frames down before returning to HandleChar. The held-A/B print speed-up in the same HANDLE_CHAR case (gTextFlags.canABSpeedUpPrint / subStruct->hasPrintBeenSpedUp, text.c:944-953) is ported as well: Printer::with_ab_speed_up_print opts a printer in, PrinterInput carries the JOY_NEW/JOY_HELD(A_BUTTON | B_BUTTON) bits per frame, a fresh edge during a reveal delay zeroes delay_counter and arms has_print_been_sped_up, and every later held frame then zeroes it again -- upstream's exact two-step. EXT_CTRL_CODE_CLEAR and EXT_CTRL_CODE_CLEAR_TO have left that no-op set too: both keep upstream's width > 0 guard (text.c:1063-1090) -- CLEAR erases its argument's width at the cursor and advances past it, CLEAR_TO erases forward to the origin-relative column and so never moves the cursor back, unlike its sibling SKIP -- and a clear that did erase ends the frame the way upstream's RENDER_PRINT does, while a clear with nothing ahead stays a free RENDER_REPEAT. The erased rectangle is reported through Printer::cleared_span rather than painted; see src/text.c#ClearTextSpan. EXT_CTRL_CODE_FILL_WINDOW has left that no-op set too: it fills the whole window with the background colour and resets both cursor axes to the printer origin before continuing within the same frame as RENDER_REPEAT (text.c:1048-1057), surfaced through Printer::cleared_window rather than painted, same as the CLEAR/CLEAR_TO span above. CHAR_KEYPAD_ICON is modelled too: the icon's placement and cursor advance follow text.c:1114-1118 -- Printer::tick records a KeypadIconPlacement at the cursor (read via Printer::keypad_icon), advances the cursor by the icon's width from keypad_icon_size (the sKeypadIcons table, text.c:98-115), and ends the frame as RENDER_PRINT does (TickEvent::Idle); the printer has no template letter spacing, so the advance is the width alone. The icon bitmap itself is drawn by the dialog and intro compositors; see src/text.c#DrawKeypadIcon. EXT_CTRL_CODE_FONT has left that no-op set too: it is a RENDER_REPEAT-class control (text.c:1007-1010) that changes only the source the next glyph renders from (Printer::active_font), mapping upstream ids as the glyph dispatch does (text.c:1123-1141) -- FONT_SMALL, FONT_NORMAL, FONT_SHORT with FONT_SHORT_COPY_1..3 as Short, FONT_NARROW, FONT_SMALL_NARROW -- while Braille, Bold and unknown ids select no source, so later glyphs are skipped with no fallback glyph. The CLEAR/CLEAR_TO height follows the font of the latest glyph rendered (gCurGlyph.height, text.c:649-674), not the FONT control, and the newline and scroll metrics stay on the printer's template font (text.c:969-970, :1181-1185). EXT_CTRL_CODE_MIN_LETTER_SPACING has left the no-op set too: the control sets the printer's minimum (text.c:1091-1092; a zero argument restores the ordinary Latin advance), and after each rendered glyph while nonzero the printer advances by the glyph width, reports only the positive gap up to the minimum through Printer::cleared_span at the glyph's clear height, and advances to the minimum in the same tick (text.c:1149-1156). IntroScene, NpcDialog and the battle message layer append the glyph before that gap ClearSpan, keeping upstream's draw-then-clear order; the other TickEvent::Glyph consumers do not retain erases and so ignore the span. The template letterSpacing of the Japanese branch (text.c:1149-1164) stays unmodelled with the rest of the Japanese path. The sFontInfos scope is recorded under its own entry. Known divergence for those unmodelled fonts: upstream skips only the DecompressGlyph step, then still runs CopyGlyphToWindow with the previous gCurGlyph and advances the cursor by its width (text.c:1123-1166), whereas the port draws nothing and leaves the cursor in place. No shipped text reaches it (the only mid-string FONT ids in game text are FONT_SMALL and FONT_NORMAL), so it is left unmodelled. EXT_CTRL_CODE_COLOR, HIGHLIGHT, SHADOW and COLOR_HIGHLIGHT_SHADOW are modelled too (text.c:980-1003): Printer keeps a TextColors (fg, bg, shadow palette indices, defaulting to the message box's 2/1/3 per menu.c:191-201, settable with Printer::with_text_colors and reset by restart; the battle message layer starts from B_WIN_MSG's 1/15/6, battle_message.c:1486-1488), each control updates its own index (a hand-built token short of its arguments changes nothing) and stays RENDER_REPEAT, so the reveal-delay reload is unchanged. Every RevealedGlyph and ClearedSpan carries the TextColors in force, RevealedGlyph also carries raster_height and paint_background (a HIGHLIGHT makes later glyphs paint their background pixels within advance_width x the font's Latin glyph height, as CopyGlyphToWindow does), and Printer::cleared_window_colors reports the colours a FILL_WINDOW or page clear erased with, captured at the clear. textbox::compose_window_ops maps each glyph's own indices through the window palette (index 0 transparent) instead of fixed foreground/shadow slots. The prompt-scroll's fill of newly exposed rows with the current background (ScrollWindow, text.c:1196-1201) is modelled too: NpcDialog, IntroScene and the battle message layer push a background-coloured clear span across the exposed rows through textbox::scroll_window_ops, using the colours in force during the scroll. A highlighted glyph paints both background glyph values (0 and 3) within its footprint, as GenerateFontHalfRowLookupTable maps them (text.c:363-420). A scroll fill and FILL_WINDOW with background index 0 write transparent pixels, as PIXEL_FILL(0) does: textbox::compose_window_ops restores the scene beneath the window for them (textbox::needs_scene), as a WindowOp::ScrollFill. A CLEAR/CLEAR_TO span with background 0 paints nothing, matching ClearTextSpan's sLastTextBgColor skip (text.c:649-674), and a glyph drawn under HIGHLIGHT 0 leaves the window pixels beneath it untouched, as GLYPH_COPY skips zero pixels (text.c:572-593).  In auto-scroll mode (Printer::with_auto_scroll, a non-recorded printer) upstream reloads 3 before each consumed token at every speed (text.c:958-959). Printer::reveal_delay_reload reloads 3 only when the speed's own wait is non-zero and 0 otherwise; the result is the same, because upstream's 'delayCounter && textSpeed' guard (text.c:947) never counts the reload down at Fast or Instant. So Slow glyphs and RENDER_REPEAT-class tokens advance on the Mid cadence, and Fast and Instant stay undelayed. The recorded-battle branch is not modelled.",
+          "reason": "The per-frame RENDER_STATE_HANDLE_CHAR loop -- newline, \\l/\\p prompt-scroll/prompt-clear wait-then-act states, glyph-id resolution via the decoded byte, and the reveal-delay countdown -- reimplemented as Printer::tick's frame-driven state machine (PrinterState). Faithful to upstream's unconditional reload before each consumed char ('delayCounter = textSpeed', or 3 in non-recorded auto-scroll mode, text.c:958-961; see the auto-scroll note at the end of this reason): a RENDER_REPEAT-class token (newline, no-op control code, skipped placeholder) reloads the reveal-delay counter and re-enters HANDLE_CHAR, so at Slow/Mid (textSpeed != 0) it costs one full reveal-delay period (3 frames in auto-scroll mode) rather than being frame-free, and the first glyph after a \\l scroll or \\p page clear resumes with the counter that reload left (textSpeed, or 3 in auto-scroll mode); at Fast/Instant (textSpeed == 0) those tokens stay free. Audio extended control codes (including the PLAY_* family) and PALETTE are consumed as documented no-ops; FONT, MIN_LETTER_SPACING and the colour controls are modelled, see below; see the module's 'Deliberately out of scope' docs. EXT_CTRL_CODE_PAUSE is no longer among them: it is a modelled render state -- PrinterState::Pause mirrors upstream's RENDER_STATE_PAUSE (text.c:1215-1220), counting the control code's argument frames down before returning to HandleChar. The held-A/B print speed-up in the same HANDLE_CHAR case (gTextFlags.canABSpeedUpPrint / subStruct->hasPrintBeenSpedUp, text.c:944-953) is ported as well: Printer::with_ab_speed_up_print opts a printer in, PrinterInput carries the JOY_NEW/JOY_HELD(A_BUTTON | B_BUTTON) bits per frame, a fresh edge during a reveal delay zeroes delay_counter and arms has_print_been_sped_up, and every later held frame then zeroes it again -- upstream's exact two-step. EXT_CTRL_CODE_CLEAR and EXT_CTRL_CODE_CLEAR_TO have left that no-op set too: both keep upstream's width > 0 guard (text.c:1063-1090) -- CLEAR erases its argument's width at the cursor and advances past it, CLEAR_TO erases forward to the origin-relative column and so never moves the cursor back, unlike its sibling SKIP -- and a clear that did erase ends the frame the way upstream's RENDER_PRINT does, while a clear with nothing ahead stays a free RENDER_REPEAT. The erased rectangle is reported through Printer::cleared_span rather than painted; see src/text.c#ClearTextSpan. EXT_CTRL_CODE_FILL_WINDOW has left that no-op set too: it fills the whole window with the background colour and resets both cursor axes to the printer origin before continuing within the same frame as RENDER_REPEAT (text.c:1048-1057), surfaced through Printer::cleared_window rather than painted, same as the CLEAR/CLEAR_TO span above. CHAR_KEYPAD_ICON is modelled too: the icon's placement and cursor advance follow text.c:1114-1118 -- Printer::tick records a KeypadIconPlacement at the cursor (read via Printer::keypad_icon), advances the cursor by the icon's width from keypad_icon_size (the sKeypadIcons table, text.c:98-115), and ends the frame as RENDER_PRINT does (TickEvent::Idle); the printer has no template letter spacing, so the advance is the width alone. The icon bitmap itself is drawn by the dialog and intro compositors; see src/text.c#DrawKeypadIcon. EXT_CTRL_CODE_FONT has left that no-op set too: it is a RENDER_REPEAT-class control (text.c:1007-1010) that changes only the source the next glyph renders from (Printer::active_font), mapping upstream ids as the glyph dispatch does (text.c:1123-1141) -- FONT_SMALL, FONT_NORMAL, FONT_SHORT with FONT_SHORT_COPY_1..3 as Short, FONT_NARROW, FONT_SMALL_NARROW -- while Braille, Bold and unknown ids select no source, so later glyphs are skipped with no fallback glyph. The CLEAR/CLEAR_TO height follows the font of the latest glyph rendered (gCurGlyph.height, text.c:649-674), not the FONT control, and the newline and scroll metrics stay on the printer's template font (text.c:969-970, :1181-1185). EXT_CTRL_CODE_MIN_LETTER_SPACING has left the no-op set too: the control sets the printer's minimum (text.c:1091-1092; a zero argument restores the ordinary Latin advance), and after each rendered glyph while nonzero the printer advances by the glyph width, reports only the positive gap up to the minimum through Printer::cleared_span at the glyph's clear height, and advances to the minimum in the same tick (text.c:1149-1156). IntroScene, NpcDialog and the battle message layer append the glyph before that gap ClearSpan, keeping upstream's draw-then-clear order; the other TickEvent::Glyph consumers do not retain erases and so ignore the span. The template letterSpacing of the Japanese branch (text.c:1149-1164) stays unmodelled with the rest of the Japanese path. The sFontInfos scope is recorded under its own entry. Known divergence for those unmodelled fonts: upstream skips only the DecompressGlyph step, then still runs CopyGlyphToWindow with the previous gCurGlyph and advances the cursor by its width (text.c:1123-1166), whereas the port draws nothing and leaves the cursor in place. No shipped text reaches it (the only mid-string FONT ids in game text are FONT_SMALL and FONT_NORMAL), so it is left unmodelled. EXT_CTRL_CODE_COLOR, HIGHLIGHT, SHADOW and COLOR_HIGHLIGHT_SHADOW are modelled too (text.c:980-1003): Printer keeps a TextColors (fg, bg, shadow palette indices, defaulting to the message box's 2/1/3 per menu.c:191-201, settable with Printer::with_text_colors and reset by restart; the battle message layer starts from B_WIN_MSG's 1/15/6, battle_message.c:1486-1488), each control updates its own index (a hand-built token short of its arguments changes nothing) and stays RENDER_REPEAT, so the reveal-delay reload is unchanged. Every RevealedGlyph and ClearedSpan carries the TextColors in force, RevealedGlyph also carries raster_height (every glyph, default-coloured or highlighted, paints its background pixels within advance_width x the font's Latin glyph height, as CopyGlyphToWindow does; rows at or past a short font's height stay unpainted), and Printer::cleared_window_colors reports the colours a FILL_WINDOW or page clear erased with, captured at the clear. textbox::compose_window_ops maps each glyph's own indices through the window palette (index 0 transparent) instead of fixed foreground/shadow slots. The prompt-scroll's fill of newly exposed rows with the current background (ScrollWindow, text.c:1196-1201) is modelled too: NpcDialog, IntroScene and the battle message layer push a background-coloured clear span across the exposed rows through textbox::scroll_window_ops, using the colours in force during the scroll. Every glyph, default-coloured or highlighted, paints both background glyph values (0 and 3) with its background index within its footprint, over earlier pixels (for example after SKIP moves back), as GenerateFontHalfRowLookupTable maps them (text.c:363-420) and GLYPH_COPY writes every nonzero nibble (text.c:583-593). A scroll fill and FILL_WINDOW with background index 0 write transparent pixels, as PIXEL_FILL(0) does: textbox::compose_window_ops restores the scene beneath the window for them (textbox::needs_scene), as a WindowOp::ScrollFill. A CLEAR/CLEAR_TO span with background 0 paints nothing, matching ClearTextSpan's sLastTextBgColor skip (text.c:649-674), and a glyph whose background index is 0 (HIGHLIGHT 0 or a configured 0) leaves the window pixels beneath it untouched, as GLYPH_COPY skips zero pixels (text.c:572-593).  In auto-scroll mode (Printer::with_auto_scroll, a non-recorded printer) upstream reloads 3 before each consumed token at every speed (text.c:958-959). Printer::reveal_delay_reload reloads 3 only when the speed's own wait is non-zero and 0 otherwise; the result is the same, because upstream's 'delayCounter && textSpeed' guard (text.c:947) never counts the reload down at Fast or Instant. So Slow glyphs and RENDER_REPEAT-class tokens advance on the Mid cadence, and Fast and Instant stay undelayed. The recorded-battle branch is not modelled.",
           "rust_target": "crates/engine/src/text/render.rs",
           "spec": "S-5",
           "status": "stubbed"

@@ -3,6 +3,7 @@
 pub mod bag;
 pub mod block;
 pub mod checksum;
+pub mod coins;
 pub mod file;
 pub mod game_stats;
 pub mod play_time;
@@ -16,6 +17,7 @@ pub use block::{
     BattleStyle, ButtonMode, Coords16, PlayTime, PlayerGender, SaveBlock1, SaveBlock2, SaveError,
     SavedObjectEvent, SoundMode, WarpData,
 };
+pub use coins::{Coins, MAX_COINS};
 pub use file::{
     default_save_path, SaveFile, SaveFileError, SaveFileGuard, LOCK_FILE_NAME, SAVE_PATH_ENV,
 };
