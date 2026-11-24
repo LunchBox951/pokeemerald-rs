@@ -71,7 +71,11 @@ pub struct Trainer {
     pub class: Vec<Token>,
     /// The trainer name (`B_TRAINER1_NAME`).
     pub name: String,
-    /// The defeat text (`GetTrainerALoseText`), terminator removed.
+    /// The defeat text as `GetTrainerALoseText` returns it, terminator removed.
+    ///
+    /// Already expanded: its `{PLAYER}` and `{KUN}` are replaced, because the
+    /// template expansion copies it without expanding it again. Build it with
+    /// [`Trainer::from_tables`] rather than by hand.
     pub lose_text: Vec<Token>,
 }
 

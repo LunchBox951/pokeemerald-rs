@@ -1171,6 +1171,8 @@ mod route103_rival_driver_tests;
 #[cfg(test)]
 mod route103_rival_frame_order_tests;
 #[cfg(test)]
+mod route103_rival_narration_tests;
+#[cfg(test)]
 mod route103_rival_test_support;
 #[cfg(test)]
 mod route103_rival_tests;
