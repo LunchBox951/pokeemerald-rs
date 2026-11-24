@@ -35162,6 +35162,12 @@
           "rust_target": "crates/assets/src/slot_machine_reels.rs",
           "spec": "S-4",
           "status": "ported"
+        },
+        "sReelTimeSymbols": {
+          "reason": "src/slot_machine.c:5298-5300 sReelTimeSymbols, transcribed as the six-position Reel Time number strip (1, 0, 5, 4, 3, 2; REELTIME_SYMBOLS, src/slot_machine.c:38) behind reel_time_strip/reel_time_number_at, which refuse an out-of-range position, and ReelTimeNumber::new, which refuses a value above 5. Pinned position by position by unit tests (with a mutation check) and an ignored test that re-parses src/slot_machine.c. Data only: GetReelTimeSymbol position wrapping, reel-time position selection and spinning, the odds, sprite animation and awards are NOT modelled.",
+          "rust_target": "crates/assets/src/slot_machine_reel_time.rs",
+          "spec": "S-4",
+          "status": "ported"
         }
       },
       "category": "code.source",
