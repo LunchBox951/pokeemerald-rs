@@ -34,8 +34,9 @@
 //! Cross-song SFX priority/interruption and compressed or reversed
 //! DirectSound waves are not implemented. Single-song voice allocation is
 //! implemented. `PORT` and `XCMD` commands other than the ADSR overrides
-//! (`xATTA`..`xRELE`), `xWAIT`, `xIECV`/`xIECL`, and the terminal reserved
-//! kinds 0 and 3 are decoded but not executed.
+//! (`xATTA`..`xRELE`), `xWAIT`, `xIECV`/`xIECL`, the sample-progress kind
+//! `0x0D` and the terminal reserved kinds 0 and 3 are decoded but not
+//! executed.
 
 // M4A documentation uses hardware names and upstream symbols in prose;
 // repetitive backticks obscure the explanation. Related volume and pitch
@@ -73,6 +74,9 @@ pub use song::{
     rhythm_pan_from_pan_sweep, Instrument, KeySplit, Rhythm, RhythmChild, Song, ToneData, KEY_SLOTS,
 };
 pub use voice::Voice;
+
+#[cfg(test)]
+mod voice_sample_progress_tests;
 
 #[cfg(test)]
 // The direct null backend copies samples without resampling; exact float

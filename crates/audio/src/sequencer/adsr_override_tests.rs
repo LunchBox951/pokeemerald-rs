@@ -136,6 +136,36 @@ fn each_override_changes_a_cgb_note_like_the_bank_byte_would() {
 }
 
 #[test]
+fn a_full_byte_xsust_reaches_the_cgb_envelope_unclamped() {
+    // `ply_xsust` stores the whole operand byte (`m4a.c:1583`..`:1586`); the
+    // envelope then keeps its low byte and compares it as a signed byte
+    // (`m4a.c:921`, `:1119`..`:1123`). A clamp to 0..15 would instead match the
+    // bank tone holding 15.
+    let full_byte = render_bits(
+        vec![square_tone(CGB_BASE)],
+        vec![note_track(&[xcmd(XCMD_SUST, 255)])],
+    );
+    let in_bank = render_bits(
+        vec![square_tone(CgbAdsr {
+            sustain: 255,
+            ..CGB_BASE
+        })],
+        vec![note_track(&[])],
+    );
+    let clamped = render_bits(
+        vec![square_tone(CgbAdsr {
+            sustain: 15,
+            ..CGB_BASE
+        })],
+        vec![note_track(&[])],
+    );
+    let bank_byte = render_bits(vec![square_tone(CGB_BASE)], vec![note_track(&[])]);
+    assert_eq!(full_byte, in_bank, "xSUST 255 acts like a bank byte of 255");
+    assert_ne!(full_byte, clamped, "xSUST 255 must not clamp to 15");
+    assert_ne!(full_byte, bank_byte, "xSUST 255 must change the note");
+}
+
+#[test]
 fn an_override_on_one_track_leaves_another_track_on_the_bank_tone() {
     let release_override = [xcmd(XCMD_RELE, 245)];
     let voices = || vec![direct_tone(DIRECT_BASE)];
