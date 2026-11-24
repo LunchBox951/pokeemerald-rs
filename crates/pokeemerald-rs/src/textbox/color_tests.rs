@@ -533,3 +533,95 @@ fn a_short_fonts_default_background_stops_at_the_fonts_height() {
         }
     }
 }
+
+/// A Normal-font sheet for decoded streams: `A` (0xBB) is solid foreground,
+/// `B` (0xBC) is background except a foreground last column, and the space
+/// (0x00) is all background; each is 6 wide.
+struct OverlapSheet;
+
+impl assets::fonts::GlyphSource for OverlapSheet {
+    fn font(&self) -> assets::FontId {
+        assets::FontId::Normal
+    }
+
+    fn glyph(&self, glyph_id: u16) -> Option<Glyph> {
+        let mut pixels = [0u8; GLYPH_PIXELS];
+        match glyph_id {
+            0x00 => {}
+            0xBB => pixels.fill(1),
+            0xBC => {
+                for row in pixels.chunks_exact_mut(16) {
+                    row[5] = 1;
+                }
+            }
+            _ => return None,
+        }
+        Some(Glyph {
+            advance_width: 6,
+            pixels,
+        })
+    }
+}
+
+/// Decodes `bytes`, prints them through [`engine::text::render::Printer`],
+/// and composes every revealed glyph over a marker framebuffer.
+fn compose_decoded(bytes: &[u8], palette: &[Rgb888]) -> Framebuffer {
+    use engine::text::render::{Printer, PrinterInput, TextSpeed};
+    let tokens = engine::text::decode(bytes).expect("the stream decodes");
+    let mut printer = Printer::new(tokens, OverlapSheet, TextSpeed::Instant, (0, 0));
+    let mut ops = Vec::new();
+    for _ in 0..64 {
+        match printer.tick(PrinterInput::none()) {
+            TickEvent::Glyph(glyph) => ops.push(WindowOp::Glyph(glyph)),
+            TickEvent::Finished => break,
+            _ => {}
+        }
+    }
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &ops,
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    fb
+}
+
+/// A decoded `SKIP` back draws a glyph and a space over earlier text. Upstream
+/// paints a default glyph's background with `bgColor` (`text.c:378-381`,
+/// `:583-591`), so the stale foreground goes, and `{HIGHLIGHT 1}`, the same
+/// background chosen explicitly, gives the identical window.
+#[test]
+fn a_decoded_skip_back_overlap_paints_the_same_with_or_without_highlight_1() {
+    const EOS: u8 = 0xFF;
+    const HIGHLIGHT_1: [u8; 3] = [0xFC, 0x02, 0x01];
+    const SKIP_0: [u8; 3] = [0xFC, 0x12, 0x00];
+    let palette = distinct_palette();
+    // "A{SKIP 0}B" and "A{SKIP 0} ": the second glyph lands on the first.
+    for (second, label) in [(0xBC, "glyph"), (0x00, "space")] {
+        let plain = [&[0xBB][..], &SKIP_0, &[second, EOS]].concat();
+        let highlighted = [&HIGHLIGHT_1[..], &plain].concat();
+        let plain_fb = compose_decoded(&plain, &palette);
+        let highlighted_fb = compose_decoded(&highlighted, &palette);
+        for y in 0..16usize {
+            for x in 0..16usize {
+                let expected = if x >= 6 || y >= 15 {
+                    marker_fb().pixel(x, y)
+                } else if second == 0xBC && x == 5 {
+                    Some(palette[2])
+                } else {
+                    Some(palette[1])
+                };
+                assert_eq!(plain_fb.pixel(x, y), expected, "{label} ({x}, {y})");
+                assert_eq!(
+                    highlighted_fb.pixel(x, y),
+                    plain_fb.pixel(x, y),
+                    "{label} ({x}, {y}): HIGHLIGHT 1 changed the pixel"
+                );
+            }
+        }
+    }
+}
