@@ -34727,6 +34727,14 @@
       "status": "pending"
     },
     "src/roulette.c": {
+      "artifacts": {
+        "sRouletteSlots": {
+          "reason": "src/roulette.c:735-809 sRouletteSlots, transcribed as the twelve wheel slots in wheel order (not grid order), each with its gridSquare (SQU_*, src/roulette.c:49-69) and flag (F_*, src/roulette.c:81-100), behind wheel_slot/wheel_slot_at, which refuse a slot of 12 or more, and GridSquare::new, which refuses a value that is not one of the twelve squares. Pinned row by row by unit tests, a mutation check on the table, and an ignored test that re-parses src/roulette.c. Data only: the unread id1 and id2 fields, grid rendering, bet selection, ball physics, payouts and coin changes are NOT modelled; src/roulette.c stays pending.",
+          "rust_target": "crates/assets/src/roulette_slots.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

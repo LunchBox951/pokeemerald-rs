@@ -27,9 +27,10 @@
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
 //! starting positions (see [`slot_machine_reels`]), the region-map section
-//! grid (see [`region_map_layout`]), and the Battle Palace per-nature
-//! move-group, target and flavor tables (see [`battle_palace`]); more data
-//! follows as the crate fills out.
+//! grid (see [`region_map_layout`]), the Battle Palace per-nature
+//! move-group, target and flavor tables (see [`battle_palace`]), and the
+//! Roulette wheel-slot grid squares and hit flags (see [`roulette_slots`]);
+//! more data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
 //! audio-extraction backends emit into (S-4) live in [`audio`].
@@ -88,6 +89,7 @@ pub mod pokedex;
 pub mod pokenav_city_maps;
 pub mod region_map_layout;
 pub mod ribbon_descriptions;
+pub mod roulette_slots;
 pub mod script_refs;
 pub mod slot_machine_reels;
 pub mod species;
@@ -202,6 +204,10 @@ pub use pokedex::{
 };
 pub use ribbon_descriptions::{
     NormalRibbonId, RibbonDescription, RibbonDescriptionTable, RibbonError, NORMAL_RIBBON_COUNT,
+};
+pub use roulette_slots::{
+    wheel_slot, wheel_slot_at, wheel_slots, GridSquare, RouletteSlot, RouletteSlotError, WheelSlot,
+    WHEEL_SLOT_COUNT,
 };
 pub use slot_machine_reels::{
     initial_position, reel_strip, symbol_at, Reel, ReelSymbol, SlotMachineError, StartKind,
