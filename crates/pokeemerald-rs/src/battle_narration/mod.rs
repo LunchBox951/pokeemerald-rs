@@ -40,6 +40,7 @@ mod narrator;
 mod presenter;
 mod queue;
 mod string_ids;
+mod trainer_text;
 
 pub use context::{
     BattleBuffer, BattleKind, Battler, BufferOp, NarrationContext, Side, StatusName, Trainer,
@@ -49,6 +50,9 @@ pub use names::{AssetNames, NarrationNames};
 pub use narrator::{Narrator, Scene};
 pub use presenter::{BattleMessageLayer, LayerStatus, NarrationTick, PresentationError};
 pub use queue::{GateError, GateStatus, NarrationGate};
+#[cfg(test)]
+pub(crate) use trainer_text::synthetic;
+pub use trainer_text::TrainerTextError;
 
 use std::error::Error;
 use std::fmt;
@@ -149,4 +153,5 @@ mod tests {
     mod presentation_support;
     mod production_flows;
     mod real_pack;
+    mod trainer_text;
 }

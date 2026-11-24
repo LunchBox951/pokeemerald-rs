@@ -150,9 +150,14 @@
 //! [`super::OverworldPhase::begin_wild_battle`] before it -- the trigger
 //! check itself draws nothing.
 
+use assets::{
+    AssetPack, TrainerClassNameTable, TrainerDefeatSpeechContext, TrainerDefeatSpeechTable,
+    TrainerTable,
+};
 use engine::event_data::EventData;
 use engine::save::PlayerGender;
 
+use crate::battle_narration::{Trainer, TrainerTextError};
 use crate::flow::npc_trainer_battle;
 use crate::flow::route103_rival::{self, PlayerStarter, Rival};
 
@@ -282,6 +287,89 @@ pub(super) fn setup_rival_gfx_id_on_transition(
 #[must_use]
 pub(super) fn is_rival_trigger(map: assets::MapId, script: &str) -> bool {
     map == ROUTE_103 && script == RIVAL_SCRIPT
+}
+
+/// The defeat-speech script context of `rival`: the speech each of
+/// `Route103_EventScript_StartMayBattle*` and `..._StartBrendanBattle*` names
+/// in its `trainerbattle_no_intro` (`data/maps/Route103/scripts.inc:62`-`:87`).
+/// One speech serves a rival's three starter variants, so the starter selects
+/// the trainer but not the speech.
+const fn rival_defeat_speech(rival: Rival) -> TrainerDefeatSpeechContext {
+    match rival {
+        Rival::May => TrainerDefeatSpeechContext::Route103May,
+        Rival::Brendan => TrainerDefeatSpeechContext::Route103Brendan,
+    }
+}
+
+/// The rival's narration trainer from the pack's two tables: the class, name,
+/// and `{PLAYER}`/`{KUN}`-expanded defeat speech of
+/// [`route103_rival::route103_rival_for`]`(rival, starter)`, ready to be the
+/// `trainer` of a battle scene (S-6).
+///
+/// The live trainer sequencer (#3180) consumes this when it opens the rival
+/// battle's text; nothing in the overworld reads it yet.
+///
+/// # Errors
+///
+/// [`TrainerTextError`] for a trainer identity or stream the tables cannot
+/// supply.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the live trainer sequencer (#3180) is the production caller"
+    )
+)]
+pub(super) fn route103_rival_narration_trainer_from_tables(
+    classes: &TrainerClassNameTable<'_>,
+    speeches: &TrainerDefeatSpeechTable<'_>,
+    rival: Rival,
+    starter: PlayerStarter,
+    player_name: &str,
+    gender: PlayerGender,
+) -> Result<Trainer, TrainerTextError> {
+    let data = TrainerTable::new()
+        .trainer(route103_rival::route103_rival_for(rival, starter))
+        .map_err(|_| TrainerTextError::UnknownTrainer)?;
+    Trainer::from_tables(
+        classes,
+        speeches,
+        data.class,
+        data.name,
+        rival_defeat_speech(rival),
+        player_name,
+        gender,
+    )
+}
+
+/// [`route103_rival_narration_trainer_from_tables`] over `pack`'s tables.
+///
+/// # Errors
+///
+/// [`TrainerTextError::Pack`] when the pack cannot supply a table, and the
+/// errors of [`route103_rival_narration_trainer_from_tables`].
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the live trainer sequencer (#3180) is the production caller"
+    )
+)]
+pub(super) fn route103_rival_narration_trainer(
+    pack: &AssetPack,
+    rival: Rival,
+    starter: PlayerStarter,
+    player_name: &str,
+    gender: PlayerGender,
+) -> Result<Trainer, TrainerTextError> {
+    route103_rival_narration_trainer_from_tables(
+        &pack.trainer_class_names()?,
+        &pack.trainer_defeat_speeches()?,
+        rival,
+        starter,
+        player_name,
+        gender,
+    )
 }
 
 impl OverworldPhase {
