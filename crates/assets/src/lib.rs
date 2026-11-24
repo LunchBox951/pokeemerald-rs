@@ -27,9 +27,10 @@
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
 //! starting positions (see [`slot_machine_reels`]), the region-map section
-//! grid (see [`region_map_layout`]), and the Battle Palace per-nature
-//! move-group, target and flavor tables (see [`battle_palace`]); more data
-//! follows as the crate fills out.
+//! grid (see [`region_map_layout`]), the Battle Palace per-nature
+//! move-group, target and flavor tables (see [`battle_palace`]), and the
+//! Verdanturf Battle Tent Pokémon sets (see [`verdanturf_tent_mons`]); more
+//! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
 //! audio-extraction backends emit into (S-4) live in [`audio`].
@@ -97,6 +98,7 @@ pub mod trainer_hill_prizes;
 pub mod trainers;
 pub mod tutor_learnsets;
 pub mod type_chart;
+pub mod verdanturf_tent_mons;
 pub mod wild_encounters;
 
 pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
@@ -225,6 +227,11 @@ pub use trainers::{
 };
 pub use tutor_learnsets::{TutorLearnsets, TutorSlot};
 pub use type_chart::{Effectiveness, Type, TypeChart};
+pub use verdanturf_tent_mons::{
+    verdanturf_tent_mon, verdanturf_tent_roster, TentEvSpread, TentHeldItemIndex,
+    VerdanturfTentMon, VerdanturfTentMonError, VerdanturfTentSetId, VERDANTURF_TENT_MON_COUNT,
+    VERDANTURF_TENT_MON_MOVES,
+};
 pub use wild_encounters::{
     FishingEncounters, FishingRod, LandEncounters, MapId, RockSmashEncounters, WaterEncounters,
     WildEncounterHeader, WildEncounterTable, WildPokemon, FISHING_SLOTS, LAND_SLOTS,
