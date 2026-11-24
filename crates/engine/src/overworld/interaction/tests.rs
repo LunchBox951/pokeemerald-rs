@@ -662,6 +662,7 @@ fn a_carried_object_is_selected_with_the_map_it_was_carried_from() {
                 frozen: false,
                 player_dashing: false,
                 terrain: *runtime,
+                connected_maps: &crate::overworld::NoConnectedMaps,
                 player_previous_position: STANDING,
                 player_elevation: ELEVATION,
             };
