@@ -3,8 +3,10 @@
 pub mod bag;
 pub mod block;
 pub mod checksum;
+pub mod coins;
 pub mod file;
 pub mod game_stats;
+pub mod play_time;
 pub mod pokemon;
 pub mod sector;
 pub mod storage;
@@ -15,10 +17,12 @@ pub use block::{
     BattleStyle, ButtonMode, Coords16, PlayTime, PlayerGender, SaveBlock1, SaveBlock2, SaveError,
     SavedObjectEvent, SoundMode, WarpData,
 };
+pub use coins::{Coins, MAX_COINS};
 pub use file::{
     default_save_path, SaveFile, SaveFileError, SaveFileGuard, LOCK_FILE_NAME, SAVE_PATH_ENV,
 };
 pub use game_stats::{GameStat, GameStats};
+pub use play_time::PlayTimeCounter;
 pub use pokemon::{
     BoxPokemon, Pokemon, PokemonError, PokemonSubstructures, BOX_NICKNAME_LEN, BOX_OT_NAME_LEN,
     SUBSTRUCTURE_LEN,

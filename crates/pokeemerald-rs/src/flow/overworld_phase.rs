@@ -32,7 +32,7 @@
 
 use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{PlayerState, TilePos, WildEncounterState};
-use engine::save::{SaveBlock1, SaveBlock2, WarpData};
+use engine::save::{PlayTimeCounter, SaveBlock1, SaveBlock2, WarpData};
 use platform::ButtonState;
 use std::cell::OnceCell;
 
@@ -41,12 +41,15 @@ use crate::new_game;
 use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
 use crate::start_menu::StartMenu;
 
+use self::trainer_party::PartyReserves;
 pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
 mod battle_start_stats;
+mod birth_island_rock;
 mod connections;
 mod escalator_arrival;
+mod field_friendship;
 mod field_poison;
 mod first_battle_conclusion;
 mod first_battle_trigger;
@@ -57,12 +60,14 @@ mod lead_owner;
 mod live_battle_text;
 mod object_events;
 mod placement;
+mod play_time;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
 mod sight_trainer_trigger;
 mod start_menu;
 mod step;
 mod take_item_message;
+mod trainer_party;
 mod white_out;
 mod wild_battle;
 
@@ -158,12 +163,14 @@ pub(super) enum ActiveBattle {
     Rival {
         battle: battle::Battle,
         trainer_id: assets::trainers::TrainerId,
+        reserves: PartyReserves,
     },
     /// A Route 103 sight-trainer battle, with the trainer it is fought
     /// against.
     SightTrainer {
         battle: battle::Battle,
         trainer_id: assets::trainers::TrainerId,
+        reserves: PartyReserves,
     },
 }
 
@@ -189,6 +196,8 @@ pub(crate) struct OverworldPhase {
     object_events: ObjectEventCollection,
     pub(super) save1: SaveBlock1,
     pub(super) save2: SaveBlock2,
+    /// Whether `save2`'s play time advances ([`play_time`]'s module docs).
+    play_time: PlayTimeCounter,
     /// Destination latched at step start for warp processing at step
     /// completion; `None` between steps.
     pending_landing: Option<TilePos>,
@@ -662,6 +671,7 @@ impl OverworldPhase {
             object_events,
             save1: block1,
             save2: block2,
+            play_time: PlayTimeCounter::new(),
             pending_landing: None,
             pending_turn: None,
             escalator_arrival_walk: None,
@@ -738,6 +748,7 @@ impl OverworldPhase {
             &phase.player,
             &phase.save1.event_data,
         );
+        phase.enter_saved_game();
         phase
     }
 
@@ -828,13 +839,14 @@ impl OverworldPhase {
             &player,
             &save1.event_data,
         );
-        Self {
+        let mut phase = Self {
             scene,
             player,
             map_id,
             object_events,
             save1,
             save2,
+            play_time: PlayTimeCounter::new(),
             pending_landing: None,
             pending_turn: None,
             escalator_arrival_walk: None,
@@ -868,7 +880,9 @@ impl OverworldPhase {
             sight_trainer_battle_outcome: None,
             sight_approach: None,
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
-        }
+        };
+        phase.enter_new_game();
+        phase
     }
 
     /// This run's live [`SaveBlock1`].
@@ -1013,12 +1027,16 @@ impl OverworldPhase {
         self.active_battle = match active {
             ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle, buttons),
             ActiveBattle::First(battle) => self.advance_first_battle_frame(battle, buttons),
-            ActiveBattle::Rival { battle, trainer_id } => {
-                self.advance_route103_rival_battle_frame(battle, trainer_id)
-            }
-            ActiveBattle::SightTrainer { battle, trainer_id } => {
-                self.advance_sight_trainer_battle_frame(battle, trainer_id)
-            }
+            ActiveBattle::Rival {
+                battle,
+                trainer_id,
+                reserves,
+            } => self.advance_route103_rival_battle_frame(battle, trainer_id, reserves),
+            ActiveBattle::SightTrainer {
+                battle,
+                trainer_id,
+                reserves,
+            } => self.advance_sight_trainer_battle_frame(battle, trainer_id, reserves),
         };
         true
     }
@@ -1076,6 +1094,8 @@ mod battle_start_stats_tests;
 #[cfg(test)]
 mod bedroom_collision_tests;
 #[cfg(test)]
+mod birth_island_rock_tests;
+#[cfg(test)]
 mod connection_live_objects_tests;
 #[cfg(test)]
 mod connections_tests;
@@ -1091,6 +1111,8 @@ mod door_sequencing_tests;
 /// against both battle handoffs and the write-back merge that follows.
 #[cfg(test)]
 mod fainted_lead_party_tests;
+#[cfg(test)]
+mod field_friendship_tests;
 #[cfg(test)]
 mod field_input_ordering_tests;
 #[cfg(test)]
@@ -1139,6 +1161,9 @@ mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.
 #[cfg(test)]
 mod opponent_ot_id_tests;
+/// Which frames tick the play-time clock, and how a session enters it.
+#[cfg(test)]
+mod play_time_tests;
 #[cfg(test)]
 mod pre_movement_arrow_elevation_tests;
 /// Random-facing object events driven by the production frame.
@@ -1166,6 +1191,8 @@ mod tall_grass_tests;
 mod test_support;
 #[cfg(test)]
 mod traded_lead_battle_tests;
+#[cfg(test)]
+mod trainer_party_tests;
 #[cfg(test)]
 mod warp_tests;
 #[cfg(test)]

@@ -6,10 +6,11 @@
 //! the raw byte and resolves only the twelve identities of
 //! [`PcWallpaperId::ALL`]; the four default styles, Walda's wallpaper and every
 //! other byte fail with [`PackError::UnsupportedPcWallpaper`] before the pack is
-//! read. The pack ids stay in this module. No producer emits these entries yet,
-//! so a production pack fails with [`PackError::UnknownAsset`]; no art is ever
-//! substituted. Every lookup re-validates shapes, since a hand-built or corrupt
-//! pack can bypass extraction.
+//! read. The pack ids stay in this module. Checkout extraction emits these
+//! entries; supported-ROM import does not yet, so a ROM-imported pack fails
+//! with [`PackError::UnknownAsset`] and no art is ever substituted. Every
+//! lookup re-validates shapes, since a hand-built or corrupt pack can bypass
+//! extraction.
 //!
 //! # Tilemap words
 //!
@@ -170,7 +171,9 @@ pub struct PcWallpaperTile {
 }
 
 impl PcWallpaperTile {
-    fn decode(word: u16) -> Self {
+    /// Decodes one little-endian tilemap word.
+    #[must_use]
+    pub fn decode(word: u16) -> Self {
         Self {
             tile_index: word & TILE_INDEX_MASK,
             h_flip: word & H_FLIP_MASK != 0,

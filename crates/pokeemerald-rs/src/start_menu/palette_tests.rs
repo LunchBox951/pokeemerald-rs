@@ -96,7 +96,6 @@ fn standard_window_uses_message_palette_for_content_and_standard_palette_for_bor
         },
         colors: TextColors::default(),
         raster_height: 15,
-        paint_background: false,
     };
     chrome.draw_text(&mut fb, (left, top, width, height), (0, 0), &[glyph]);
 
