@@ -28,9 +28,10 @@
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
 //! starting positions (see [`slot_machine_reels`]), the region-map section
 //! grid (see [`region_map_layout`]), the Battle Palace per-nature
-//! move-group, target and flavor tables (see [`battle_palace`]), and the Easy
-//! Chat Events word group (see [`easy_chat_events`]); more data follows as
-//! the crate fills out.
+//! move-group, target and flavor tables (see [`battle_palace`]), the Easy Chat
+//! Events word group (see [`easy_chat_events`]), and the facility-class
+//! portrait and trainer-class lookups (see [`facility_classes`]); more data
+//! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
 //! audio-extraction backends emit into (S-4) live in [`audio`].
@@ -72,6 +73,7 @@ pub mod error;
 pub mod event_scripts;
 pub mod evolution;
 pub mod experience;
+pub mod facility_classes;
 pub mod fonts;
 pub mod hidden_item_flags;
 pub mod items;
@@ -146,6 +148,10 @@ pub use enemy_elevation::{enemy_elevation, ENEMY_ELEVATED_SPECIES_COUNT};
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 pub use experience::{experience_for_level, MAX_LEVEL};
+pub use facility_classes::{
+    facility_class_to_pic_index, facility_class_to_trainer_class, FacilityClass,
+    FacilityClassError, FACILITY_CLASSES_COUNT,
+};
 pub use fonts::{
     FontGlyphSheet, FontId, FontImageRef, Glyph, GlyphSource, GlyphSources, OwnedFontGlyphSheet,
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
