@@ -316,14 +316,23 @@ pub(in crate::overworld) fn elevated_oam_entries(
             let state = live.state();
             let binding = *bindings.get(binding_key(live.template()))?;
             let elevation = elevations.get(index).copied().unwrap_or(state.elevation());
-            let (cell, h_flip) = binding.facing.cell_for(state.facing());
+            // A normal-speed step draws from its own action: the position is the committed
+            // destination plus the pixels still to cross, and the cell is the `Go*`
+            // animation's command for the elapsed frames (`event_object_movement.c:5101-5124`).
+            let step = state.step();
+            let (cell, h_flip) = match (step, binding.walk) {
+                (Some(step), Some(walk)) => walk.cell_for(step.direction(), step.go_command()),
+                _ => binding.facing.cell_for(state.facing()),
+            };
             let tile_index = binding.frame_tile(cell);
-            let origin = object_origin(
+            let (base_x, base_y) = object_origin(
                 state.position(),
                 player_pos,
                 camera_lag,
                 (binding.width, binding.height),
             );
+            let (to_go_x, to_go_y) = step.map_or((0, 0), |step| step.pixel_offset());
+            let origin = (base_x + to_go_x, base_y + to_go_y);
             let parent_priority = avatar::priority_for_elevation(elevation);
             let entries = if binding.width == 48 {
                 truck_entries(binding, origin)

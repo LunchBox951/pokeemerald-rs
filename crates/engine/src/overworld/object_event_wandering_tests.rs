@@ -840,3 +840,48 @@ fn the_backup_layout_reaches_one_column_farther_east_than_west_and_decodes_with_
         Some(0x30)
     );
 }
+
+fn go_command(rig: &Rig, id: u8) -> u8 {
+    let state = rig.collection.get(id).unwrap().state();
+    state
+        .step()
+        .map_or(state.go_command(), |step| step.go_command())
+}
+
+/// The command each of a mover's first steps starts on, sampled on every frame a step begins.
+fn first_step_commands(rig: &mut Rig, frames: usize) -> Vec<u8> {
+    let mut starts = Vec::new();
+    for _ in 0..frames {
+        rig.tick(1);
+        let state = rig.collection.get(1).unwrap().state();
+        if state.step().is_some_and(|step| step.frames_elapsed() == 1) {
+            starts.push(go_command(rig, 1));
+        }
+    }
+    starts
+}
+
+#[test]
+fn a_fresh_patrol_starts_on_its_first_foot_and_a_fresh_wanderer_on_its_second() {
+    let mut patrol = rig_of(MovementType::WalkUpAndDown, (3, 3), &[]);
+    assert_eq!(first_step_commands(&mut patrol, 80), [0, 2, 0, 2, 0]);
+
+    // The draws: delay 0 (a 32-frame wait), then direction South.
+    let script = [0, 0, 0, 0, 0, 0, 0, 0];
+    let mut wanderer = rig_of(MovementType::WanderUpAndDown, (3, 3), &script);
+    let starts = first_step_commands(&mut wanderer, 64);
+    assert_eq!(
+        starts.first(),
+        Some(&2),
+        "the face action before the first walk moves command 0 to the neutral pose"
+    );
+}
+
+#[test]
+fn a_blocked_patrol_leg_walks_in_place_and_still_alternates_the_foot() {
+    let mut rig = rig_of(MovementType::WalkUpAndDown, (2, 2), &[]);
+    rig.terrain.set_wall((20, 19));
+
+    assert_eq!(first_step_commands(&mut rig, 49), [0, 2, 0, 2]);
+    assert_eq!(position(&rig, 1), ORIGIN);
+}

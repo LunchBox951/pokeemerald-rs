@@ -184,6 +184,11 @@ fn an_object_whose_script_has_no_faceplayer_keeps_its_facing() {
         .unwrap()
         .state_mut()
         .set_movement_type(assets::MovementType::FaceRight);
+    // The re-typed object's own face action runs on its first frames and leaves the walk
+    // animation on its neutral pose; let it finish so the snapshot is what a still object holds.
+    for _ in 0..3 {
+        phase.step(platform::ButtonState::new());
+    }
     let vigoroth_before = *phase.object_events.get(VIGOROTH_LOCAL_ID).unwrap().state();
     let mom_before = mom_facing(&phase);
 

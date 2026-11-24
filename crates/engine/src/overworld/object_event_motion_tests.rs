@@ -158,3 +158,133 @@ fn a_respawn_drops_a_running_action() {
     assert_eq!(state.step(), None);
     assert_eq!(state.position(), (5, 5));
 }
+
+fn commands_over_a_step(state: &ObjectEventState) -> Vec<u8> {
+    let mut state = *state;
+    let mut seen = vec![state.step().unwrap().go_command()];
+    while !state.advance_step() {
+        seen.push(state.step().unwrap().go_command());
+    }
+    seen
+}
+
+#[test]
+fn a_fresh_walker_starts_a_step_on_command_zero_for_eight_frames_then_the_neutral_pose() {
+    let mut state = state_at(5, 5);
+    assert_eq!(state.go_command(), 0);
+    state.begin_normal_walk(Direction::South);
+
+    // Elapsed frames 1 to 8 show command 0 and 9 to 15 show command 1; the sixteenth frame
+    // ends the action in the same callback, so it is never observed as a running step.
+    let mut expected = vec![0; 8];
+    expected.extend([1; 7]);
+    assert_eq!(commands_over_a_step(&state), expected);
+
+    assert!(frames_to_finish(&mut state) > 0);
+    assert_eq!(state.go_command(), 1, "the step rests on the neutral pose");
+}
+
+#[test]
+fn consecutive_steps_alternate_the_foot() {
+    let mut state = state_at(5, 5);
+    let mut starts = Vec::new();
+    for _ in 0..4 {
+        state.begin_normal_walk(Direction::East);
+        starts.push(state.step().unwrap().go_command());
+        frames_to_finish(&mut state);
+    }
+    assert_eq!(starts, [0, 2, 0, 2]);
+    assert_eq!(state.go_command(), 3);
+}
+
+#[test]
+fn a_walk_in_place_alternates_like_a_walk_and_does_not_move() {
+    let mut state = state_at(5, 5);
+    state.begin_normal_walk_in_place(Direction::North);
+    assert_eq!(state.step().unwrap().go_command(), 0);
+    frames_to_finish(&mut state);
+    state.begin_normal_walk(Direction::North);
+    assert_eq!(state.step().unwrap().go_command(), 2, "the other foot");
+}
+
+#[test]
+fn a_face_action_keeps_the_foot_that_follows_but_a_fresh_object_moves_to_neutral() {
+    // A wanderer's face action before its first walk normalises command 0 to 1, so that
+    // first walk takes the second foot (`SetStepAnim`, `event_object_movement.c:4601-4618`).
+    let mut state = state_at(5, 5);
+    state.face_in_place();
+    assert_eq!(state.go_command(), 1);
+    state.begin_normal_walk(Direction::South);
+    assert_eq!(state.step().unwrap().go_command(), 2);
+    frames_to_finish(&mut state);
+    assert_eq!(state.go_command(), 3);
+
+    // After that step the face action keeps command 3, so the next walk takes foot 0 again.
+    state.face_in_place();
+    assert_eq!(state.go_command(), 3);
+    state.begin_normal_walk(Direction::South);
+    assert_eq!(state.step().unwrap().go_command(), 0);
+}
+
+#[test]
+fn a_plain_facing_change_leaves_the_animation_alone() {
+    let mut state = state_at(5, 5);
+    state.begin_normal_walk(Direction::East);
+    frames_to_finish(&mut state);
+    state.face(Direction::West);
+    assert_eq!(state.go_command(), 1);
+}
+
+#[test]
+fn faceplayer_keeps_the_foot_that_follows_like_any_face_action() {
+    // `faceplayer` holds a face movement action, whose `SetStepAnim` maps 0 and 1 to 1 and
+    // 2 and 3 to 3 (`event_object_movement.c:4975-4978,5048-5055,4601-4618`); it does not
+    // restart the animation.
+    let mut state = state_at(5, 5);
+    state.begin_normal_walk(Direction::East);
+    frames_to_finish(&mut state);
+    assert_eq!(state.go_command(), 1);
+
+    state.face_with_animation(Direction::West);
+    assert_eq!(state.facing(), Direction::West);
+    assert_eq!(state.go_command(), 1);
+    state.begin_normal_walk(Direction::East);
+    assert_eq!(
+        state.step().unwrap().go_command(),
+        2,
+        "the second foot, not command 0"
+    );
+    frames_to_finish(&mut state);
+
+    state.face_with_animation(Direction::North);
+    assert_eq!(state.go_command(), 3);
+    state.begin_normal_walk(Direction::East);
+    assert_eq!(state.step().unwrap().go_command(), 0);
+}
+
+#[test]
+fn clearing_a_running_step_freezes_the_command_it_had_reached() {
+    let mut early = state_at(5, 5);
+    early.begin_normal_walk(Direction::East);
+    early.clear_step();
+    assert_eq!(early.go_command(), 0);
+
+    let mut late = state_at(5, 5);
+    late.begin_normal_walk(Direction::East);
+    for _ in 0..9 {
+        late.advance_step();
+    }
+    assert_eq!(late.step().unwrap().frames_elapsed(), 10);
+    late.clear_step();
+    assert_eq!(late.go_command(), 1);
+}
+
+#[test]
+fn a_respawn_returns_the_animation_to_command_zero() {
+    let mut state = state_at(5, 5);
+    state.begin_normal_walk(Direction::South);
+    frames_to_finish(&mut state);
+    assert_eq!(state.go_command(), 1);
+    state.reinit_from_template_snapshots();
+    assert_eq!(state.go_command(), 0);
+}
