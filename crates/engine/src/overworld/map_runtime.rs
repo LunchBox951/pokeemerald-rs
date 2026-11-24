@@ -3,6 +3,7 @@
 //! [`MapRuntime`] borrows one map at a time. Callers replace it when entering
 //! another map and supply connected-map data through [`ConnectedMapData`].
 
+use assets::Direction as ConnectionDirection;
 use assets::{
     CoordEvent, LayoutGrid, MapConnection, MapEvents, MapHeader, MapId, MetatileAttributeTable,
     MetatileCell, ObjectEvent, WarpEvent,
@@ -21,6 +22,9 @@ pub struct ConnectionCrossing {
     pub target: MapId,
     /// The landing tile position within `target`'s own coordinate space.
     pub position: (i32, i32),
+    /// The translation from the departed map's coordinates to `target`'s, the shift every
+    /// live object carried across the crossing follows.
+    pub shift: (i32, i32),
 }
 
 /// Provides geometry, cells, and behaviors for maps connected to the current
@@ -42,6 +46,17 @@ pub trait ConnectedMapData {
     /// the counterpart of [`MapRuntime::metatile_behavior`] across a
     /// connection.
     fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8>;
+
+    /// Returns whether a live object carried across `crossing` holds the landing tile at
+    /// `elevation` for collision, queried in `crossing.target`'s coordinates
+    /// (`DoesObjectCollideWithObjectAt`, `event_object_movement.c:4724-4741`).
+    ///
+    /// Only the already-active objects the crossing keeps answer: the destination's own
+    /// templates have not spawned, so a first crossing onto an authored object's tile stays
+    /// passable. The default carries none, as a resolver with no live set does.
+    fn carried_object_event_blocks(&self, _crossing: ConnectionCrossing, _elevation: u8) -> bool {
+        false
+    }
 }
 
 impl<F> ConnectedMapData for F
@@ -58,6 +73,24 @@ where
         None
     }
 }
+
+/// Connected-map data that resolves nothing: a map with no neighbours the caller can read.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoConnectedMaps;
+
+impl ConnectedMapData for NoConnectedMaps {
+    fn dimensions(&self, _map: MapId) -> Option<(u16, u16)> {
+        None
+    }
+
+    fn metatile_behavior(&self, _map: MapId, _x: i32, _y: i32) -> Option<u8> {
+        None
+    }
+}
+
+/// Tiles the backup layout keeps beyond the active map's west, north and south edges
+/// (`MAP_OFFSET`, `fieldmap.h:18`).
+const BACKUP_BAND: i64 = 7;
 
 /// Borrowed decoded data and events for one map.
 #[derive(Debug, Clone, Copy)]
@@ -161,7 +194,11 @@ impl<'a> MapRuntime<'a> {
     /// attribute table. Higher ids use the secondary table after rebasing.
     #[must_use]
     pub fn metatile_behavior(&self, x: i32, y: i32) -> Option<u8> {
-        let cell = self.metatile_cell(x, y)?;
+        self.behavior_of(self.metatile_cell(x, y)?)
+    }
+
+    /// Decodes `cell`'s behavior through this map's own tileset attributes.
+    fn behavior_of(&self, cell: MetatileCell) -> Option<u8> {
         let attribute = if cell.metatile_id < NUM_METATILES_IN_PRIMARY {
             self.primary_attrs.attribute_at(cell.metatile_id)
         } else {
@@ -171,8 +208,97 @@ impl<'a> MapRuntime<'a> {
         attribute.and_then(Result::ok).map(|a| a.behavior)
     }
 
-    /// Returns object events at `(x, y, elevation)` in declaration order, identifying each by
-    /// its current tile alone; [`Self::collision_objects_at`] also holds the tile a walker leaves.
+    /// [`Self::metatile_cell`], reaching into the connected maps' rows the backup layout keeps
+    /// around this map: `InitBackupMapLayoutConnections` copies seven rows or columns of each
+    /// neighbour past the north, south and west edges and eight past the east edge, and a later
+    /// connection overwrites an earlier one where they overlap (`fieldmap.c:121-314`).
+    ///
+    /// An object event's terrain reads this way, since it can stand in the band after a
+    /// connection crossing carried it over. A band tile that no connection covers reads `None`,
+    /// as does one `GetMapBorderIdAt` classifies under an edge this map has no connection on
+    /// (`fieldmap.c:522-557`). The strict [`Self::metatile_cell`] stays the player's.
+    #[must_use]
+    pub fn metatile_cell_in_band(
+        &self,
+        x: i32,
+        y: i32,
+        maps: &dyn ConnectedMapData,
+    ) -> Option<MetatileCell> {
+        self.metatile_cell(x, y)
+            .or_else(|| self.connected_cell(i64::from(x), i64::from(y), maps))
+    }
+
+    /// [`Self::metatile_behavior`] across the band ([`Self::metatile_cell_in_band`]). A copied
+    /// cell keeps its metatile id, which this map's own tileset attributes decode: the backup
+    /// layout holds ids, not the neighbour's attributes (`GetMetatileAttributesById`,
+    /// `fieldmap.c:375-388`).
+    #[must_use]
+    pub fn metatile_behavior_in_band(
+        &self,
+        x: i32,
+        y: i32,
+        maps: &dyn ConnectedMapData,
+    ) -> Option<u8> {
+        self.behavior_of(self.metatile_cell_in_band(x, y, maps)?)
+    }
+
+    fn connected_cell(&self, x: i64, y: i64, maps: &dyn ConnectedMapData) -> Option<MetatileCell> {
+        let (width, height) = (i64::from(self.grid.width()), i64::from(self.grid.height()));
+        // The backup layout is `MAP_OFFSET_W` wide and `MAP_OFFSET_H` tall: one column more
+        // reaches east than rows reach south.
+        let reach_east = BACKUP_BAND + 1;
+        if !(-BACKUP_BAND..width + reach_east).contains(&x)
+            || !(-BACKUP_BAND..height + BACKUP_BAND).contains(&y)
+        {
+            return None;
+        }
+        // The edge `GetMapBorderIdAt` files the tile under, east first.
+        let edge = if x >= width {
+            ConnectionDirection::East
+        } else if x < 0 {
+            ConnectionDirection::West
+        } else if y >= height {
+            ConnectionDirection::South
+        } else {
+            ConnectionDirection::North
+        };
+        if !self
+            .header
+            .connections
+            .iter()
+            .any(|connection| connection.direction == edge)
+        {
+            return None;
+        }
+        self.header
+            .connections
+            .iter()
+            .filter_map(|connection| {
+                let (target_width, target_height) = maps.dimensions(connection.target)?;
+                let offset = i64::from(connection.offset);
+                let (target_x, target_y) = match connection.direction {
+                    ConnectionDirection::South if y >= height => (x - offset, y - height),
+                    ConnectionDirection::North if y < 0 => {
+                        (x - offset, i64::from(target_height) + y)
+                    }
+                    ConnectionDirection::West if x < 0 => (i64::from(target_width) + x, y - offset),
+                    ConnectionDirection::East if x >= width => (x - width, y - offset),
+                    _ => return None,
+                };
+                maps.metatile_cell(
+                    connection.target,
+                    i32::try_from(target_x).ok()?,
+                    i32::try_from(target_y).ok()?,
+                )
+            })
+            .next_back()
+    }
+
+    /// Returns object events at `(x, y, elevation)`, identifying each by its current tile alone;
+    /// [`Self::collision_objects_at`] also holds the tile a walker leaves. A bound collection
+    /// answers in live object-slot order (`GetObjectEventIdByPosition`,
+    /// `event_object_movement.c:2192-2206`); the unbound authored scan, which has no slots, answers
+    /// in declaration order.
     ///
     /// With a bound collection ([`Self::with_object_events`]) the position
     /// and elevation are each object's live ones and every result is its
@@ -331,9 +457,15 @@ impl<'a> MapRuntime<'a> {
             else {
                 continue;
             };
+            let (Some(shift_x), Some(shift_y)) =
+                (position.0.checked_sub(x), position.1.checked_sub(y))
+            else {
+                continue;
+            };
             return Some(ConnectionCrossing {
                 target: connection.target,
                 position,
+                shift: (shift_x, shift_y),
             });
         }
         None
@@ -902,6 +1034,8 @@ mod tests {
             .expect("south connection should resolve");
         assert_eq!(crossing.target, MapId("MAP_SOUTH_NEIGHBOR"));
         assert_eq!(crossing.position, (3, 0));
+        // The landing is the departed tile moved by the shift: (3, 10) + (0, -10).
+        assert_eq!(crossing.shift, (0, -10));
 
         assert!(runtime
             .resolve_connection(Direction::North, 3, -1, &dims)

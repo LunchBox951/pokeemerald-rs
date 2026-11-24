@@ -7,47 +7,78 @@
 //!
 //! Callbacks run in sprite-slot order, as `AnimateSprites` walks `gSprites` by index
 //! (`sprite.c:308-317`), so the order in which entries draw from the shared `Random()` stream is
-//! the order of their slots, not of their templates. Admission gives an entry the lowest slot no
-//! active entry holds, as `TrySetupObjectEventSprite` allocates with `CreateSprite`
+//! the order of their slots, not of their templates. Admission gives an entry the lowest sprite
+//! slot no active entry holds, as `TrySetupObjectEventSprite` allocates with `CreateSprite`
 //! (`event_object_movement.c:1452`, `sprite.c:502-508`), and despawning frees it at once
 //! (`RemoveObjectEventInternal`'s `DestroySprite`, `:1399-1404`). Only object-event slots are
 //! tracked. Field-effect sprites allocate from the top with `CreateSpriteAtEnd`, so they never take
 //! a low slot an object would, but other `CreateSprite` users on the field, such as a re-created
-//! camera sprite (`field_camera.c:354`), are not modelled.
+//! camera sprite (`field_camera.c:354`), are not modelled, and neither is a full sprite pool
+//! (`CreateSprite` returning `MAX_SPRITES`, `event_object_movement.c:1452-1456`).
+//!
+//! The object pool is a separate, smaller table. `gObjectEvents` holds `OBJECT_EVENTS_COUNT` (16)
+//! objects (`global.h:46`), the player's avatar always holding index 0
+//! (`field_player_avatar.c:1399-1401`, created before the map's objects by `overworld.c:2170-2176`),
+//! and `GetAvailableObjectEventId` hands out the lowest inactive index, refusing once all are
+//! active (`event_object_movement.c:1358-1380`). A refused template stays inactive, so it runs no
+//! callback and draws nothing, and the next camera pass offers it a slot again
+//! (`TrySpawnObjectEvents`, `:1664-1672`). At most [`NPC_OBJECT_SLOTS`] entries are active at once,
+//! counting those carried across a map connection. An entry's object slot is
+//! [`LiveObjectEvent::object_slot`]; upstream's trainer discovery scans in that order
+//! (`trainer_see.c:196-219`), while callbacks run in sprite-slot order.
 //!
 //! Movement types plug in at [`LiveObjectEvent::movement_type_step`], one match arm per upstream
 //! `gMovementTypeFuncs_*` table; [`Lifecycle::Active`]'s `type_func_id` is that table's
-//! `sTypeFuncId` index. Only the four fixed-facing types and the two random-facing ones
-//! (`LookAround`, `FaceDownAndRight`, in [`random_facing`]) are modelled; every other type is inert.
+//! `sTypeFuncId` index. Only the four fixed-facing types, the two random-facing ones
+//! (`LookAround`, `FaceDownAndRight`, in [`random_facing`]), and the wanderers and bounded
+//! patrols (in [`wandering`]) are modelled; every other type is inert.
 
-use assets::MovementType;
+use assets::{MapId, MovementType};
 
 use crate::event_data::EventData;
-use crate::overworld::map_runtime::MapRuntime;
+use crate::overworld::map_runtime::{ConnectedMapData, MapRuntime};
 use crate::overworld::object_event::{object_event_is_visible, tile_is_in_view};
 use crate::overworld::player::TilePos;
 use crate::rng::RandomSource;
 
-use super::{LiveObjectEvent, ObjectEventCollection};
+use super::{LiveObjectEvent, ObjectEventCollection, Occupant};
 
 #[path = "object_event_random_facing.rs"]
 mod random_facing;
+
+#[path = "object_event_wandering.rs"]
+mod wandering;
+
+/// `OBJECT_EVENTS_COUNT` (`global.h:46`): the slots of `gObjectEvents`.
+const OBJECT_EVENTS_COUNT: usize = 16;
+
+/// Object slots an NPC can take: every `gObjectEvents` index but 0, which the player's avatar
+/// holds (`field_player_avatar.c:1399-1401`). Slots `1..=15`.
+const NPC_OBJECT_SLOTS: usize = OBJECT_EVENTS_COUNT - 1;
 
 /// Where an entry stands in upstream's object-event slot lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Lifecycle {
     /// Seeded, but the spawn window has not admitted it yet; upstream has no object for it.
     Unadmitted,
-    /// Spawned: `sprite_slot` is the sprite's index in `gSprites`, `initial` is `initialCoords`,
-    /// the template tile at admission, `type_func_id` is the sprite's `sTypeFuncId`, `delay` is
-    /// its `data[3]` movement-delay counter, and `scheduled` is the movement type those two
-    /// belong to.
+    /// Spawned: `object_slot` is the object's index in `gObjectEvents` (`1..=15`, the player
+    /// holding 0), `sprite_slot` is the sprite's index in `gSprites`, `initial` is
+    /// `initialCoords`, the template tile at admission, `type_func_id` is the sprite's `sTypeFuncId`, `delay` is
+    /// its `data[3]` movement-delay counter, and `scheduled` is the movement type those three
+    /// belong to. `sequence_index` is `directionSequenceIndex`, and `range_x` and `range_y` are
+    /// `range.rangeX` and `range.rangeY` as admission left them: a zero authored range is
+    /// raised to one for a type that has a range (`sMovementTypeHasRange`,
+    /// `event_object_movement.c:1323-1328`) and stays zero, unbounded, for any other.
     Active {
+        object_slot: usize,
         sprite_slot: usize,
         initial: TilePos,
         type_func_id: u8,
         delay: i16,
         scheduled: MovementType,
+        sequence_index: u8,
+        range_x: u8,
+        range_y: u8,
     },
     /// Removed for lying outside the view; the next admission reinitialises its state.
     Despawned,
@@ -56,6 +87,13 @@ pub(super) enum Lifecycle {
 impl Lifecycle {
     pub(super) const fn is_active(self) -> bool {
         matches!(self, Self::Active { .. })
+    }
+
+    pub(super) const fn object_slot(self) -> Option<usize> {
+        match self {
+            Self::Active { object_slot, .. } => Some(object_slot),
+            Self::Unadmitted | Self::Despawned => None,
+        }
     }
 
     const fn sprite_slot(self) -> Option<usize> {
@@ -67,7 +105,7 @@ impl Lifecycle {
 }
 
 /// What one overworld frame lets the scheduler see of the rest of the game.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct FrameContext<'a> {
     /// The player's tile, `gSaveBlock1Ptr->pos`, centring the spawn window.
     pub player_position: TilePos,
@@ -83,11 +121,28 @@ pub struct FrameContext<'a> {
     /// The map's cells and metatile behaviours, for an object's step to be checked against
     /// (`GetCollisionAtCoords`). Unbound: other objects come from the collection itself.
     pub terrain: MapRuntime<'a>,
+    /// The maps `terrain` connects to, whose rows the backup layout keeps in reach of the edge,
+    /// where an object a crossing carried over may stand
+    /// ([`MapRuntime::metatile_cell_in_band`]).
+    pub connected_maps: &'a dyn ConnectedMapData,
     /// The tile the player is leaving, `gObjectEvents[0].previousCoords`; equal to
     /// `player_position` while the player stands still.
     pub player_previous_position: TilePos,
     /// The player's collision elevation, `gObjectEvents[0].currentElevation`.
     pub player_elevation: u8,
+}
+
+impl std::fmt::Debug for FrameContext<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrameContext")
+            .field("player_position", &self.player_position)
+            .field("frozen", &self.frozen)
+            .field("player_dashing", &self.player_dashing)
+            .field("terrain", &self.terrain)
+            .field("player_previous_position", &self.player_previous_position)
+            .field("player_elevation", &self.player_elevation)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ObjectEventCollection {
@@ -104,10 +159,39 @@ impl ObjectEventCollection {
     /// `rng` is the field's `Random()` stream, for the movement types that draw from it, in
     /// sprite-slot order; the fixed-facing types never touch it.
     pub fn run_frame(&mut self, context: &FrameContext<'_>, rng: &mut impl RandomSource) {
+        self.run_frame_finishing_step(context, None, rng);
+    }
+
+    /// [`Self::run_frame`] for a frozen frame that still lets one object finish the step it is
+    /// in the middle of: `finishing` is that entry's `(carried_from, local_id)`
+    /// ([`Self::find`]). `FreezeForApproachingTrainers` freezes the approaching trainer only
+    /// once its `singleMovementActive` clears, so until then its callback keeps running
+    /// (`event_object_lock.c:130-147,151-190`); the frame after the step ends, the entry is
+    /// frozen like the rest and starts nothing new. An unfrozen frame runs every entry, so
+    /// `finishing` changes nothing then.
+    pub fn run_frame_finishing_step(
+        &mut self,
+        context: &FrameContext<'_>,
+        finishing: Option<(Option<MapId>, u8)>,
+        rng: &mut impl RandomSource,
+    ) {
         let _ = self.admit_on_map_load(context.player_position, context.event_data);
         if !context.frozen {
             for index in self.active_indices_in_sprite_slot_order() {
-                self.entries[index].run_movement_type(context, rng);
+                // Callbacks run one after another, so each sees the tiles the earlier ones
+                // have just taken or released.
+                let occupants = self.occupants_other_than(index, context);
+                self.entries[index].run_movement_type(context, rng, &occupants);
+            }
+        } else if let Some((carried_from, local_id)) = finishing {
+            let in_flight = self.entries.iter().position(|entry| {
+                entry.carried_from == carried_from
+                    && entry.template.local_id == local_id
+                    && entry.state.step().is_some()
+            });
+            if let Some(index) = in_flight {
+                let occupants = self.occupants_other_than(index, context);
+                self.entries[index].run_movement_type(context, rng, &occupants);
             }
         }
         if self.reconciled_at != Some(context.player_position) {
@@ -152,13 +236,19 @@ impl ObjectEventCollection {
     /// Spawns every in-window, unhidden entry in template order, then removes every active entry
     /// outside the view (`TrySpawnObjectEvents` then `RemoveObjectEventsOutsideView`,
     /// `:1645-1675,1677-1710`), so a slot freed by this pass's removals goes to a later admission.
+    /// An entry that finds the object pool full is left as it was (`InitObjectEventStateFromTemplate`
+    /// returning on `GetAvailableObjectEventId` refusing, `:1294-1300`), and the scan goes on.
     fn reconcile_with_view(&mut self, player_position: TilePos, event_data: &EventData) {
         self.reconciled_at = Some(player_position);
         for index in 0..self.entries.len() {
-            if self.entries[index].should_spawn(player_position, event_data) {
-                let sprite_slot = self.lowest_free_sprite_slot();
-                self.entries[index].spawn(sprite_slot);
+            if !self.entries[index].should_spawn(player_position, event_data) {
+                continue;
             }
+            let Some(object_slot) = self.lowest_free_object_slot() else {
+                continue;
+            };
+            let sprite_slot = self.lowest_free_sprite_slot();
+            self.entries[index].spawn(object_slot, sprite_slot);
         }
         for entry in &mut self.entries {
             entry.remove_if_outside_view(player_position);
@@ -169,7 +259,18 @@ impl ObjectEventCollection {
         });
     }
 
-    /// The lowest slot no active entry holds: the first index at which the sorted held slots
+    /// `GetAvailableObjectEventId` (`:1367-1374`): the lowest object slot in `1..=15` no active
+    /// entry holds, carried ones included, or `None` once the pool is full.
+    fn lowest_free_object_slot(&self) -> Option<usize> {
+        (1..=NPC_OBJECT_SLOTS).find(|&slot| {
+            !self
+                .entries
+                .iter()
+                .any(|entry| entry.lifecycle.object_slot() == Some(slot))
+        })
+    }
+
+    /// The lowest sprite slot no active entry holds: the first index at which the sorted held slots
     /// stop counting up from zero.
     fn lowest_free_sprite_slot(&self) -> usize {
         let mut held: Vec<usize> = self
@@ -182,6 +283,26 @@ impl ObjectEventCollection {
             .zip(0..)
             .take_while(|&(&slot, expected)| slot == expected)
             .count()
+    }
+
+    /// The objects `DoesObjectCollideWithObjectAt` scans for the entry at `mover`: every other
+    /// admitted entry, and the player.
+    fn occupants_other_than(&self, mover: usize, context: &FrameContext<'_>) -> Vec<Occupant> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|&(index, entry)| index != mover && entry.is_active())
+            .map(|(_, entry)| Occupant {
+                current: entry.state.position(),
+                previous: entry.state.previous_position(),
+                elevation: entry.state.elevation(),
+            })
+            .chain([Occupant {
+                current: context.player_position,
+                previous: context.player_previous_position,
+                elevation: context.player_elevation,
+            }])
+            .collect()
     }
 
     fn active_indices_in_sprite_slot_order(&self) -> Vec<usize> {
@@ -203,16 +324,21 @@ impl LiveObjectEvent {
             && object_event_is_visible(self.template, event_data)
     }
 
-    fn spawn(&mut self, sprite_slot: usize) {
+    fn spawn(&mut self, object_slot: usize, sprite_slot: usize) {
         if self.lifecycle == Lifecycle::Despawned {
             self.state.reinit_from_template_snapshots();
         }
+        let (range_x, range_y) = self.admission_range();
         self.lifecycle = Lifecycle::Active {
+            object_slot,
             sprite_slot,
             initial: self.state.template_position(),
             type_func_id: 0,
             delay: 0,
             scheduled: self.state.movement_type(),
+            sequence_index: 0,
+            range_x,
+            range_y,
         };
     }
 
@@ -228,22 +354,28 @@ impl LiveObjectEvent {
     }
 
     /// `while (callback(objectEvent, sprite));` (`:4937`): runs steps until one reports done.
-    fn run_movement_type(&mut self, context: &FrameContext<'_>, rng: &mut impl RandomSource) {
+    fn run_movement_type(
+        &mut self,
+        context: &FrameContext<'_>,
+        rng: &mut impl RandomSource,
+        occupants: &[Occupant],
+    ) {
         if self.lifecycle.is_active() {
             self.restart_if_movement_type_changed();
-            while self.movement_type_step(context, rng) {}
+            while self.movement_type_step(context, rng, occupants) {}
         }
     }
 
     /// A movement type set on a live object starts its table over at step 0
-    /// (`SetTrainerMovementType` writes `sTypeFuncId = 0`, `:4638-4642`), dropping any delay
-    /// the previous type was counting down.
+    /// (`SetTrainerMovementType` writes `sTypeFuncId = 0` and `directionSequenceIndex = 0`,
+    /// `:4638-4642`), dropping any delay the previous type was counting down.
     fn restart_if_movement_type_changed(&mut self) {
         let current = self.state.movement_type();
         if let Lifecycle::Active {
             type_func_id,
             delay,
             scheduled,
+            sequence_index,
             ..
         } = &mut self.lifecycle
         {
@@ -251,6 +383,7 @@ impl LiveObjectEvent {
                 *scheduled = current;
                 *type_func_id = 0;
                 *delay = 0;
+                *sequence_index = 0;
             }
         }
     }
@@ -261,6 +394,7 @@ impl LiveObjectEvent {
         &mut self,
         context: &FrameContext<'_>,
         rng: &mut impl RandomSource,
+        occupants: &[Occupant],
     ) -> bool {
         match self.state.movement_type() {
             MovementType::FaceUp
@@ -273,6 +407,19 @@ impl LiveObjectEvent {
             MovementType::FaceDownAndRight => {
                 self.random_facing_step(&random_facing::FACE_DOWN_AND_RIGHT, context, rng)
             }
+            MovementType::WanderAround => {
+                self.wander_step(&wandering::WANDER_AROUND, context, rng, occupants)
+            }
+            MovementType::WanderUpAndDown => {
+                self.wander_step(&wandering::WANDER_UP_AND_DOWN, context, rng, occupants)
+            }
+            MovementType::WanderLeftAndRight => {
+                self.wander_step(&wandering::WANDER_LEFT_AND_RIGHT, context, rng, occupants)
+            }
+            MovementType::WalkUpAndDown
+            | MovementType::WalkDownAndUp
+            | MovementType::WalkLeftAndRight
+            | MovementType::WalkRightAndLeft => self.walk_back_and_forth_step(context, occupants),
             _ => false,
         }
     }
