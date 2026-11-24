@@ -124,7 +124,7 @@ pub enum TitleSceneError {
         actual: (u32, u32),
     },
     /// A palette index does not fit in the 4 bits a Bpp4 tile has for it;
-    /// checked by value, since [`ImageRef::bit_depth`] is informational.
+    /// checked by value, since [`assets::ImageRef::bit_depth`] is informational.
     ImagePaletteIndexOutOfRange {
         /// The pack entry ID.
         id: &'static str,

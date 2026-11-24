@@ -7,24 +7,24 @@
 //!
 //! Public surface:
 //!
-//! - [`WindowsFileIdentity`]: the volume and file ID a handle exposes,
+//! - `WindowsFileIdentity`: the volume and file ID a handle exposes,
 //!   comparable across two opens of what ought to be the same object.
-//! - [`open_for_verified_delete`], [`remove_through_open_handle`],
-//!   [`remove_through_verified_handle`], and
-//!   [`remove_through_verified_handle_with`]: verify a path still reaches an
+//! - `open_for_verified_delete`, `remove_through_open_handle`,
+//!   `remove_through_verified_handle`, and
+//!   `remove_through_verified_handle_with`: verify a path still reaches an
 //!   identity and delete through that same handle, reporting a
-//!   [`VerifiedRemoval`].
-//! - [`delete_through_handle`] and
-//!   [`delete_through_handle_ignoring_read_only`]: the delete alone, for a
+//!   `VerifiedRemoval`.
+//! - `delete_through_handle` and
+//!   `delete_through_handle_ignoring_read_only`: the delete alone, for a
 //!   handle the caller has already verified.
-//! - [`wide_file_id`], [`list_directory_by_file_id`], and
-//!   [`volume_supports_open_by_file_id`]: the strict 128-bit ID of a handle,
+//! - `wide_file_id`, `list_directory_by_file_id`, and
+//!   `volume_supports_open_by_file_id`: the strict 128-bit ID of a handle,
 //!   a directory's entries listed through its handle with that same ID, and
 //!   whether the volume's IDs are stable enough to verify against.
 //!
 //! What a missing path or a pending delete means is the caller's decision:
 //! these primitives report `NotFound` as an error and a pending delete as
-//! [`VerifiedRemoval::Pending`], and each dependant maps them at its own
+//! `VerifiedRemoval::Pending`, and each dependant maps them at its own
 //! boundary. The `windows-sys` use is bounded in the dependency ledger
 //! (`README.md`).
 #![cfg(windows)]

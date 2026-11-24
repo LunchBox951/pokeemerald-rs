@@ -464,7 +464,7 @@ impl IntroScene {
 }
 
 /// Loads an introduction from the default asset pack, at
-/// [`NewGameOptions::DEFAULT`].
+/// `NewGameOptions::DEFAULT`.
 ///
 /// # Errors
 ///

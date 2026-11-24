@@ -50,7 +50,7 @@
 //!
 //! The first is a destination that already exists as a directory --
 //! checked before the ROM is read or a temporary file is built (see
-//! [`Dest::name_is_directory`]).
+//! `Dest::name_is_directory`).
 //!
 //! The second is the ROM being imported. `$POKEEMERALD_PACK` can name any
 //! path, including the file the player passed to `--import-rom`, and the
@@ -82,7 +82,7 @@
 //! again, and the pack lands wherever the component now points — on the
 //! cartridge image itself, if the destination's file name is the ROM's.
 //!
-//! So the destination directory is opened once and held ([`dest::Dest`]).
+//! So the destination directory is opened once and held (`dest::Dest`).
 //! On Unix that is a descriptor, and the directory-type check, the ROM
 //! check, the temporary file's exclusive creation, the write, and the
 //! publishing rename each name their file by basename against it
@@ -110,7 +110,7 @@
 //!
 //! The directory levels created on the way to the destination are pinned
 //! the same way on Unix, so a failed import takes back only directories
-//! this run made; [`created_dirs`] owns that lifecycle.
+//! this run made; `created_dirs` owns that lifecycle.
 
 mod created_dirs;
 mod dest;
@@ -222,7 +222,7 @@ pub enum ImportRomError {
         temp_path: Option<PathBuf>,
         /// Whether the cleanup that followed actually removed
         /// `temp_path` -- also true when there was nothing to remove.
-        /// [`Dest::discard`] swallows its own failure so it cannot
+        /// `Dest::discard` swallows its own failure so it cannot
         /// displace this diagnosis, which means a partial file can still
         /// be there.
         temp_removed: bool,
@@ -245,7 +245,7 @@ pub enum ImportRomError {
     /// Unlike [`Self::DestinationNamesNoFile`], the path itself names a
     /// file — no trailing separator, a real final component — but that
     /// name is already occupied by a directory. Refused before anything
-    /// is written; see [`Dest::name_is_directory`] for how and why.
+    /// is written; see `Dest::name_is_directory` for how and why.
     DestinationIsDirectory {
         /// The destination occupied by an existing directory.
         pack_path: PathBuf,
@@ -273,7 +273,7 @@ pub enum ImportRomError {
         source: io::Error,
         /// Whether the cleanup that followed actually removed
         /// `temp_path` -- also true when nothing was ever created (temp-
-        /// file creation itself is what failed). [`Dest::discard`]
+        /// file creation itself is what failed). `Dest::discard`
         /// swallows its own failure so it cannot displace this
         /// diagnosis, which means a partial file can still be there.
         temp_removed: bool,
@@ -288,7 +288,7 @@ pub enum ImportRomError {
         /// The underlying I/O failure.
         source: io::Error,
         /// Whether the cleanup that followed actually removed
-        /// `temp_path`. [`Dest::discard`] swallows its own failure so it
+        /// `temp_path`. `Dest::discard` swallows its own failure so it
         /// cannot displace this diagnosis, which means the file can still
         /// be there — and it holds a *finished* pack, so the player is
         /// owed the truth about it rather than told it is gone.

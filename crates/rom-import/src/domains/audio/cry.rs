@@ -80,7 +80,7 @@ const DELTAS: [i8; 16] = [
 /// Read both cry tables and every sample they name.
 ///
 /// Returns the `audio/cry/table` entry, then one entry per sample in table
-/// order. Shared by [`super::write`] and the profile generator, so the
+/// order. Shared by `super::write` and the profile generator, so the
 /// generator checks the bytes the importer would emit.
 ///
 /// # Errors

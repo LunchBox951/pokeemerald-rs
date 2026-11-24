@@ -9,7 +9,7 @@
 //! uncompressed `tilemap.bin` (only the built ROM LZ77-compresses it), and the
 //! two palettes are the `PLTE` chunks of `frame.png` and `bg.png`, which is
 //! what the `.gbapal` rule converts. Ids come from the typed accessor's
-//! [`PcWallpaperId`], so extraction and lookup cannot drift apart.
+//! [`assets::PcWallpaperId`], so extraction and lookup cannot drift apart.
 
 use std::path::Path;
 

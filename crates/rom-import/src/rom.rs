@@ -182,7 +182,7 @@ impl Rom {
     /// be pointing. On unix this never moves the shared cursor either; on
     /// Windows, where no positional read leaves a synchronous handle's
     /// cursor untouched, it lands the cursor at the end of the read and does
-    /// not restore it. See [`read_whole`].
+    /// not restore it. See `read_whole`.
     ///
     /// # Errors
     ///

@@ -33,30 +33,30 @@
 //!
 //! [`crate::title::TitleScene::compose`] takes a `frame` counter (the same
 //! deterministic, wall-clock-free counter [`crate::title`]'s module docs
-//! describe): [`App::new`] keeps the loaded [`TitleScene`] alive alongside a
+//! describe): [`App::new`] keeps the loaded [`TitleScene`](crate::title::TitleScene) alive alongside a
 //! running tick count, and every [`App::step`] recomposes the *next* tick's
 //! frame right after presenting the current one -- so the windowed title
 //! screen animates (cloud scroll, "Press Start" blink) using exactly the
-//! same [`TitleScene::compose`] calls this crate's
+//! same [`TitleScene::compose`](crate::title::TitleScene::compose) calls this crate's
 //! tests and `xtask`'s smoke suite exercise headlessly, just one call per
 //! real frame instead of at two fixed indices.
 //!
 //! # Game flow: title -> main menu -> intro -> overworld (I-3)
 //!
 //! [`App::new`]'s real (windowed) path is a small state machine owned by
-//! [`crate::flow`]: every [`App::step`] hands the current
-//! [`crate::flow::AppScene`] to [`crate::flow::advance_scene`], which
+//! `crate::flow`: every [`App::step`] hands the current
+//! `crate::flow::AppScene` to `crate::flow::advance_scene`, which
 //! advances it by one frame and returns the (possibly transitioned) next
-//! scene plus its composed frame. See [`crate::flow`]'s module docs for
+//! scene plus its composed frame. See `crate::flow`'s module docs for
 //! the full title -> main menu -> intro -> overworld transition diagram and
 //! its "log-or-ignore is fine" failure policy for a transition's own pack
 //! load.
 //!
 //! [`App`] also owns the session's save medium (I-6): the
-//! [`SaveSlot`] it hands to every [`crate::flow::advance_scene`] call. This
+//! `SaveSlot` it hands to every `crate::flow::advance_scene` call. This
 //! shell never touches save state itself -- the boot read happens on the
 //! `Title` -> `MainMenu` transition and the write behind the field start
-//! menu's `SAVE` action, both inside [`crate::flow`] (see its module docs
+//! menu's `SAVE` action, both inside `crate::flow` (see its module docs
 //! for both ends). Closing the window writes nothing, exactly as closing a
 //! GBA's lid does.
 //!
@@ -230,14 +230,13 @@ pub enum AppState {
     /// The pack-free synthetic scene built by [`App::new_headless`].
     SyntheticBoot,
     /// The real animated title screen, including its front-end fade-wait
-    /// state (I-3, issue #1329: [`crate::flow::AppScene::TitleFadeWait`]) --
+    /// state (`crate::flow::AppScene::TitleFadeWait`) --
     /// this milestone does not distinguish a title still animating from one
     /// fading toward the main menu.
     Title,
     /// The main menu and its current selection, including its highlight-only
-    /// step (I-3, issue #2223: [`crate::flow::AppScene::MainMenuHighlight`])
-    /// and front-end fade-wait state (I-3, issue #1329:
-    /// [`crate::flow::AppScene::MainMenuFadeWait`]) -- this milestone does
+    /// step (`crate::flow::AppScene::MainMenuHighlight`) and front-end
+    /// fade-wait state (`crate::flow::AppScene::MainMenuFadeWait`) -- this milestone does
     /// not distinguish a menu awaiting input from one already fading toward
     /// its confirmed selection.
     MainMenu(MainMenuItem),
@@ -448,16 +447,16 @@ impl App {
     /// Load the real title screen (I-2) from the local asset pack, then open
     /// a window titled `title` to present it.
     ///
-    /// Deliberately nothing but `Platform::new` handed to [`App::boot`],
+    /// Deliberately nothing but `Platform::new` handed to `App::boot`,
     /// which holds the entire construction body -- see the module docs' "The
     /// headless real-boot check" for how both halves are covered.
     ///
-    /// Also arms the title screen's BGM (S-3, issue #185) on the real audio
-    /// device. It starts, via [`Self::start_title_music`], on the fifth
+    /// Also arms the title screen's BGM (S-3) on the real audio
+    /// device. It starts, via `Self::start_title_music`, on the fifth
     /// [`App::step`], the initializer's state 4 -- best-effort, so a missing
     /// pack or audio device silences the BGM rather than failing the boot the
     /// title screen's own graphics already succeeded at (see
-    /// [`Self::music`]'s field docs).
+    /// `Self::music`'s field docs).
     ///
     /// # Errors
     ///
@@ -479,7 +478,7 @@ impl App {
         Ok(app)
     }
 
-    /// Load the real title screen and game-flow state through [`App::boot`]
+    /// Load the real title screen and game-flow state through `App::boot`
     /// while substituting `platform`'s headless/null backend for a real
     /// window.
     ///
@@ -487,19 +486,19 @@ impl App {
     /// the same scene construction, [`App::step`] transitions, and
     /// presentation calls without opening a display or pacing against wall
     /// time. The one deliberate divergence is the pack: every load reachable
-    /// through this `App` -- the title screen [`App::boot`] loads eagerly
+    /// through this `App` -- the title screen `App::boot` loads eagerly
     /// ([`title::load_repo`]), and every scene `flow::advance_scene` and the
-    /// [`crate::flow::OverworldPhase`] it builds load lazily afterwards
+    /// `crate::flow::OverworldPhase` it builds load lazily afterwards
     /// (main menu, intro, overworld, warps, map-edge connections, NPC/
     /// sight-trainer dialog, the field start menu) -- reads the checkout's
-    /// own extracted pack ([`crate::pack_source::PackSource::Repo`], issue
-    /// #412), because the scenario and e2e gates that boot through here
+    /// own extracted pack (`crate::pack_source::PackSource::Repo`),
+    /// because the scenario and e2e gates that boot through here
     /// promise fixed inputs (`docs/scenarios.md`) and must never validate an
     /// installed user pack, or one an inherited `$POKEEMERALD_PACK` happens
     /// to name, that shadows the checkout's.
     ///
     /// Stored as plain owned data on the assembled `App`
-    /// ([`Self::pack_source`]'s own field docs), not a process-wide
+    /// (`Self::pack_source`'s own field docs), not a process-wide
     /// override: `crates/README.md`'s `no-global-mutable-state` convention
     /// rules out mutating `$POKEEMERALD_PACK` itself, which would still
     /// leak into anything else this process loads afterwards.
@@ -529,7 +528,7 @@ impl App {
 
     /// [`App::new_headless_real`] against caller-owned media instead of the
     /// checkout pack and no save: every load reachable through this `App`
-    /// reads the pack at `pack` ([`crate::pack_source::PackSource::Explicit`]),
+    /// reads the pack at `pack` (`crate::pack_source::PackSource::Explicit`),
     /// and the save medium is the durable file at `save`, so dropping this
     /// `App` and calling this again with the same `save` restarts onto what
     /// the first session wrote (`main_menu.c:1067` continues from the
@@ -544,7 +543,7 @@ impl App {
     ///
     /// [`AppError::Title`] if `pack` is missing or malformed;
     /// [`AppError::Save`] if `save` cannot be locked and read
-    /// ([`SaveSlot::at_path`]).
+    /// (`SaveSlot::at_path`).
     pub fn new_headless_real_at(
         pack: &std::path::Path,
         save: &std::path::Path,
@@ -694,8 +693,8 @@ impl App {
 
     /// Run exactly one iteration of the frame loop body: pump input, log
     /// any newly-pressed buttons, then -- for a real game-flow `App`
-    /// ([`App::new`]) -- advance [`crate::flow::AppScene`] by one frame via
-    /// [`crate::flow::advance_scene`] (module docs' "Game flow" section;
+    /// ([`App::new`]) -- advance `crate::flow::AppScene` by one frame via
+    /// `crate::flow::advance_scene` (module docs' "Game flow" section;
     /// for the settled title specifically this is "whose current frame has
     /// already been presented, advance to and compose the next tick's
     /// frame," exactly as before I-3, after the 35 initializer steps), pace to the next GBA vblank (a

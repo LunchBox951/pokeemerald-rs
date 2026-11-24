@@ -58,7 +58,7 @@ pub(super) const DEVICE_TAIL_FLOOR_MILLIS: usize = 200;
 /// open for as long as it claims.
 pub(super) const DEVICE_TAIL_MAX_MILLIS: usize = 1_000;
 
-/// [`DEVICE_TAIL_FLOOR_MILLIS`] in game frames, the wait every device gets at
+/// `DEVICE_TAIL_FLOOR_MILLIS` in game frames, the wait every device gets at
 /// least.
 pub const DEVICE_TAIL_FLOOR_FRAMES: usize = game_frames_in(DEVICE_TAIL_FLOOR_MILLIS);
 
@@ -390,7 +390,7 @@ impl MusicPlayer {
     /// An empty ring only proves the output callback took the last samples,
     /// so a healthy stream is held further frames for them to sound. The
     /// first poll that sees the ring empty latches
-    /// [`measured_drain_target`] of [`AudioOutput::playback_progress`]'s
+    /// `measured_drain_target` of [`AudioOutput::playback_progress`]'s
     /// submitted-frame count -- widened by [`AudioOutput::playback_settle_margin_frames`]
     /// so a resampled output's buffered interpolation tail is not cut off --
     /// then every later poll returns `true` as soon as the output's measured
@@ -398,12 +398,12 @@ impl MusicPlayer {
     /// playback position, not a poll count. If the output has no measured
     /// signal at that first empty poll (a host that reports no usable
     /// timestamp, including an unmodified null backend), this falls back to
-    /// [`device_tail_millis`] for this output's own device exactly as
-    /// before. Either way [`Self::max_device_tail_frames`] remains an
+    /// `device_tail_millis` for this output's own device exactly as
+    /// before. Either way `Self::max_device_tail_frames` remains an
     /// absolute cap: a stalled device, or a measured signal that stalls,
     /// still cannot hold the transition open past it.
     ///
-    /// An elapsed [`max_drain_wait_frames`] bound answers `true` while the
+    /// An elapsed `max_drain_wait_frames` bound answers `true` while the
     /// ring stays nonempty, so a consumer that never takes the fade cannot
     /// hold the device open; a stream error is not read, since cpal's ALSA
     /// worker reports a recoverable XRUN through the same counter and keeps

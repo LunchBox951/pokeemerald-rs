@@ -11,7 +11,7 @@
 //! The importer supports exactly one build: Pokemon Emerald, US, revision 0,
 //! SHA-1 `f3ae088181bf583e55daf962a92bb46f4f1d07b7`, game code `BPEE`,
 //! version 0, exactly 16 MiB. Identity is the whole-file hash and nothing
-//! else. See [`profile`] for why.
+//! else. See `profile` for why.
 //!
 //! # What exists
 //!

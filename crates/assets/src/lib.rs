@@ -9,7 +9,7 @@
 //! move-tutor learnsets (see [`tutor_learnsets`]), the per-species
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
 //! egg-move lists (see [`egg_moves`]), the enemy battler elevation table (see
-//! [`enemy_elevation`]), the Battle Arena per-move mind ratings (see
+//! [`mod@enemy_elevation`]), the Battle Arena per-move mind ratings (see
 //! [`arena_mind_ratings`]), the species/move/ability display text
 //! (see [`species_names`], [`move_names`], [`abilities`]), the Trainer and
 //! Greetings Easy Chat vocabulary groups (see [`easy_chat`]), the experience

@@ -325,13 +325,13 @@ pub const fn truck_exit(gender: PlayerGender) -> Option<TruckExit> {
     })
 }
 
-/// [`init_save_blocks_with_options`] at [`NewGameOptions::DEFAULT`] -- every
+/// `init_save_blocks_with_options` at `NewGameOptions::DEFAULT` -- every
 /// caller that has no boot-recovered save to carry options from (most of
 /// this module's own tests, and every other standalone caller).
 ///
 /// # Panics
 ///
-/// See [`init_save_blocks_with_options`].
+/// See `init_save_blocks_with_options`.
 #[must_use]
 pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
     init_save_blocks_with_options(rng, NewGameOptions::DEFAULT)
