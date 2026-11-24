@@ -209,6 +209,7 @@ impl ChunkStage {
             (Self::Header | Self::Palette | Self::ImageData, IDAT) => Some(Self::ImageData),
             (Self::Start, _)
             | (Self::ImageData, IHDR | PLTE)
+            | (Self::Header | Self::Palette, IEND)
             | (Self::Header | Self::Palette | Self::Trailer, IHDR | IDAT)
             | (Self::Palette | Self::Trailer, PLTE) => None,
             (Self::ImageData, _) => Some(Self::Trailer),
@@ -1000,6 +1001,7 @@ pub(crate) mod tests {
             super::IHDR,
             &ihdr(1, super::INDEXED_COLOR_TYPE, 1, 1),
         ));
+        png.extend_from_slice(&chunk(super::IDAT, &stored_zlib(&[super::FILTER_NONE, 0])));
         png.extend_from_slice(&chunk(super::IEND, &[]));
         let err = decode(&png).unwrap_err();
         assert_eq!(err, PngError::Unsupported("bit depth is not 2, 4, or 8"));
@@ -1227,6 +1229,7 @@ pub(crate) mod tests {
             super::IHDR,
             &ihdr(super::EIGHT_BIT_DEPTH, TRUECOLOR_TYPE, 1, 1),
         ));
+        png.extend_from_slice(&chunk(super::IDAT, &stored_zlib(&[super::FILTER_NONE, 0])));
         png.extend_from_slice(&chunk(super::IEND, &[]));
         let err = decode(&png).unwrap_err();
         assert_eq!(err, PngError::Unsupported("colour type is not 3 (indexed)"));
@@ -1439,13 +1442,36 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
-    fn decode_palette_rejects_an_empty_ihdr_body() {
+    fn palette_source_png(ihdr_body: &[u8]) -> Vec<u8> {
         let mut png = Vec::new();
         png.extend_from_slice(&super::SIGNATURE);
-        png.extend_from_slice(&chunk(super::IHDR, &[]));
+        png.extend_from_slice(&chunk(super::IHDR, ihdr_body));
+        png.extend_from_slice(&chunk(super::PLTE, &[1, 2, 3]));
+        png.extend_from_slice(&chunk(super::IDAT, &stored_zlib(&[super::FILTER_NONE, 0])));
+        png.extend_from_slice(&chunk(super::IEND, &[]));
+        png
+    }
+
+    #[test]
+    fn decode_palette_rejects_a_png_without_idat() {
+        let mut png = Vec::new();
+        png.extend_from_slice(&super::SIGNATURE);
+        png.extend_from_slice(&chunk(
+            super::IHDR,
+            &ihdr(super::EIGHT_BIT_DEPTH, super::INDEXED_COLOR_TYPE, 1, 1),
+        ));
         png.extend_from_slice(&chunk(super::PLTE, &[1, 2, 3]));
         png.extend_from_slice(&chunk(super::IEND, &[]));
+        assert_eq!(
+            decode_palette(&png).unwrap_err(),
+            PngError::MalformedChunkStructure(super::IEND),
+            "IDAT is a required chunk"
+        );
+    }
+
+    #[test]
+    fn decode_palette_rejects_an_empty_ihdr_body() {
+        let png = palette_source_png(&[]);
         assert_eq!(decode_palette(&png).unwrap_err(), PngError::Truncated);
     }
 
@@ -1484,12 +1510,7 @@ pub(crate) mod tests {
         let with_interlace = |method: u8| {
             let mut header = ihdr(super::EIGHT_BIT_DEPTH, super::INDEXED_COLOR_TYPE, 1, 1);
             *header.last_mut().unwrap() = method;
-            let mut png = Vec::new();
-            png.extend_from_slice(&super::SIGNATURE);
-            png.extend_from_slice(&chunk(super::IHDR, &header));
-            png.extend_from_slice(&chunk(super::PLTE, &[1, 2, 3]));
-            png.extend_from_slice(&chunk(super::IEND, &[]));
-            png
+            palette_source_png(&header)
         };
         assert_eq!(decode_palette(&with_interlace(0)).unwrap().len(), 1);
         assert_eq!(
@@ -1663,12 +1684,7 @@ pub(crate) mod tests {
         let with_method = |index: usize| {
             let mut header = ihdr(super::EIGHT_BIT_DEPTH, super::INDEXED_COLOR_TYPE, 1, 1);
             header[index] = 1;
-            let mut png = Vec::new();
-            png.extend_from_slice(&super::SIGNATURE);
-            png.extend_from_slice(&chunk(super::IHDR, &header));
-            png.extend_from_slice(&chunk(super::PLTE, &[1, 2, 3]));
-            png.extend_from_slice(&chunk(super::IEND, &[]));
-            png
+            palette_source_png(&header)
         };
         assert_eq!(
             decode_palette(&with_method(10)).unwrap_err(),
