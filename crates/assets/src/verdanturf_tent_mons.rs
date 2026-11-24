@@ -1,4 +1,11 @@
-//! The Verdanturf Battle Tent's 45 rental Pokémon sets.
+//! The Verdanturf Battle Tent's 45 opponent Pokémon sets.
+//!
+//! These are the sets the Tent's opposing trainers field, not rentals:
+//! `SetTentPtrsGetLevel` (`src/battle_tower.c:3328-3359`) selects
+//! `gVerdanturfBattleTentMons` for the Palace-rules Tent, while the
+//! Factory-rules Tent (Slateport) draws its rental Pokémon from
+//! `gSlateportBattleTentMons` (`src/battle_tower.c:3334-3337`;
+//! `src/battle_factory.c:391`), which is not ported here.
 //!
 //! Source: `gVerdanturfBattleTentMons` (`src/data/battle_frontier/battle_tent.h:1807-2124`),
 //! an array of `struct FacilityMon` (`include/battle_tower.h:27-34`), with the
