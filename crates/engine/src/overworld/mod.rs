@@ -11,6 +11,7 @@ pub mod object_event;
 #[cfg(test)]
 pub(crate) mod object_event_harness;
 pub mod player;
+pub mod regice_puzzle;
 pub mod trainer_sight;
 pub mod warp;
 pub mod wild_encounter;
@@ -38,6 +39,7 @@ pub use player::{
     RUN_FRAMES_PER_TILE, SLIDE_FRAMES_PER_TILE, TURN_IN_PLACE_FRAMES, WALK_FRAMES_PER_TILE,
     WALK_SLOW_FRAMES_PER_TILE,
 };
+pub use regice_puzzle::should_do_braille_regice_puzzle;
 pub use trainer_sight::trainer_can_see_player;
 pub use warp::{
     resolve_warp_event, trigger_animated_door_warp, trigger_arrow_warp, trigger_door_warp,
