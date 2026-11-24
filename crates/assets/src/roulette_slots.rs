@@ -43,7 +43,7 @@ impl Error for RouletteSlotError {}
 
 /// A wheel slot, in wheel order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct WheelSlot(u8);
+pub struct WheelSlot(usize);
 
 impl WheelSlot {
     /// Validates a raw wheel-slot index.
@@ -54,7 +54,7 @@ impl WheelSlot {
     /// [`WHEEL_SLOT_COUNT`].
     pub const fn new(index: usize) -> Result<Self, RouletteSlotError> {
         if index < WHEEL_SLOT_COUNT {
-            Ok(Self(index as u8))
+            Ok(Self(index))
         } else {
             Err(RouletteSlotError::UnknownSlot(index))
         }
@@ -63,7 +63,7 @@ impl WheelSlot {
     /// Returns the raw wheel-slot index.
     #[must_use]
     pub const fn index(self) -> usize {
-        self.0 as usize
+        self.0
     }
 }
 
@@ -385,16 +385,13 @@ mod tests {
 
         let name = |square: GridSquare| format!("{square:?}");
         let camel = |define: &str, prefix: &str| -> String {
-            define
-                .strip_prefix(prefix)
-                .unwrap()
-                .split('_')
-                .map(|word| {
-                    let mut chars = word.chars();
-                    let first = chars.next().unwrap().to_ascii_uppercase();
-                    format!("{first}{}", chars.as_str().to_ascii_lowercase())
-                })
-                .collect()
+            let mut name = String::new();
+            for word in define.strip_prefix(prefix).unwrap().split('_') {
+                let mut chars = word.chars();
+                name.push(chars.next().unwrap().to_ascii_uppercase());
+                name.push_str(&chars.as_str().to_ascii_lowercase());
+            }
+            name
         };
         for (index, row) in wheel_slots().iter().enumerate() {
             assert_eq!(
