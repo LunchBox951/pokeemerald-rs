@@ -5,8 +5,10 @@
 //! Each row records the frame geometry (`.width`/`.height`), the sheet cell its
 //! initial animation shows for a facing, and the palette, as upstream's
 //! `object_event_graphics_info.h`, `object_event_pic_tables.h` and
-//! `object_event_anims.h` declare them. Only the stationary first frame is
-//! modelled: walking, bowing, cutting and berry-growth animation are not.
+//! `object_event_anims.h` declare them. A sheet may also carry a [`WalkCycle`],
+//! the cells of `sAnimTable_Standard`'s four normal-speed `Go*` animations.
+//! Bowing, cutting, berry-growth and the faster walking animations are not
+//! modelled.
 
 use assets::pack::AssetPack;
 use engine::overworld::Direction;
@@ -63,6 +65,61 @@ impl Facing {
     }
 }
 
+/// The cells `sAnimTable_Standard`'s normal-speed `Go*` animations show, one cycle per
+/// direction, each as the four commands of `sAnim_GoSouth`: a foot, the neutral pose, the
+/// other foot and the neutral pose (`object_event_anims.h:202-235`). Commands last eight frames
+/// each; an east walk reuses the west cycle flipped. The cells are sheet cells, the pic
+/// table's image of each pic index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct WalkCycle {
+    south: [u16; 4],
+    north: [u16; 4],
+    west: [u16; 4],
+}
+
+impl WalkCycle {
+    /// The nine-cell people layout, 16x32 or 16x16 (`sPicTable_*`, pic indices 3 to 8 are
+    /// cells 3 to 8, `object_event_pic_tables.h:109-119,133-143`).
+    pub(super) const PEOPLE: Self = Self {
+        south: [3, 0, 4, 0],
+        north: [5, 1, 6, 1],
+        west: [7, 2, 8, 2],
+    };
+
+    /// `sPicTable_VigorothCarryingBox` shows source cells `0, 0, 0, 1, 2, 1, 2, 1, 2` for
+    /// pic indices 0 to 8, so every direction's `Go*` cycle is `1, 0, 2, 0`
+    /// (`object_event_pic_tables.h:928-938`).
+    pub(super) const VIGOROTH_CARRYING: Self = Self {
+        south: [1, 0, 2, 0],
+        north: [1, 0, 2, 0],
+        west: [1, 0, 2, 0],
+    };
+
+    /// Bit `n` set for every sheet cell `n` some command of some direction shows.
+    pub(super) const fn reachable_cells(self) -> u16 {
+        let mut mask = 0;
+        let mut command = 0;
+        while command < 4 {
+            mask |= (1 << self.south[command]) | (1 << self.north[command]);
+            mask |= 1 << self.west[command];
+            command += 1;
+        }
+        mask
+    }
+
+    /// The cell and horizontal flip a walk toward `direction` shows on animation `command`
+    /// (`0` to `3`).
+    pub(super) const fn cell_for(self, direction: Direction, command: u8) -> (u16, bool) {
+        let command = (command % 4) as usize;
+        match direction {
+            Direction::South => (self.south[command], false),
+            Direction::North => (self.north[command], false),
+            Direction::West => (self.west[command], false),
+            Direction::East => (self.west[command], true),
+        }
+    }
+}
+
 /// One non-people-sheet graphic: where its frames live and how one is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ObjectSheet {
@@ -77,6 +134,8 @@ pub(super) struct ObjectSheet {
     /// The combined-palette bank the graphic draws with.
     pub(super) palette_bank: u8,
     pub(super) facing: Facing,
+    /// The cells its normal-speed walk shows, or `None` when it never walks.
+    pub(super) walk: Option<WalkCycle>,
 }
 
 /// Combined-palette banks for upstream's `PALSLOT_NPC_SPECIAL` object
@@ -110,6 +169,26 @@ const fn sheet(
         cells,
         palette_bank,
         facing,
+        walk: None,
+    }
+}
+
+impl ObjectSheet {
+    const fn walking(self, walk: WalkCycle) -> Self {
+        Self {
+            walk: Some(walk),
+            ..self
+        }
+    }
+
+    /// Bit `n` set for every sheet cell `n` the object can show: each facing's stand cell and
+    /// each cell of its walk.
+    pub(super) const fn reachable_cells(self) -> u16 {
+        let walk = match self.walk {
+            Some(walk) => walk.reachable_cells(),
+            None => 0,
+        };
+        self.facing.reachable_cells() | walk
     }
 }
 
@@ -119,7 +198,9 @@ const STILL: Facing = Facing::Fixed(0);
 pub(super) fn object_sheet(graphics_id: &str) -> Option<ObjectSheet> {
     // Generic NPC palette tags NPC_1..NPC_4 sit at banks 1..4.
     Some(match graphics_id {
-        "OBJ_EVENT_GFX_NINJA_BOY" => sheet("ninja_boy", (16, 16, 9), 1, Facing::PEOPLE),
+        "OBJ_EVENT_GFX_NINJA_BOY" => {
+            sheet("ninja_boy", (16, 16, 9), 1, Facing::PEOPLE).walking(WalkCycle::PEOPLE)
+        }
         "OBJ_EVENT_GFX_NURSE" => sheet("nurse", (16, 32, 4), 1, Facing::PEOPLE),
         "OBJ_EVENT_GFX_MYSTERY_GIFT_MAN" => {
             sheet("mystery_event_deliveryman", (16, 32, 3), 1, Facing::PEOPLE)
@@ -142,7 +223,8 @@ pub(super) fn object_sheet(graphics_id: &str) -> Option<ObjectSheet> {
                 north: 0,
                 west: 0,
             },
-        ),
+        )
+        .walking(WalkCycle::VIGOROTH_CARRYING),
         "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY" => sheet(
             "pokemon/vigoroth",
             (32, 32, 5),
@@ -190,7 +272,7 @@ pub(super) fn initial_berry_sheet(tree_id: &str) -> Option<ObjectSheet> {
 impl ObjectSheet {
     /// A nine-frame 16x32 people sheet.
     pub(super) const fn people(sprite_path: &'static str, palette_bank: u8) -> Self {
-        sheet(sprite_path, (16, 32, 9), palette_bank, Facing::PEOPLE)
+        sheet(sprite_path, (16, 32, 9), palette_bank, Facing::PEOPLE).walking(WalkCycle::PEOPLE)
     }
 
     /// Packs the cells whose bit is set in `cells` as consecutive

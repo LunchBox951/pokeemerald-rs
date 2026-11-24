@@ -144,7 +144,7 @@ impl OverworldPhase {
         }) = dialog.face_player
         {
             if let Some(entry) = self.object_events.find_mut(carried_from, local_id) {
-                entry.state_mut().face(direction);
+                entry.state_mut().face_with_animation(direction);
             }
         }
         dialog.tokens

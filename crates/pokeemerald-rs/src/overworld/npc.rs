@@ -15,7 +15,9 @@
 //! fresh-save stage ([`sheets::initial_berry_sheet`]).
 //!
 //! Each object draws its live tile and the standing frame of its live facing.
-//! Positions share [`super::viewport::camera_lag_px`] with the background during a
+//! While a normal-speed step runs it instead draws the step's interpolated
+//! position and the `Go*` animation cell of its start foot and elapsed frames
+//! ([`sheets::WalkCycle`]). Positions share [`super::viewport::camera_lag_px`] with the background during a
 //! step, and each sprite's bottom edge sits on its tile's bottom edge, centred on
 //! the tile (`event_object_movement.c:1459-1464`).
 //!
@@ -45,7 +47,7 @@ use super::{avatar, METATILE_PX};
 use super::{fill_palette_bank, OverworldSceneError};
 
 mod sheets;
-use sheets::{Facing, ObjectSheet};
+use sheets::{Facing, ObjectSheet, WalkCycle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NpcPaletteTag {
@@ -214,8 +216,8 @@ fn protagonist_source(who: PlayerCharacter, player: PlayerCharacter) -> NpcSprit
 
 /// Tile, palette and frame layout of a resolved graphic.
 ///
-/// Only the sheet cells some facing of some event of the scene can show
-/// ([`Facing::reachable_cells`]) are packed, in ascending cell order: a frame's tile offset is the number of packed cells
+/// Only the sheet cells some facing or walk of some event of the scene can show
+/// ([`ObjectSheet::reachable_cells`]) are packed, in ascending cell order: a frame's tile offset is the number of packed cells
 /// before it ([`Self::frame_tile`]).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SpriteBinding {
@@ -225,6 +227,8 @@ pub(super) struct SpriteBinding {
     width: u16,
     height: u16,
     facing: Facing,
+    /// The cells its normal-speed walk shows, or `None` when it never walks.
+    walk: Option<WalkCycle>,
     /// Bit `n` is set when sheet cell `n` is packed.
     packed_cells: u16,
 }
@@ -238,6 +242,7 @@ impl SpriteBinding {
         width: 16,
         height: 32,
         facing: Facing::PEOPLE,
+        walk: Some(WalkCycle::PEOPLE),
         packed_cells: 0x1FF,
     };
 
@@ -352,7 +357,7 @@ pub(super) fn resolve_bindings(
             Some(NpcSpriteSource::Object(sheet)) => sheet,
             None => continue,
         };
-        let cells = sheet.facing.reachable_cells();
+        let cells = sheet.reachable_cells();
         match wanted.iter_mut().find(|candidate| candidate.key == key) {
             Some(known) => known.cells |= cells,
             None => wanted.push(WantedSheet { key, sheet, cells }),
@@ -373,6 +378,7 @@ pub(super) fn resolve_bindings(
                 width: sheet.width,
                 height: sheet.height,
                 facing: sheet.facing,
+                walk: sheet.walk,
                 packed_cells: cells,
             },
         );
@@ -451,3 +457,5 @@ mod live_state_tests;
 mod placement_tests;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod walking_tests;

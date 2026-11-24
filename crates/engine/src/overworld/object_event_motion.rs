@@ -15,6 +15,38 @@ pub const NORMAL_STEP_FRAMES: u8 = 16;
 
 const TILE_PIXELS: i32 = 16;
 
+/// How many callback frames each command of a Standard `Go*` walk animation shows
+/// (`ANIMCMD_FRAME(n, 8)`, `object_event_anims.h:202-235`).
+pub const GO_COMMAND_FRAMES: u8 = 8;
+
+/// The number of commands in a Standard `Go*` cycle: a foot, the neutral pose, the other foot
+/// and the neutral pose again (`sAnim_GoSouth`, `object_event_anims.h:202-209`).
+pub const GO_COMMANDS: u8 = 4;
+
+/// The command a step starts on, given the command the sprite's animation sits at when the step
+/// begins: the neutral commands 1 and 3 move on to the foot that follows, 0 and 2 stay
+/// (`SetStepAnimHandleAlternation` with `sStepAnimTables`' `{1, 3, 0, 2}`,
+/// `event_object_movement.c:4582-4598`, `object_event_anims.h:1146-1155`).
+#[must_use]
+pub const fn alternate_go_command(command: u8) -> u8 {
+    match command {
+        1 => 2,
+        3 => 0,
+        other => other,
+    }
+}
+
+/// The neutral command a face action leaves the animation on: commands 0 and 1 give 1, and 2
+/// and 3 give 3, so the foot that follows is kept (`SetStepAnim`, `:4601-4618`).
+#[must_use]
+pub const fn face_go_command(command: u8) -> u8 {
+    if command <= 1 {
+        1
+    } else {
+        3
+    }
+}
+
 /// Which normal-speed action is running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepKind {
@@ -30,16 +62,28 @@ pub struct StepAction {
     kind: StepKind,
     direction: Direction,
     frames_elapsed: u8,
+    start_command: u8,
 }
 
 impl StepAction {
-    /// An action whose first frame has just run.
-    pub(super) const fn begin(kind: StepKind, direction: Direction) -> Self {
+    /// An action whose first frame has just run, with its `Go*` animation started on
+    /// `start_command`.
+    pub(super) const fn begin(kind: StepKind, direction: Direction, start_command: u8) -> Self {
         Self {
             kind,
             direction,
             frames_elapsed: 1,
+            start_command,
         }
+    }
+
+    /// The command of the `Go*` animation cycle the sprite shows now, `0` to `3`. A step seeks
+    /// its start command on its first frame, so that command holds for [`GO_COMMAND_FRAMES`]
+    /// frames and the neutral pose after it holds for the rest
+    /// (`SeekSpriteAnim`, `sprite.c:1359-1370`; `ContinueAnim`, `:943-966`).
+    #[must_use]
+    pub const fn go_command(&self) -> u8 {
+        (self.start_command + (self.frames_elapsed - 1) / GO_COMMAND_FRAMES) % GO_COMMANDS
     }
 
     /// Whether the object walks to the next tile or animates in place.

@@ -47,6 +47,7 @@ fn truck_binding() -> SpriteBinding {
         width: sheet.width,
         height: sheet.height,
         facing: sheet.facing,
+        walk: sheet.walk,
         packed_cells: 1,
     }
 }
@@ -151,6 +152,7 @@ fn a_sixteen_by_sixteen_object_uses_its_effective_elevation() {
         width: 16,
         height: 16,
         facing: sheet.facing,
+        walk: sheet.walk,
         packed_cells: 1,
     };
     let mut bindings = HashMap::new();

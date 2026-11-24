@@ -26,6 +26,7 @@ pub use live_object_events::{
 
 #[path = "object_event_motion.rs"]
 mod motion;
+use motion::{alternate_go_command, face_go_command};
 pub use motion::{StepAction, StepKind, NORMAL_STEP_FRAMES};
 
 /// Returns whether an object's hide flag permits it to spawn.
@@ -289,6 +290,8 @@ pub struct ObjectEventState {
     template_position: TilePos,
     template_movement_type: MovementType,
     step: Option<StepAction>,
+    /// The command its `Go*` walk animation rests on, `0` to `3`: a spawn starts on `0`.
+    go_command: u8,
 }
 
 impl ObjectEventState {
@@ -307,6 +310,7 @@ impl ObjectEventState {
             template_position: position,
             template_movement_type: event.movement_type,
             step: None,
+            go_command: 0,
         }
     }
 
@@ -399,6 +403,26 @@ impl ObjectEventState {
     /// (`FaceDirection`, `event_object_movement.c:5048-5056`).
     pub const fn face_in_place(&mut self) {
         self.settle_previous_position();
+        self.go_command = face_go_command(self.go_command);
+    }
+
+    /// A script's `faceplayer`: changes facing and runs the face action's animation start
+    /// (`ObjectEventFaceOppositeDirection` holds a face movement action, whose `FaceDirection`
+    /// calls `SetStepAnim`, `event_object_movement.c:4975-4978,5048-5055,4601-4618`), so the
+    /// foot that follows is kept. Upstream runs the action once the object's current movement
+    /// is done and settles the previous tile; this turn is instantaneous and leaves the tile
+    /// held, so a step in progress is not cut short.
+    pub const fn face_with_animation(&mut self, direction: Direction) {
+        self.facing = direction;
+        self.go_command = face_go_command(self.go_command);
+    }
+
+    /// The command the `Go*` walk animation rests on between steps: `0` for a fresh
+    /// object, `1` or `3` once a face action or a finished step left the neutral pose, `0` or
+    /// `2` while a step that began there runs. During a step, read [`StepAction::go_command`].
+    #[must_use]
+    pub const fn go_command(&self) -> u8 {
+        self.go_command
     }
 
     /// `ShiftStillObjectEventCoords` (`event_object_movement.c:2162-2164`): the tile the object
@@ -412,18 +436,28 @@ impl ObjectEventState {
     /// action's first frame. [`Self::advance_step`] runs the rest.
     pub const fn begin_normal_walk(&mut self, direction: Direction) {
         self.walk(direction);
-        self.step = Some(StepAction::begin(StepKind::Walk, direction));
+        self.begin_step(StepKind::Walk, direction);
     }
 
     /// Starts a normal-speed walk in place, facing `direction` and staying on the tile.
     pub const fn begin_normal_walk_in_place(&mut self, direction: Direction) {
         self.face(direction);
-        self.step = Some(StepAction::begin(StepKind::WalkInPlace, direction));
+        self.begin_step(StepKind::WalkInPlace, direction);
+    }
+
+    /// Runs the animation start both normal-speed actions share: the alternation picks the
+    /// command the step starts on (`InitMovementNormal`, `event_object_movement.c:5101-5107`).
+    const fn begin_step(&mut self, kind: StepKind, direction: Direction) {
+        self.go_command = alternate_go_command(self.go_command);
+        self.step = Some(StepAction::begin(kind, direction, self.go_command));
     }
 
     /// Drops the running normal-speed action without moving, as `ClearObjectEventMovement`
     /// clears the object's movement action (`event_object_movement.c:4486-4493`).
     pub const fn clear_step(&mut self) {
+        if let Some(step) = self.step {
+            self.go_command = step.go_command();
+        }
         self.step = None;
     }
 
@@ -442,6 +476,7 @@ impl ObjectEventState {
         if !step.advance() {
             return false;
         }
+        self.go_command = step.go_command();
         self.step = None;
         self.settle_previous_position();
         true
@@ -460,6 +495,7 @@ impl ObjectEventState {
         self.movement_type = self.template_movement_type;
         self.facing = initial_facing_direction(self.template_movement_type);
         self.step = None;
+        self.go_command = 0;
     }
 
     /// Shifts the current, previous, and template-snapshot tiles by `shift`, as

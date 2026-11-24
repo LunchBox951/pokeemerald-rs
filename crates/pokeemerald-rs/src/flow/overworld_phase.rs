@@ -1152,6 +1152,8 @@ mod mat_field_input_gate_tests;
 #[cfg(test)]
 mod mom_faceplayer_tests;
 #[cfg(test)]
+mod npc_walking_real_pack_tests;
+#[cfg(test)]
 mod obedience_tests;
 #[cfg(test)]
 mod oldale_reposition_tests;
