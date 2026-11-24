@@ -451,7 +451,7 @@ impl App {
     /// which holds the entire construction body -- see the module docs' "The
     /// headless real-boot check" for how both halves are covered.
     ///
-    /// Also arms the title screen's BGM (S-3, issue #185) on the real audio
+    /// Also arms the title screen's BGM (S-3) on the real audio
     /// device. It starts, via `Self::start_title_music`, on the fifth
     /// [`App::step`], the initializer's state 4 -- best-effort, so a missing
     /// pack or audio device silences the BGM rather than failing the boot the

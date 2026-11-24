@@ -48,7 +48,7 @@ pub enum TrainerClassNameError {
     Truncated,
     /// Bytes follow the last record.
     TrailingBytes,
-    /// An ID names no [`TrainerClass`].
+    /// An ID names no [`TrainerClass`](crate::trainers::TrainerClass).
     IdOutOfRange {
         /// Offending ID.
         id: u16,
