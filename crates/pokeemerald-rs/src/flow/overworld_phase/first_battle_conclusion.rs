@@ -47,8 +47,8 @@
 //!    `src/event_object_movement.c:1389-1397`); it is written first. The same
 //!    call also retires the admitted Zigzagoon entry
 //!    (`ObjectEventCollection::remove_by_local_id`, `RemoveObjectEvent`'s
-//!    `active = FALSE`), so a lab warp that fails and leaves the player on the
-//!    route does not leave it queryable or drawn.
+//!    `active = FALSE`), so it is not queryable or drawn while its flag is
+//!    set.
 //!    [`assets::MapEventsTable`] templates carry these flag names, and the
 //!    scheduler consults a template's flag when it admits the object, so a
 //!    set flag keeps a later admission from spawning it. [`crate::new_game`]
@@ -66,6 +66,28 @@
 //!    [`OverworldPhase::warp_to_position`]. The two-argument `warp` form is
 //!    a coordinate pair, not a warp id (`pokeemerald/asm/macros/event.inc`,
 //!    `formatwarp`).
+//!
+//! # A lab that will not load
+//!
+//! Upstream's `warp` cannot fail (`ScrCmd_warp` sets the destination, calls
+//! `DoWarp` and returns `TRUE`, `pokeemerald/src/scrcmd.c:740-751`; the
+//! scheduled task then runs `WarpIntoMap` and `CB2_LoadMap` unconditionally,
+//! `src/field_screen_effect.c:484-492,669-672`), so the script never sits
+//! between "`VAR_ROUTE101_STATE` is 3" and "the player is still on Route
+//! 101". The port's lab load reads an asset pack and can fail, which would
+//! strand exactly that state: the rescue concluded, Birch hidden on the
+//! route, and no path to the lab.
+//!
+//! The flag and var writes (steps 2 to 5) and the warp are therefore one unit.
+//! [`OverworldPhase::warp_to_position`] reports whether it landed; when it did
+//! not, the event data and the live objects (the retired Zigzagoon) are
+//! restored to what they were before step 2 and `VAR_ROUTE101_STATE` is set to [`ROUTE101_STATE_TRIGGER_READY`], not the
+//! consumed value the trigger left. The player stays where they stood and the
+//! coord event fires again on the next completed landing on its tile, which
+//! replays the fight (battle progress and RNG already spent stay spent) and
+//! then retries this conclusion. The heal (step 1) is kept: `HealPlayerParty`
+//! is idempotent and no fainted lead may reach the overworld. The stored
+//! battle outcome is kept too; the next start clears it.
 //!
 //! Not modelled: the starter-select UI and starter handout, the cutscene
 //! movement and messages, `FLAG_SYS_POKEMON_GET`, `FLAG_RESCUED_BIRCH`,
@@ -105,6 +127,11 @@ const VAR_ROUTE101_STATE: u16 = 0x4060;
 /// The value the script writes to [`VAR_ROUTE101_STATE`] (`scripts.inc:237`).
 const ROUTE101_STATE_CONCLUDED: u16 = 3;
 
+/// [`VAR_ROUTE101_STATE`] while the rescue coord event is armed
+/// (`scripts.inc:14-17`): the value a failed lab handoff leaves so the
+/// trigger can fire again.
+const ROUTE101_STATE_TRIGGER_READY: u16 = 1;
+
 /// `FLAG_HIDE_ROUTE_101_ZIGZAGOON` (`include/constants/flags.h:801`), the
 /// hide flag of the rescue Zigzagoon template (local id 4 in the generated
 /// Route 101 events).
@@ -143,14 +170,17 @@ impl OverworldPhase {
 
         self.heal_whole_party_and_reselect_lead("first battle");
 
+        // The writes below and the lab warp are one unit; see the module docs.
+        let event_data_before_conclusion = self.save1.event_data.clone();
+        let object_events_before_conclusion = self.object_events.clone();
+
         Self::write_flag(
             &mut self.save1.event_data,
             FLAG_HIDE_ROUTE_101_ZIGZAGOON,
             true,
         );
-        // `removeobject` also deactivates the object, and the scheduler does not retire an
-        // admitted entry for its flag (`event_object_movement.c:1383-1397`), so the Zigzagoon
-        // stays queryable and drawn if the lab warp below does not replace the collection.
+        // `removeobject` also deactivates the object; the scheduler does not retire an admitted
+        // entry for its flag (`event_object_movement.c:1383-1397`).
         self.object_events
             .remove_by_local_id(ROUTE_101_ZIGZAGOON_LOCAL_ID);
         Self::write_flag(
@@ -195,7 +225,19 @@ impl OverworldPhase {
         );
 
         let (x, y) = BIRCHS_LAB_ARRIVAL;
-        self.warp_to_position(BIRCHS_LAB, x, y);
+        if !self.warp_to_position(BIRCHS_LAB, x, y) {
+            self.save1.event_data = event_data_before_conclusion;
+            self.object_events = object_events_before_conclusion;
+            Self::write_var(
+                &mut self.save1.event_data,
+                VAR_ROUTE101_STATE,
+                ROUTE101_STATE_TRIGGER_READY,
+            );
+            eprintln!(
+                "first battle: the lab handoff failed -- conclusion rolled back, the rescue is \
+                 re-armed for the next landing on its trigger tile"
+            );
+        }
     }
 
     /// Writes a var, logging instead of failing. The ids used here are fixed

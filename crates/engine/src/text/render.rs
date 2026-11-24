@@ -44,7 +44,6 @@ use assets::fonts::{FontId, Glyph, GlyphSource, GlyphSources};
 use super::Token;
 
 mod colors;
-use colors::BackgroundPaint;
 pub use colors::TextColors;
 
 mod ext_ctrl {
@@ -68,11 +67,19 @@ mod ext_ctrl {
 mod keypad_icon;
 
 #[cfg(test)]
+mod auto_scroll_tests;
+#[cfg(test)]
 mod font_control_tests;
+#[cfg(test)]
+mod glyph_clip_tests;
 #[cfg(test)]
 mod min_letter_spacing_tests;
 
 pub use keypad_icon::{keypad_icon_size, KeypadIconPlacement};
+
+/// Waiting calls an auto-scroll prompt lasts, the releasing call included
+/// (`TextPrinterWaitAutoMode`, `pokeemerald/src/text.c:850-863`).
+const AUTO_SCROLL_WAIT_CALLS: u8 = 50;
 
 const EXTRA_SYMBOL_PAGE_START: u16 = 0x100;
 
@@ -97,12 +104,7 @@ pub const fn max_letter_height(font: FontId) -> i32 {
 /// metric from [`max_letter_height`], the `\n` advance, so the two tables
 /// disagree on every font but Short.
 const fn clear_span_height(font: FontId) -> i32 {
-    match font {
-        FontId::Small => 13,
-        FontId::Normal | FontId::Narrow => 15,
-        FontId::Short => 14,
-        FontId::SmallNarrow => 12,
-    }
+    font.glyph_height() as i32
 }
 
 /// Maps an upstream `FONT_*` id (`pokeemerald/include/text.h:10-21`) to the
@@ -263,11 +265,15 @@ pub struct RevealedGlyph {
     /// Rows of background upstream paints under the glyph: the font's Latin
     /// glyph height ([`ClearedSpan::height`]).
     pub raster_height: i32,
-    /// Whether the glyph's background pixels paint `colors.background`. False
-    /// while the printer still uses the unmodified message-box background,
-    /// which the window already shows; true once a `HIGHLIGHT` (or a
-    /// non-default configured background) selects one.
-    pub paint_background: bool,
+}
+
+/// How prompt waits release: `gTextFlags.autoScroll` (`text.c:868`, `:887`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WaitMode {
+    /// A fresh A or B press releases the wait.
+    Manual,
+    /// The fiftieth waiting call releases the wait.
+    AutoScroll,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -393,9 +399,11 @@ pub struct Printer<S> {
     state: PrinterState,
     allows_ab_speed_up: bool,
     ab_speed_up_latched: bool,
+    /// `gTextFlags.autoScroll`: prompt waits release themselves.
+    wait_mode: WaitMode,
+    auto_scroll_calls_left: u8,
     initial_colors: TextColors,
     colors: TextColors,
-    background: BackgroundPaint,
     cleared_window_colors: Option<TextColors>,
 }
 
@@ -425,9 +433,10 @@ impl<S: GlyphSource> Printer<S> {
             state: PrinterState::HandleChar,
             allows_ab_speed_up: false,
             ab_speed_up_latched: false,
+            wait_mode: WaitMode::Manual,
+            auto_scroll_calls_left: AUTO_SCROLL_WAIT_CALLS,
             initial_colors: TextColors::MESSAGE_BOX,
             colors: TextColors::MESSAGE_BOX,
-            background: BackgroundPaint::Window,
             cleared_window_colors: None,
         }
     }
@@ -502,14 +511,33 @@ impl<S: GlyphSource> Printer<S> {
         self
     }
 
+    /// Selects auto-scroll mode (`gTextFlags.autoScroll`).
+    ///
+    /// A clear prompt, a scroll prompt and `PAUSE_UNTIL_PRESS` then release on
+    /// the fiftieth tick after the one that reports the wait, whatever A or B
+    /// do. Upstream draws no prompt arrow in this mode (`text.c:792`,
+    /// `:868-871`); a consumer that draws one checks [`Self::is_auto_scroll`].
+    ///
+    /// Select the mode before the first tick; it survives [`Self::restart`].
+    #[must_use]
+    pub const fn with_auto_scroll(mut self) -> Self {
+        self.wait_mode = WaitMode::AutoScroll;
+        self
+    }
+
+    /// Whether the printer is in auto-scroll mode ([`Self::with_auto_scroll`]),
+    /// where prompts draw no down arrow.
+    #[must_use]
+    pub const fn is_auto_scroll(&self) -> bool {
+        matches!(self.wait_mode, WaitMode::AutoScroll)
+    }
+
     /// Starts the printer with `colors` instead of the message-box defaults
-    /// (`TextPrinterTemplate.fgColor`/`bgColor`/`shadowColor`). A background
-    /// other than the default is painted under glyphs from the first one.
+    /// (`TextPrinterTemplate.fgColor`/`bgColor`/`shadowColor`).
     #[must_use]
     pub fn with_text_colors(mut self, colors: TextColors) -> Self {
         self.initial_colors = colors;
         self.colors = colors;
-        self.background = BackgroundPaint::for_initial(colors);
         self
     }
 
@@ -596,10 +624,10 @@ impl<S: GlyphSource> Printer<S> {
         self.cleared_window = false;
         self.cleared_window_colors = None;
         self.colors = self.initial_colors;
-        self.background = BackgroundPaint::for_initial(self.initial_colors);
         self.keypad_icon = None;
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
+        self.auto_scroll_calls_left = AUTO_SCROLL_WAIT_CALLS;
         self.active_font = Some(self.glyphs.font());
         self.clear_height = clear_span_height(self.glyphs.font());
         self.min_letter_spacing = 0;
@@ -607,7 +635,8 @@ impl<S: GlyphSource> Printer<S> {
 
     /// Advance the printer by exactly one frame.
     ///
-    /// New button presses confirm clear, scroll, and press-wait prompts.
+    /// New button presses confirm clear, scroll, and press-wait prompts; in
+    /// auto-scroll mode the fiftieth waiting call confirms them instead.
     /// Pressing during a reveal delay latches A/B speed-up when enabled;
     /// later held frames skip remaining reveal delays.
     pub fn tick(&mut self, input: PrinterInput) -> TickEvent {
@@ -619,7 +648,7 @@ impl<S: GlyphSource> Printer<S> {
             PrinterState::Finished => TickEvent::Finished,
             PrinterState::HandleChar => self.tick_handle_char(input),
             PrinterState::AwaitingScroll => {
-                if input.confirm_pressed() {
+                if self.wait_released(input) {
                     self.cursor.0 = self.origin.0;
                     self.state = PrinterState::Scrolling {
                         pixels_remaining: self.line_height,
@@ -642,7 +671,7 @@ impl<S: GlyphSource> Printer<S> {
                 }
             }
             PrinterState::AwaitingClear => {
-                if input.confirm_pressed() {
+                if self.wait_released(input) {
                     self.cursor = self.origin;
                     self.cleared_window = true;
                     self.cleared_window_colors = Some(self.colors);
@@ -653,7 +682,7 @@ impl<S: GlyphSource> Printer<S> {
                 }
             }
             PrinterState::AwaitingPress => {
-                if input.confirm_pressed() {
+                if self.wait_released(input) {
                     self.state = PrinterState::HandleChar;
                     TickEvent::PressAccepted
                 } else {
@@ -661,6 +690,18 @@ impl<S: GlyphSource> Printer<S> {
                 }
             }
             PrinterState::Pause { frames_remaining } => self.tick_pause(frames_remaining),
+        }
+    }
+
+    /// One waiting call of `TextPrinterWaitWithDownArrow` or `TextPrinterWait`
+    /// (`text.c:850-899`): whether the wait is over.
+    fn wait_released(&mut self, input: PrinterInput) -> bool {
+        match self.wait_mode {
+            WaitMode::Manual => input.confirm_pressed(),
+            WaitMode::AutoScroll => {
+                self.auto_scroll_calls_left = self.auto_scroll_calls_left.saturating_sub(1);
+                self.auto_scroll_calls_left == 0
+            }
         }
     }
 
@@ -700,10 +741,12 @@ impl<S: GlyphSource> Printer<S> {
                     continue;
                 }
                 Token::PromptScroll => {
+                    self.auto_scroll_calls_left = AUTO_SCROLL_WAIT_CALLS;
                     self.state = PrinterState::AwaitingScroll;
                     return TickEvent::AwaitingScroll;
                 }
                 Token::PromptClear => {
+                    self.auto_scroll_calls_left = AUTO_SCROLL_WAIT_CALLS;
                     self.state = PrinterState::AwaitingClear;
                     return TickEvent::AwaitingClear;
                 }
@@ -713,9 +756,9 @@ impl<S: GlyphSource> Printer<S> {
                     self.state = PrinterState::Pause { frames_remaining };
                     return self.tick_pause(frames_remaining);
                 }
-                // Non-auto-scroll `TextPrinterWait` only (`text.c:884-899`);
-                // auto-scroll is unmodelled in this port.
+                // `TextPrinterWait` (`text.c:884-899`).
                 Token::ExtCtrl { sub, .. } if sub == ext_ctrl::PAUSE_UNTIL_PRESS => {
+                    self.auto_scroll_calls_left = AUTO_SCROLL_WAIT_CALLS;
                     self.state = PrinterState::AwaitingPress;
                     return TickEvent::AwaitingPress;
                 }
@@ -758,6 +801,10 @@ impl<S: GlyphSource> Printer<S> {
             let Some(glyph) = self.source(font).and_then(|source| source.glyph(glyph_id)) else {
                 continue;
             };
+            // `CopyGlyphToWindow` copies only `gCurGlyph.width` columns and
+            // `gCurGlyph.height` rows of the cell (`text.c:608-612`), so the
+            // sheet's padding beyond them never reaches the window.
+            let glyph = glyph.clipped_to_height(font.glyph_height());
             // `ClearTextSpan` erases `gCurGlyph.height` rows
             // (`text.c:649-674`), which the latest `DecompressGlyph_*` set, so
             // the clear height follows the font of the latest glyph rather
@@ -770,7 +817,6 @@ impl<S: GlyphSource> Printer<S> {
                 glyph,
                 colors: self.colors,
                 raster_height: self.clear_height,
-                paint_background: self.background == BackgroundPaint::Painted,
             };
             // `text.c:1149-1156`: with a minimum set, the glyph's own advance
             // is followed by erasing the shortfall and advancing across it in
@@ -866,7 +912,7 @@ impl<S: GlyphSource> Printer<S> {
             }
             ext_ctrl::HIGHLIGHT => {
                 if let Some(&index) = arguments.first() {
-                    self.set_background(index);
+                    self.colors.background = index;
                 }
             }
             ext_ctrl::SHADOW => {
@@ -878,19 +924,12 @@ impl<S: GlyphSource> Printer<S> {
                 if let [foreground, background, shadow, ..] = *arguments {
                     self.colors.foreground = foreground;
                     self.colors.shadow = shadow;
-                    self.set_background(background);
+                    self.colors.background = background;
                 }
             }
             _ => {}
         }
         ControlOutcome::Repeat
-    }
-
-    /// An accepted `HIGHLIGHT` selects the background upstream paints under
-    /// every later glyph, including an explicit return to the default one.
-    fn set_background(&mut self, index: u8) {
-        self.colors.background = index;
-        self.background = BackgroundPaint::Painted;
     }
 
     /// Records `width` pixels erased at the cursor and advances past them.

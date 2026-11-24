@@ -97,6 +97,8 @@ impl MusicId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RegionMapSectionId(pub &'static str);
 
+mod region_map_section_ids;
+
 impl RegionMapSectionId {
     /// Returns the symbolic `MAPSEC_*` name.
     #[must_use]
