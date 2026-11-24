@@ -165,6 +165,7 @@ fn an_exhausted_party_still_whites_out() {
     phase.save1.last_heal_location.map_group = -1;
 
     walk_into_the_battle(&mut phase);
+    let mut frames = 0;
     loop {
         phase.step(held(Buttons::RIGHT));
         let Some(ActiveBattle::Wild(wild)) = phase.active_battle.as_ref() else {
@@ -173,6 +174,11 @@ fn an_exhausted_party_still_whites_out() {
         if wild.battle.player().moves()[0].pp == base_pp {
             break;
         }
+        frames += 1;
+        assert!(
+            frames < 200,
+            "the second member (full PP) never entered the battle within 200 frames"
+        );
     }
     assert_eq!(
         phase.save1.money, 2001,
@@ -383,6 +389,7 @@ fn traded_reserve_award(reserve_ot_name: [u8; 7]) -> (bool, u32) {
     phase.save1.event_data.flag_set(0x86E).unwrap();
 
     walk_into_the_battle(&mut phase);
+    let mut frames = 0;
     loop {
         phase.step(held(Buttons::RIGHT));
         let Some(ActiveBattle::Wild(wild)) = phase.active_battle.as_ref() else {
@@ -391,6 +398,11 @@ fn traded_reserve_award(reserve_ot_name: [u8; 7]) -> (bool, u32) {
         if wild.battle.player().species() == assets::SpeciesId(TREECKO) {
             break;
         }
+        frames += 1;
+        assert!(
+            frames < 200,
+            "the Treecko reserve never entered the battle within 200 frames"
+        );
     }
     let Some(ActiveBattle::Wild(wild)) = phase.active_battle.as_mut() else {
         unreachable!("checked above");
