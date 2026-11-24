@@ -4,6 +4,42 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.144.0] - 2026-11-23
+
+- Trainer battles on Route 103 now use your whole party: when your lead faints, a healthy reserve is sent out, and every Pokémon that fought keeps its changes after the battle, as in the original game. A trainer battle does not start while one of your healthy Pokémon cannot take part yet.
+
+## [0.0.143.0] - 2026-11-23
+
+- General improvements in preparation for the Route 103 trainers' defeat lines. The asset pack format changed, so the game asks you to import your ROM again once.
+
+## [0.0.142.0] - 2026-11-23
+
+- Townspeople who wander or patrol in the original game now move around their areas instead of standing still.
+
+## [0.0.141.0] - 2026-11-22
+
+- General improvements in preparation for False Swipe: the move now leaves its target with at least 1 HP instead of knocking it out, as in the original game.
+
+## [0.0.140.0] - 2026-11-22
+
+- Your play time is now counted while a game is running, in the field, in battles and in menus alike, and is kept in your save, as in the original game.
+
+## [0.0.139.0] - 2026-11-21
+
+- Pokémon in your party now grow friendlier as you walk, as in the original game.
+
+## [0.0.138.0] - 2026-11-21
+
+- Pokémon with the Flame Body ability, such as Magmar and Slugma, can now take part in battles: an attacker that makes contact with one may be burned, as in the original game.
+
+## [0.0.137.0] - 2026-11-21
+
+- General improvements in preparation for music that changes speed during play, as the Berry Blender's does in the original game.
+
+## [0.0.136.0] - 2026-11-20
+
+- General improvements in preparation for faithful Game Boy sound: a note that slides past the highest pitch the moment it starts is now cut off the way the original hardware cuts it off.
+
 ## [0.0.135.0] - 2026-11-16
 
 - Wild battles now show their text and wait on it: random and party encounters play the introduction, send-out and run-attempt messages, and the battle ends only once the last message is answered and its pause has elapsed, so your party, lead and any white-out wait for the text. A reserve sent out mid-battle is shown by its nickname, and the wild Pokémon's health sets the switch-in wording.
@@ -605,7 +641,14 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.135.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/1f45ccd281cb57bec4574de8de41951f795ba93a...dev
+[0.0.144.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e4071950fffc09a11102ef9f9a020d18bceb1806...dev
+[0.0.143.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/554b8126a0a9db6ac4cd4c7c1b2f97e34a1d126c...dev
+[0.0.142.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/b3c32a4a9d54b8fb9a5f5987ce0836e113029d55...dev
+[0.0.141.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ca9e7b40b003094ffe20f40b304439c4eb92634a...dev
+[0.0.140.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/05a2c78f28fabc7418016221f93f70db6a1c01d8...dev
+[0.0.137.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/57283ac35b0dc473f4019d9c8b860647c772b6c5...dev
+[0.0.136.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d4e145cf37a5628e52a59eccb3092d8cd73d5c46...57283ac35b0dc473f4019d9c8b860647c772b6c5
+[0.0.135.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/1f45ccd281cb57bec4574de8de41951f795ba93a...d4e145cf37a5628e52a59eccb3092d8cd73d5c46
 [0.0.134.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/473a985a6cb0005f1dc7c040ecebacbe9e2ddbe9...1f45ccd281cb57bec4574de8de41951f795ba93a
 [0.0.133.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/cf1c98ca6dcac712c6f6bf5ec58ee171a506dfee...473a985a6cb0005f1dc7c040ecebacbe9e2ddbe9
 [0.0.132.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/24594ecbe4716bc05f0c10ea5bf7715160d5b34d...cf1c98ca6dcac712c6f6bf5ec58ee171a506dfee

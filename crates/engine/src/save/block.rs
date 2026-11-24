@@ -388,7 +388,8 @@ pub enum BattleStyle {
 
 /// `playTimeHours`/`Minutes`/`Seconds`/`VBlanks`
 /// (`pokeemerald/include/global.h:514-517`), stored as loaded: ticking and
-/// clamping belong to the play-time producer (`pokeemerald/src/play_time.c`).
+/// clamping belong to [`super::play_time::PlayTimeCounter`]
+/// (`pokeemerald/src/play_time.c`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PlayTime {
     /// `playTimeHours`.

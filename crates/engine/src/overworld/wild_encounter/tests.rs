@@ -171,16 +171,19 @@ const UP: EncounterRateModifiers = EncounterRateModifiers {
     encounter_up_flute: true,
     encounter_down_flute: false,
     slot_zero_holds_cleanse_tag: false,
+    slot_zero_ability: None,
 };
 const DOWN: EncounterRateModifiers = EncounterRateModifiers {
     encounter_up_flute: false,
     encounter_down_flute: true,
     slot_zero_holds_cleanse_tag: false,
+    slot_zero_ability: None,
 };
 const TAG: EncounterRateModifiers = EncounterRateModifiers {
     encounter_up_flute: false,
     encounter_down_flute: false,
     slot_zero_holds_cleanse_tag: true,
+    slot_zero_ability: None,
 };
 const UP_AND_TAG: EncounterRateModifiers = EncounterRateModifiers {
     slot_zero_holds_cleanse_tag: true,
@@ -194,6 +197,7 @@ const BOTH_FLUTES: EncounterRateModifiers = EncounterRateModifiers {
     encounter_up_flute: true,
     encounter_down_flute: true,
     slot_zero_holds_cleanse_tag: false,
+    slot_zero_ability: None,
 };
 
 /// `ApplyFluteEncounterRateMod` and `ApplyCleanseTagEncounterRateMod`
@@ -301,6 +305,176 @@ fn every_modifier_combination_draws_exactly_once() {
         let mut rng = ScriptedRng::new([0, 0]);
         wild_encounter_check_with_rate_modifiers(10, modifiers, &mut rng);
         assert_eq!(rng.draws(), 1, "{modifiers:?}");
+    }
+}
+
+fn with_ability(ability: AbilityId) -> EncounterRateModifiers {
+    EncounterRateModifiers {
+        slot_zero_ability: Some(ability),
+        ..EncounterRateModifiers::default()
+    }
+}
+
+/// Stench and White Smoke halve and Illuminate and Arena Trap double the scaled rate
+/// (`WildEncounterCheck`, `src/wild_encounter.c:515-522`) for Route 101's table rate of 20.
+#[test]
+fn a_lead_ability_halves_or_doubles_a_table_rate_of_twenty() {
+    for ability in [AbilityId::STENCH, AbilityId::WHITE_SMOKE] {
+        assert_eq!(with_ability(ability).apply(20 * 16), 160, "{ability:?}");
+    }
+    for ability in [AbilityId::ILLUMINATE, AbilityId::ARENA_TRAP] {
+        assert_eq!(with_ability(ability).apply(20 * 16), 640, "{ability:?}");
+    }
+    assert_eq!(
+        with_ability(AbilityId::STENCH).apply(5),
+        2,
+        "integer halving"
+    );
+}
+
+/// Each row is `(ability, last accepted draw, first refused draw)`, with `+ 2880` showing
+/// that the draw is reduced modulo 2880 before the comparison.
+#[test]
+fn the_ability_thresholds_sit_at_160_and_640_with_one_draw_each() {
+    let cases = [
+        (AbilityId::STENCH, 159, 160),
+        (AbilityId::WHITE_SMOKE, 159, 160),
+        (AbilityId::ILLUMINATE, 639, 640),
+        (AbilityId::ARENA_TRAP, 639, 640),
+    ];
+    for (ability, accepted, refused) in cases {
+        for (draw, expected) in [
+            (accepted, true),
+            (refused, false),
+            (accepted + 2880, true),
+            (refused + 2880, false),
+        ] {
+            let mut rng = ScriptedRng::new([draw, 0]);
+            assert_eq!(
+                wild_encounter_check_with_rate_modifiers(20, with_ability(ability), &mut rng),
+                expected,
+                "{ability:?} draw {draw}"
+            );
+            assert_eq!(rng.draws(), 1, "{ability:?} draw {draw}");
+        }
+    }
+}
+
+/// An absent ability (an egg in slot 0, or the caller ignoring abilities) and every other
+/// ability leave 320 alone: draw 319 accepts and 320 refuses.
+#[test]
+fn an_absent_or_unrelated_ability_leaves_the_rate_at_320() {
+    let unrelated = [
+        None,
+        Some(AbilityId::NONE),
+        Some(AbilityId::OVERGROW),
+        Some(AbilityId::SAND_VEIL),
+        Some(AbilityId::HUSTLE),
+        Some(AbilityId::PRESSURE),
+    ];
+    for ability in unrelated {
+        let modifiers = EncounterRateModifiers {
+            slot_zero_ability: ability,
+            ..EncounterRateModifiers::default()
+        };
+        assert_eq!(modifiers.apply(320), 320, "{ability:?}");
+        for (draw, expected) in [(319, true), (320, false)] {
+            let mut rng = ScriptedRng::new([draw]);
+            assert_eq!(
+                wild_encounter_check_with_rate_modifiers(20, modifiers, &mut rng),
+                expected,
+                "{ability:?} draw {draw}"
+            );
+            assert_eq!(rng.draws(), 1);
+        }
+    }
+}
+
+/// Illuminate doubles 180 * 16 = 2880 to 5760 and the clamp brings it back to 2880, so every
+/// draw below 2880 accepts and the modulus keeps larger draws inside it.
+#[test]
+fn the_clamp_follows_a_doubling_ability() {
+    let illuminate = with_ability(AbilityId::ILLUMINATE);
+    assert_eq!(
+        illuminate.apply(180 * 16),
+        5760,
+        "apply leaves the clamp to the check"
+    );
+    for draw in [0, 2879, 2880, 5759, 5760, u16::MAX] {
+        let mut rng = ScriptedRng::new([draw]);
+        assert!(
+            wild_encounter_check_with_rate_modifiers(180, illuminate, &mut rng),
+            "draw {draw} % 2880 is always below the clamped 2880"
+        );
+        assert_eq!(rng.draws(), 1);
+    }
+}
+
+/// The ability comes after the flutes and the Tag and before the clamp: a table rate of 255
+/// scales to 4080 and Stench halves that to 2040 *before* any clamp (clamping first would
+/// give 1440), and table 10 with the Tag and Illuminate is 160 -> 106 -> 212, not 160 -> 320
+/// -> 213.
+#[test]
+fn the_ability_follows_the_item_modifiers_and_precedes_the_clamp() {
+    let stench = with_ability(AbilityId::STENCH);
+    assert_eq!(stench.apply(255 * 16), 2040);
+    for (draw, expected) in [(2039, true), (2040, false)] {
+        assert_eq!(
+            wild_encounter_check_with_rate_modifiers(255, stench, &mut ScriptedRng::new([draw])),
+            expected,
+            "draw {draw}"
+        );
+    }
+    let tag_and_illuminate = EncounterRateModifiers {
+        slot_zero_ability: Some(AbilityId::ILLUMINATE),
+        ..TAG
+    };
+    assert_eq!(tag_and_illuminate.apply(10 * 16), 212);
+    for (draw, expected) in [(211, true), (212, false)] {
+        assert_eq!(
+            wild_encounter_check_with_rate_modifiers(
+                10,
+                tag_and_illuminate,
+                &mut ScriptedRng::new([draw])
+            ),
+            expected,
+            "draw {draw}"
+        );
+    }
+    let up_and_stench = EncounterRateModifiers {
+        slot_zero_ability: Some(AbilityId::STENCH),
+        ..UP
+    };
+    assert_eq!(up_and_stench.apply(10 * 16), 120, "240 / 2");
+}
+
+#[test]
+fn every_ability_combination_draws_exactly_once() {
+    for ability in [
+        None,
+        Some(AbilityId::STENCH),
+        Some(AbilityId::ILLUMINATE),
+        Some(AbilityId::WHITE_SMOKE),
+        Some(AbilityId::ARENA_TRAP),
+        Some(AbilityId::SAND_VEIL),
+    ] {
+        for base in [
+            EncounterRateModifiers::default(),
+            UP,
+            DOWN,
+            TAG,
+            BOTH_FLUTES,
+        ] {
+            let modifiers = EncounterRateModifiers {
+                slot_zero_ability: ability,
+                ..base
+            };
+            for rate in [0, 20, 180, 255] {
+                let mut rng = ScriptedRng::new([0, 0]);
+                wild_encounter_check_with_rate_modifiers(rate, modifiers, &mut rng);
+                assert_eq!(rng.draws(), 1, "{modifiers:?} rate {rate}");
+            }
+        }
     }
 }
 
@@ -737,3 +911,206 @@ fn a_rejected_roll_never_draws_the_level_bias_coin() {
     .is_none());
     assert_eq!(permission_failure.draws(), 1);
 }
+
+const FILLER: SpeciesId = SpeciesId::RATTATA;
+
+/// A twelve-slot land table of [`FILLER`] with `species` placed at the given slots.
+fn land_with(placed: &[(usize, SpeciesId)]) -> LandEncounters {
+    let mut mons = [WildPokemon {
+        min_level: 10,
+        max_level: 10,
+        species: FILLER,
+    }; assets::LAND_SLOTS];
+    for &(slot, species) in placed {
+        mons[slot].species = species;
+    }
+    LandEncounters {
+        encounter_rate: 20,
+        mons,
+    }
+}
+
+/// Runs the slot phase and the level draw, returning the slot and every draw spent.
+fn generate(
+    land: &LandEncounters,
+    ability: Option<AbilityId>,
+    script: impl IntoIterator<Item = u16>,
+) -> (usize, usize) {
+    let mut rng = ScriptedRng::new(script);
+    let encounter = try_generate_wild_mon_land(land, ability, &mut rng);
+    (encounter.slot, rng.draws())
+}
+
+const STATIC_LEAD: Option<AbilityId> = Some(AbilityId::STATIC);
+const MAGNET_PULL_LEAD: Option<AbilityId> = Some(AbilityId::MAGNET_PULL);
+
+#[test]
+fn a_lead_without_either_ability_or_an_egg_draws_only_the_ordinary_slot() {
+    let land = land_with(&[(3, SpeciesId::ELECTRIKE), (4, SpeciesId::SKARMORY)]);
+    // Roll 99 is slot 11; a pulling lead would have drawn a coin of 99 first.
+    for ability in [None, Some(AbilityId::HUSTLE), Some(AbilityId::PRESSURE)] {
+        let level_draws = usize::from(ability.is_some());
+        let script = [99, 0, 0];
+        assert_eq!(generate(&land, ability, script), (11, 2 + level_draws));
+    }
+}
+
+#[test]
+fn a_static_lead_with_a_nonzero_coin_draws_the_coin_then_the_ordinary_slot() {
+    let land = land_with(&[(3, SpeciesId::ELECTRIKE)]);
+    // The coin, then the ordinary slot roll 99 (slot 11), then the level.
+    assert_eq!(generate(&land, STATIC_LEAD, [1, 99, 0]), (11, 3));
+    assert_eq!(generate(&land, STATIC_LEAD, [65535, 0, 0]), (0, 3));
+}
+
+#[test]
+fn a_static_lead_with_a_zero_coin_and_no_electric_slot_still_draws_the_ordinary_slot() {
+    let land = land_with(&[(3, SpeciesId::SKARMORY)]);
+    assert_eq!(generate(&land, STATIC_LEAD, [0, 99, 0]), (11, 3));
+}
+
+#[test]
+fn a_static_lead_with_a_zero_coin_and_twelve_electric_slots_still_draws_the_ordinary_slot() {
+    let land = land_with(&[(0, SpeciesId::ELECTRIKE)]);
+    let all_electric = LandEncounters {
+        mons: land.mons.map(|mon| WildPokemon {
+            species: SpeciesId::ELECTRIKE,
+            ..mon
+        }),
+        ..land
+    };
+    // No pick draw: the ordinary roll of 99 is slot 11, not a pick modulo 12.
+    assert_eq!(generate(&all_electric, STATIC_LEAD, [0, 99, 0]), (11, 3));
+}
+
+#[test]
+fn a_static_lead_picks_the_kth_electric_slot_in_table_order() {
+    let land = land_with(&[
+        (2, SpeciesId::ELECTRIKE),
+        (5, SpeciesId::PLUSLE),
+        (9, SpeciesId::PIKACHU),
+    ]);
+    // Coin, pick modulo three, level: three draws.
+    for (pick, slot) in [(0, 2), (1, 5), (2, 9), (3, 2), (4, 5), (65535, 2)] {
+        assert_eq!(
+            generate(&land, STATIC_LEAD, [0, pick, 0]),
+            (slot, 3),
+            "pick {pick}"
+        );
+    }
+}
+
+#[test]
+fn a_single_matching_slot_is_always_picked() {
+    let land = land_with(&[(7, SpeciesId::ELECTRIKE)]);
+    for pick in [0, 1, 11, 12, 65535] {
+        assert_eq!(
+            generate(&land, STATIC_LEAD, [0, pick, 0]),
+            (7, 3),
+            "pick {pick}"
+        );
+    }
+    let eleven = land_with(&[]);
+    let eleven = LandEncounters {
+        mons: std::array::from_fn(|slot| WildPokemon {
+            species: if slot == 6 {
+                FILLER
+            } else {
+                SpeciesId::ELECTRIKE
+            },
+            ..eleven.mons[slot]
+        }),
+        ..eleven
+    };
+    // Eleven matches: the pick is modulo eleven over the matches in table order.
+    assert_eq!(generate(&eleven, STATIC_LEAD, [0, 6, 0]), (7, 3));
+    assert_eq!(generate(&eleven, STATIC_LEAD, [0, 5, 0]), (5, 3));
+    assert_eq!(generate(&eleven, STATIC_LEAD, [0, 11, 0]), (0, 3));
+}
+
+#[test]
+fn a_magnet_pull_lead_picks_steel_slots_and_ignores_electric_ones() {
+    let land = land_with(&[
+        (1, SpeciesId::ELECTRIKE),
+        (4, SpeciesId::SKARMORY),
+        (8, SpeciesId::ARON),
+    ]);
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 0, 0]), (4, 3));
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 1, 0]), (8, 3));
+    // A nonzero coin fails; Static is not tried for a Magnet Pull lead, so the
+    // ordinary slot is the second draw and no further coin is spent.
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [1, 99, 0]), (11, 3));
+}
+
+#[test]
+fn a_magnet_pull_lead_with_no_steel_slot_never_falls_back_to_electric() {
+    let land = land_with(&[(1, SpeciesId::ELECTRIKE)]);
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 99, 0]), (11, 3));
+}
+
+#[test]
+fn either_species_type_counts_for_the_pulled_type() {
+    // Forretress is Bug/Steel (Steel second); Magneton is Electric/Steel.
+    let land = land_with(&[(2, SpeciesId::FORRETRESS), (6, SpeciesId::MAGNETON)]);
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 0, 0]), (2, 3));
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 1, 0]), (6, 3));
+    // Only Magneton is Electric.
+    assert_eq!(generate(&land, STATIC_LEAD, [0, 5, 0]), (6, 3));
+}
+
+#[test]
+fn static_and_magnet_pull_leads_draw_no_level_bias_coin() {
+    // Neither is a level-bias ability: one level draw, after coin and pick.
+    let land = land_with(&[(2, SpeciesId::ELECTRIKE), (3, SpeciesId::SKARMORY)]);
+    assert_eq!(generate(&land, STATIC_LEAD, [0, 0, 0]), (2, 3));
+    assert_eq!(generate(&land, MAGNET_PULL_LEAD, [0, 0, 0]), (3, 3));
+}
+
+#[test]
+fn route_110_offers_a_static_lead_its_six_electric_slots() {
+    let land = WildEncounterTable::new()
+        .get_by_map(MapId("MAP_ROUTE110"))
+        .and_then(|header| header.land.as_ref())
+        .expect("Route 110 has a land table");
+    let electric_slots = [1, 3, 4, 6, 10, 11];
+    for (pick, slot) in (0..).zip(electric_slots) {
+        assert_eq!(generate(land, STATIC_LEAD, [0, pick, 0]), (slot, 3));
+    }
+    // Magnet Pull finds no Steel on Route 110 and takes the ordinary slot.
+    assert_eq!(generate(land, MAGNET_PULL_LEAD, [0, 0, 0]), (0, 3));
+}
+
+#[test]
+fn route_113_offers_a_magnet_pull_lead_its_two_steel_slots() {
+    let land = WildEncounterTable::new()
+        .get_by_map(MapId("MAP_ROUTE113"))
+        .and_then(|header| header.land.as_ref())
+        .expect("Route 113 has a land table");
+    assert_eq!(generate(land, MAGNET_PULL_LEAD, [0, 0, 0]), (9, 3));
+    assert_eq!(generate(land, MAGNET_PULL_LEAD, [0, 1, 0]), (11, 3));
+    assert_eq!(generate(land, STATIC_LEAD, [0, 0, 0]), (0, 3));
+}
+
+#[test]
+fn a_pulled_land_encounter_draws_rate_coin_pick_then_level() {
+    let header = WildEncounterHeader {
+        land: Some(land_with(&[(5, SpeciesId::ELECTRIKE)])),
+        ..biased_header()
+    };
+    let mut rng = ScriptedRng::new([0, 0, 0, 2]);
+    let encounter = standard_wild_encounter(
+        Some(&header),
+        MB_TALL_GRASS,
+        MB_TALL_GRASS,
+        STATIC_LEAD,
+        &mut rng,
+    )
+    .expect("a rate roll of 0 always passes");
+    assert_eq!(
+        (encounter.slot, encounter.species),
+        (5, SpeciesId::ELECTRIKE)
+    );
+    assert_eq!(rng.draws(), 4);
+}
+
+mod repel_tests;

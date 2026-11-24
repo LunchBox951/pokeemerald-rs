@@ -176,6 +176,14 @@ fn an_object_whose_script_has_no_faceplayer_keeps_its_facing() {
     );
     assert_eq!(vigoroth.state().position(), (1, 3), "fixture precondition");
     assert_eq!(selected_local_id(&phase), Some(VIGOROTH_LOCAL_ID));
+    // The map patrols this Vigoroth; stand it still so the scheduler's own steps
+    // do not read as the interaction touching it.
+    phase
+        .object_events
+        .get_mut(VIGOROTH_LOCAL_ID)
+        .unwrap()
+        .state_mut()
+        .set_movement_type(assets::MovementType::FaceRight);
     let vigoroth_before = *phase.object_events.get(VIGOROTH_LOCAL_ID).unwrap().state();
     let mom_before = mom_facing(&phase);
 

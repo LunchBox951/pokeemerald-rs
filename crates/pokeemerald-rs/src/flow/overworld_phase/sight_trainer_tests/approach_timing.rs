@@ -723,3 +723,52 @@ fn a_zero_tile_approach_retires_the_departed_tiles_grass_effect_as_the_icon_goes
     assert_eq!(approaching_trainer(&phase).previous_position(), RHETT_TILE);
     assert_eq!(phase.scene.tall_grass_effect_count(), 0);
 }
+
+/// A patrolling trainer that spots the player partway through its own step finishes that step
+/// before the icon: `FreezeForApproachingTrainers` leaves the approaching trainer running until
+/// its `singleMovementActive` clears (`event_object_lock.c:130-147,151-190`), and
+/// `DoTrainerApproach` starts the icon only after `lockfortrainer`'s poll ends
+/// (`trainer_battle.inc:1-7`).
+#[test]
+fn a_patrolling_trainer_spotting_the_player_mid_step_finishes_it_before_the_icon() {
+    let (ax, ay) = ANDREW_TILE;
+    // Four tiles south: outside Andrew's range-3 cone from his own tile, inside it once his
+    // outbound `WALK_DOWN_AND_UP` step has committed (ax, ay + 1).
+    let mut phase = route_103_phase(PlayerState::new((ax, ay + 4), 3, Direction::North));
+    phase.rng = engine::rng::Rng::new(7);
+    phase.set_fresh_lead_for_test(overwhelming_lead());
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
+    let mut frames = 0;
+    while phase.sight_approach.is_none() {
+        phase.step(ButtonState::new());
+        frames += 1;
+        assert!(
+            frames < 600,
+            "setup: Andrew's patrol brings the player into his cone"
+        );
+    }
+    let step = approaching_trainer(&phase)
+        .step()
+        .expect("setup: Andrew spotted the player while his step was in flight");
+    let remaining = usize::from(WALK_FRAMES_PER_TILE - step.frames_elapsed());
+    assert!(
+        remaining > 1,
+        "setup: the step has more than one frame left ({remaining})"
+    );
+
+    let mut handoff_frames = 0;
+    while format!("{:?}", phase.sight_approach).contains("LockHandoff") {
+        phase.step(ButtonState::new());
+        handoff_frames += 1;
+    }
+    assert!(
+        handoff_frames >= remaining,
+        "the icon started {handoff_frames} frame(s) after the trigger, but Andrew's step had \
+         {remaining} frame(s) left to run"
+    );
+    assert_eq!(
+        approaching_trainer(&phase).step(),
+        None,
+        "Andrew's step finished before the icon"
+    );
+}

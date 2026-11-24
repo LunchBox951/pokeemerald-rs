@@ -27,7 +27,7 @@ use engine::save::{Coords16, GameStat};
 use engine::text::render::TextSpeed;
 use platform::ButtonState;
 
-use crate::flow::wild_encounter;
+use crate::flow::wild_encounter::{self, StepEncounterInputs};
 use crate::overworld::NpcDialog;
 use crate::start_menu::StartMenu;
 
@@ -338,6 +338,14 @@ impl OverworldPhase {
     /// skips this frame's movement, as upstream skips `PlayerStep` on a
     /// claimed frame.
     pub(in crate::flow) fn step(&mut self, buttons: ButtonState) {
+        self.step_callbacks(buttons);
+        // After every callback, a battle's included, as `main.c` runs
+        // `PlayTimeCounter_Update` once the callbacks are done.
+        self.tick_play_time();
+    }
+
+    /// Everything [`Self::step`] runs before its frame's play-time tick.
+    fn step_callbacks(&mut self, buttons: ButtonState) {
         // Map load has already spawned the objects in view, so a crossing on the first frame
         // carries them.
         self.admit_object_events_on_map_load();
@@ -417,8 +425,9 @@ impl OverworldPhase {
             // before `self.sight_approach` existed and returned `None`
             // (PR #407 review).
             let player_was_moving = self.player.in_transit();
+            let trainer_was_moving = self.approaching_trainer_step_in_flight();
             self.tick_player_under_approach_lock();
-            if player_was_moving {
+            if player_was_moving || trainer_was_moving {
                 if let Some(approach) = &mut self.sight_approach {
                     approach.advance_lock_handoff(true);
                 }
@@ -478,6 +487,9 @@ impl OverworldPhase {
         // The runtime borrow ends here: the drain mutates the party and may
         // white the player out.
         let poison_step = poison_step_map_type(&runtime, landed, door_warp);
+        // Ahead of the poison gate: `UpdateFriendshipStepCounter` takes every landing the
+        // step scripts reach (`field_control_avatar.c:536-545`).
+        self.update_friendship_step_counter(landed, door_warp);
         if poison_step.is_some_and(|map_type| self.update_poison_step_counter(map_type)) {
             self.sync_saved_position();
             return;
@@ -505,7 +517,7 @@ impl OverworldPhase {
             &runtime,
             rolled_landing,
             slot_zero_ability,
-            rate_modifiers,
+            &StepEncounterInputs::new(rate_modifiers, &self.save1, self.lead.as_ref()),
         );
         // Neither consumer of `field_event_fired` can be driven to the
         // coord-event arm over bundled data -- Route 101 declares no warp
@@ -552,7 +564,7 @@ impl OverworldPhase {
             pack: &self.connection_pack,
             source: self.pack_source.clone(),
             departed: self.map_id,
-            departed_objects: &self.object_events,
+            departed_objects: Some(&self.object_events),
         };
         // `interaction` preempts movement too (issue #435), and so do a
         // claimed fresh `START`, the pre-movement animated-door check
@@ -623,15 +635,12 @@ impl OverworldPhase {
         self.sync_saved_position();
     }
 
-    /// Bumps `GAME_STAT_STEPS` for this frame's `tookStep` landing
-    /// (`field_control_avatar.c:116-118`), ahead of
-    /// `TryStartStepBasedScript`'s coord event, door warp and step scripts
-    /// (`:155-163`), so a landing those then claim still counts.
-    /// [`Self::take_stepped_onto`] already withholds the forced landing and
-    /// the escalator arrival's held walk-off, neither of which sets `tookStep`.
+    /// `IncrementGameStat(GAME_STAT_STEPS)` and `IncrementBirthIslandRockStepCount`
+    /// (`field_control_avatar.c:116-118,155-160`); a landing a later step script claims still counts.
     fn count_took_step(&mut self, stepped_onto: Option<TilePos>) {
         if stepped_onto.is_some() {
             self.save1.game_stats.increment(GameStat::Steps);
+            self.increment_birth_island_rock_step_count();
         }
     }
 
