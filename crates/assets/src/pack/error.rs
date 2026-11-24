@@ -10,6 +10,8 @@ use crate::SpeciesId;
 
 use super::battle_message::BattleMessageError;
 use super::field_message::FieldMessageError;
+use super::trainer_class_names::TrainerClassNameError;
+use super::trainer_defeat_speech::TrainerDefeatSpeechError;
 use crate::battle_anim::BattleAnimationError;
 use crate::TrainerPicId;
 
@@ -115,6 +117,15 @@ pub enum PackError {
     },
     /// The pack carries no trainer picture for this identity.
     UnsupportedTrainerPic(TrainerPicId),
+    /// A PC wallpaper entry differs from the upstream graphic's shape.
+    MalformedPcWallpaperAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// The byte is not one of the non-default standard wallpapers (4 to 15).
+    UnsupportedPcWallpaper(u8),
     /// A trainer battler entry differs from the upstream graphic's shape.
     MalformedTrainerBattlerAsset {
         /// Asset id.
@@ -208,6 +219,20 @@ pub enum PackError {
         id: String,
         /// Underlying schema error.
         source: FieldMessageError,
+    },
+    /// The trainer class-name table failed its schema's structural decode.
+    TrainerClassNameDecode {
+        /// Table asset id.
+        id: String,
+        /// Underlying schema error.
+        source: TrainerClassNameError,
+    },
+    /// The trainer defeat-speech table failed its schema's structural decode.
+    TrainerDefeatSpeechDecode {
+        /// Table asset id.
+        id: String,
+        /// Underlying schema error.
+        source: TrainerDefeatSpeechError,
     },
     /// The `battle-anim/catalog` entry failed its schema's decode.
     BattleAnimationDecode {
@@ -340,6 +365,13 @@ impl fmt::Display for PackError {
             Self::MalformedTrainerPicAsset { id, detail } => {
                 write!(f, "asset pack: trainer picture entry `{id}` {detail}")
             }
+            Self::MalformedPcWallpaperAsset { id, detail } => {
+                write!(f, "asset pack: PC wallpaper entry `{id}` {detail}")
+            }
+            Self::UnsupportedPcWallpaper(byte) => write!(
+                f,
+                "asset pack: unsupported PC wallpaper id {byte}: expected 4..=15"
+            ),
             Self::UnsupportedTrainerPic(pic) => write!(
                 f,
                 "asset pack: no trainer picture for index {}",
@@ -398,6 +430,18 @@ impl fmt::Display for PackError {
                     "asset pack: field-message entry `{id}` failed to decode: {source}"
                 )
             }
+            Self::TrainerClassNameDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: trainer class-name entry `{id}` failed to decode: {source}"
+                )
+            }
+            Self::TrainerDefeatSpeechDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: trainer defeat-speech entry `{id}` failed to decode: {source}"
+                )
+            }
             Self::BattleAnimationDecode { id, source } => {
                 write!(
                     f,
@@ -432,6 +476,8 @@ impl std::error::Error for PackError {
             Self::AudioDecode { source, .. } => Some(source),
             Self::BattleMessageDecode { source, .. } => Some(source),
             Self::FieldMessageDecode { source, .. } => Some(source),
+            Self::TrainerClassNameDecode { source, .. } => Some(source),
+            Self::TrainerDefeatSpeechDecode { source, .. } => Some(source),
             Self::PokedexDecode { source, .. } => Some(source),
             Self::EventScriptDecode { source, .. } | Self::EventScriptResolve { source, .. } => {
                 Some(source)
@@ -455,6 +501,8 @@ impl std::error::Error for PackError {
             | Self::UnsupportedBattlerSpecies(_)
             | Self::MalformedTrainerPicAsset { .. }
             | Self::UnsupportedTrainerPic(_)
+            | Self::MalformedPcWallpaperAsset { .. }
+            | Self::UnsupportedPcWallpaper(_)
             | Self::MalformedTrainerBattlerAsset { .. }
             | Self::UnsupportedTrainerBattler(_)
             | Self::MalformedOpeningSceneAsset { .. }

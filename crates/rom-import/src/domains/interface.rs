@@ -3,10 +3,12 @@
 //! Two kinds of entry. `interface/palette/main_menu_bg` is the single
 //! per-pixel colour source the no-save main menu needs (I-3; the rest of
 //! that scene's colours are upstream's own runtime `LoadPalette` literals,
-//! not file-sourced). `interface/image/down_arrow` is the text printer's
-//! page-prompt arrow, `sDownArrowTiles` (`pokeemerald/src/text.c:71`): an
-//! 8x48 raw 4bpp sheet with no palette of its own, since the printer blits
-//! its indices into the window and the window owns the colours. It is its
+//! not file-sourced). `interface/image/down_arrow` and
+//! `interface/image/down_arrow_alt` are the text printer's light and dark
+//! page-prompt arrows, `sDownArrowTiles` and `sDarkDownArrowTiles`
+//! (`pokeemerald/src/text.c:71-72`): 8x48 raw 4bpp sheets with no palette of
+//! their own, since the printer blits their indices into the window and the
+//! window owns the colours. It is its
 //! own domain rather than a title-screen afterthought because the interface
 //! grows its own roots as more menus land, and the profile table already
 //! groups it that way.
