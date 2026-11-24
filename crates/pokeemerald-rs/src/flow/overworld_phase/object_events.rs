@@ -52,7 +52,13 @@ impl OverworldPhase {
         if admitted_now || self.scene.object_admission_pending() {
             // The pass reads each admitted object's retained elevation, which no frame has
             // settled yet for an entry seeded this visit.
-            self.scene.update_object_elevations(&mut self.object_events);
+            let maps = MapConnections::terrain_only(
+                &self.connection_pack,
+                self.pack_source.clone(),
+                self.map_id,
+            );
+            self.scene
+                .update_object_elevations(&mut self.object_events, &maps);
             self.scene
                 .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
         }
@@ -79,17 +85,17 @@ impl OverworldPhase {
         // movement. A scene's first frame also seeds again after the scheduler, so an object
         // its camera update admits on that frame, as a crossing's does, gets its pass then.
         let first_frame = self.scene.take_object_admission_pending();
-        self.scene.update_object_elevations(&mut self.object_events);
+        // The neighbours' rows an object a crossing carried over can stand on. Terrain only: the
+        // scheduler borrows the live set mutably, and the elevation passes read the same band.
+        let maps = MapConnections::terrain_only(
+            &self.connection_pack,
+            self.pack_source.clone(),
+            self.map_id,
+        );
+        self.scene
+            .update_object_elevations(&mut self.object_events, &maps);
         self.scene
             .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
-        // The neighbours' rows an object a crossing carried over can stand on. Terrain only: the
-        // scheduler borrows the live set mutably.
-        let maps = MapConnections {
-            pack: &self.connection_pack,
-            source: self.pack_source.clone(),
-            departed: self.map_id,
-            departed_objects: None,
-        };
         let context = frame_context(
             &self.player,
             &self.save1.event_data,
@@ -114,7 +120,8 @@ impl OverworldPhase {
             .run_frame_finishing_step(&context, finishing, &mut self.rng);
         // Movement and respawns have changed tiles; settle their elevations
         // before the begin-step pass and the frame's rendering read them.
-        self.scene.update_object_elevations(&mut self.object_events);
+        self.scene
+            .update_object_elevations(&mut self.object_events, &maps);
         if first_frame {
             self.scene
                 .seed_object_tall_grass(&self.object_events, &self.save1.event_data);

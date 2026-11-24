@@ -174,8 +174,15 @@ impl OverworldPhase {
                     self.object_events.find_mut(carried_from, local_id),
                 ) {
                     let scene = &self.scene;
+                    // The approach walks the trainer's own tiles, which a carried trainer
+                    // may hold in the neighbours' band.
+                    let maps = super::super::connections::MapConnections::terrain_only(
+                        &self.connection_pack,
+                        self.pack_source.clone(),
+                        self.map_id,
+                    );
                     approach.advance_movement(live.state_mut(), player_position, |state| {
-                        scene.update_object_elevation(state);
+                        scene.update_object_elevation(state, &maps);
                     });
                 }
                 Some(SightTrainerOutcome::ApproachAdvanced)

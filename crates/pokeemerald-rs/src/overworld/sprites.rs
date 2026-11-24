@@ -14,7 +14,7 @@ use assets::pack::AssetPack;
 use assets::{LayoutGrid, ObjectEvent};
 use engine::event_data::EventData;
 use engine::overworld::object_event::{ObjectEventCollection, ObjectEventState};
-use engine::overworld::PlayerState;
+use engine::overworld::{ConnectedMapData, MapRuntime, PlayerState};
 use rendering::{BitDepth, Palette, Tileset};
 
 use super::avatar::{self, PlayerCharacter};
@@ -35,8 +35,10 @@ pub(super) struct SceneSprites {
     grass_base_tile: Option<u16>,
     /// Template-seeded state for callers that own no live collection.
     seed_objects: ObjectEventCollection,
-    /// The layout's cell elevations, which settle each object's elevation at
-    /// its live tile.
+    /// The layout's cell elevations, which settle the template-seeded objects'
+    /// elevations ([`Self::seed_object_elevations`]). The live passes read the
+    /// terrain and the connected maps instead
+    /// ([`update_object_elevations`]).
     cell_elevations: CellElevations,
     bindings: HashMap<&'static str, SpriteBinding>,
 }
@@ -82,17 +84,9 @@ impl CellElevations {
             .copied()
     }
 
-    /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`) for
-    /// one object: its stored elevations take its current and previous cells'.
-    /// An object off the grid keeps what it has, and an off-grid previous cell
-    /// reads as a transition.
+    /// [`settle`] against the layout grid alone.
     fn update(&self, state: &mut ObjectEventState) {
-        if let Some(current) = self.at(state.position()) {
-            let previous = self
-                .at(state.previous_position())
-                .unwrap_or(ELEVATION_TRANSITION);
-            state.update_elevation(current, previous);
-        }
+        settle(state, |tile| self.at(tile));
     }
 
     /// Updates every object's elevations from the cells they stand on.
@@ -101,6 +95,56 @@ impl CellElevations {
             self.update(live.state_mut());
         }
     }
+}
+
+/// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`) for one
+/// object: its stored elevations take its current and previous cells', which
+/// `elevation_at` reads. An object whose current cell it cannot read keeps what
+/// it has, and an unreadable previous cell reads as a transition.
+fn settle(state: &mut ObjectEventState, elevation_at: impl Fn((i32, i32)) -> Option<u8>) {
+    if let Some(current) = elevation_at(state.position()) {
+        let previous = elevation_at(state.previous_position()).unwrap_or(ELEVATION_TRANSITION);
+        state.update_elevation(current, previous);
+    }
+}
+
+/// The elevation of `tile` as the scheduler's own reads see it: the map's cell,
+/// or a connected map's across the backup layout's band
+/// ([`MapRuntime::metatile_cell_in_band`], `fieldmap.c:121-314`).
+fn band_elevation(
+    terrain: &MapRuntime<'_>,
+    maps: &dyn ConnectedMapData,
+    tile: (i32, i32),
+) -> Option<u8> {
+    terrain
+        .metatile_cell_in_band(tile.0, tile.1, maps)
+        .map(|cell| cell.elevation)
+}
+
+/// Settles every live object's elevations on the cells it stands on
+/// (`ObjectEventUpdateElevation`). Rendering only reads the result, so a
+/// caller runs this after creating or moving objects and before composing.
+/// A cell in the backup layout's band resolves through `maps`, as the
+/// scheduler's own reads do, so an object a connection crossing carried
+/// over adopts its neighbour's cell elevation.
+pub(super) fn update_object_elevations(
+    objects: &mut ObjectEventCollection,
+    terrain: &MapRuntime<'_>,
+    maps: &dyn ConnectedMapData,
+) {
+    for live in objects.iter_mut() {
+        settle(live.state_mut(), |tile| band_elevation(terrain, maps, tile));
+    }
+}
+
+/// Settles one object's elevations on the cells it stands on, for a caller that
+/// runs a finish-step update between frames ([`update_object_elevations`]).
+pub(super) fn update_object_elevation(
+    state: &mut ObjectEventState,
+    terrain: &MapRuntime<'_>,
+    maps: &dyn ConnectedMapData,
+) {
+    settle(state, |tile| band_elevation(terrain, maps, tile));
 }
 
 impl SceneSprites {
@@ -174,17 +218,10 @@ impl SceneSprites {
         self.grass_base_tile.is_some()
     }
 
-    /// Settles every live object's elevations on the cells it stands on
-    /// (`ObjectEventUpdateElevation`). Rendering only reads the result, so a
-    /// caller runs this after creating or moving objects and before composing.
-    pub(super) fn update_object_elevations(&self, objects: &mut ObjectEventCollection) {
+    /// Settles the template-seeded objects' elevations on the layout's own cells, for a
+    /// collection no connection crossing has carried anything into.
+    pub(super) fn seed_object_elevations(&self, objects: &mut ObjectEventCollection) {
         self.cell_elevations.update_all(objects);
-    }
-
-    /// Settles one object's elevations on the cells it stands on, for a caller that
-    /// runs a finish-step update between frames ([`Self::update_object_elevations`]).
-    pub(super) fn update_object_elevation(&self, state: &mut ObjectEventState) {
-        self.cell_elevations.update(state);
     }
 
     /// [`Self::live_entries`] over the template-seeded state, admitted as map load would admit
