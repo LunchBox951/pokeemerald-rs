@@ -362,22 +362,24 @@ fn stat_labels_are_admitted_only_where_the_other_scripts_are_ported() {
         );
         let setup = ensure_scoreable(&dex, move_id, cbm.union(AiFlags::SETUP_FIRST_TURN));
         let viability = ensure_scoreable(&dex, move_id, cbm.union(AiFlags::CHECK_VIABILITY));
-        let has_dedicated_stat_drop_handler = matches!(
-            dex.move_data(move_id).unwrap().effect,
-            MoveEffect::ATTACK_DOWN | MoveEffect::DEFENSE_DOWN
-        );
+        let effect = dex.move_data(move_id).unwrap().effect;
+        let has_dedicated_stat_drop_handler =
+            matches!(effect, MoveEffect::ATTACK_DOWN | MoveEffect::DEFENSE_DOWN);
         let expected_setup = if has_dedicated_stat_drop_handler {
             Ok(())
         } else {
             Err(BattleError::UnscoreableMoveEffect(move_id))
         };
         assert_eq!(setup, expected_setup, "{move_id:?} setup");
-        let expected_viability =
-            if has_dedicated_stat_drop_handler || move_id == MoveId::DEFENSE_CURL {
-                Ok(())
-            } else {
-                Err(BattleError::UnscoreableMoveEffect(move_id))
-            };
+        let expected_viability = if has_dedicated_stat_drop_handler
+            || matches!(
+                effect,
+                MoveEffect::DEFENSE_CURL | MoveEffect::SPECIAL_DEFENSE_DOWN_2
+            ) {
+            Ok(())
+        } else {
+            Err(BattleError::UnscoreableMoveEffect(move_id))
+        };
         assert_eq!(viability, expected_viability, "{move_id:?} viability");
     }
 }
