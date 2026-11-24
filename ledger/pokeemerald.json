@@ -34702,6 +34702,14 @@
       "status": "pending"
     },
     "src/roamer.c": {
+      "artifacts": {
+        "sRoamerLocations": {
+          "reason": "sRoamerLocations (src/roamer.c:35-58): twenty location sets of six u8 entries, entry 0 the set's own map and entries 1-5 the candidate destinations in upstream order, then one all-empty terminal row (src/roamer.c:57) that NUM_LOCATION_SETS (src/roamer.c:61) excludes. Transcribed to typed MapId values with empty slots kept in place as None (MAP_UNDEFINED, never compacted), a checked set accessor and a checked candidate-slot lookup that refuse out-of-range indices including the terminal row. Data only: roamer state, Random() draws, the rejection loops in RoamerMoveToOtherLocationSet and RoamerMove, the location history, and roamer encounters are not ported; src/roamer.c stays pending.",
+          "rust_target": "crates/assets/src/roamer_locations.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
