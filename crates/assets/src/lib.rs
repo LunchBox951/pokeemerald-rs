@@ -30,8 +30,9 @@
 //! grid (see [`region_map_layout`]), the Battle Palace per-nature
 //! move-group, target and flavor tables (see [`battle_palace`]), the Easy Chat
 //! Events word group (see [`easy_chat_events`]), the facility-class portrait
-//! and trainer-class lookups (see [`facility_classes`]), and the four NPC
-//! trade offers with their mail messages (see [`ingame_trades`]); more data
+//! and trainer-class lookups (see [`facility_classes`]), the four NPC trade
+//! offers with their mail messages (see [`ingame_trades`]), and the Lilycove
+//! Lady quiz, favor, and contest data (see [`lilycove_lady`]); more data
 //! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -83,6 +84,7 @@ pub mod ingame_trades;
 pub mod items;
 pub mod keypad_icons;
 pub mod level_up_learnsets;
+pub mod lilycove_lady;
 pub mod map_events;
 pub mod map_headers;
 pub mod map_layouts;
@@ -167,6 +169,11 @@ pub use ingame_trades::{
 };
 pub use keypad_icons::KeypadIconSheet;
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
+pub use lilycove_lady::{
+    ContestCategory, ContestLadyRecord, FavorLadyRequest, LilycoveLadyData, LilycoveLadyError,
+    LilycoveLadyKind, QuizLadyQuiz, CONTEST_CATEGORY_COUNT, EC_EMPTY_WORD, FAVOR_REQUEST_COUNT,
+    LILYCOVE_LADY_COUNT, QUIZ_COUNT, QUIZ_QUESTION_LEN,
+};
 pub use map_events::{
     BgEvent, BgEventKind, CoordEvent, CoordEventKind, CoordWeather, FacingDirection, MapEvents,
     MapEventsTable, MovementType, ObjectEvent, SecretBaseId, TrainerType, WarpDestination,
