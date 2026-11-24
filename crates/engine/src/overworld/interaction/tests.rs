@@ -11,6 +11,7 @@ use super::*;
 use crate::overworld::background_event::SecretBaseContext;
 use crate::overworld::metatile_behavior as mb;
 use crate::overworld::object_event::ObjectEventCollection;
+use crate::overworld::object_event_harness::{admit, admitted};
 
 const STANDING: (i32, i32) = (2, 3);
 const FRONT: (i32, i32) = (2, 2);
@@ -410,6 +411,128 @@ fn a_hidden_object_is_skipped_until_its_flag_clears() {
     );
 }
 
+/// Selects at `FRONT` through a bound collection a stationary player's frames admitted, with the
+/// object's hide flag set (`hidden_first`) or clear when admission ran, and flipped afterwards.
+fn select_after_flag_flip(hidden_first: bool) -> Option<InteractionTarget> {
+    let flag = assets::object_event_flags::resolve(HIDDEN_BY_DEFAULT_FLAG).unwrap();
+    let mut guarded = object(OBJECT_ID, FRONT, ELEVATION, OBJECT_SCRIPT);
+    guarded.flag = HIDDEN_BY_DEFAULT_FLAG;
+    scene(
+        &[],
+        vec![guarded],
+        vec![any_sign(FRONT)],
+        |runtime, templates| {
+            let mut data = EventData::new();
+            if hidden_first {
+                data.flag_set(flag).unwrap();
+            }
+            let mut live = ObjectEventCollection::from_templates(templates);
+            admit(&mut live, STANDING, &data);
+            if hidden_first {
+                data.flag_clear(flag).unwrap();
+            } else {
+                data.flag_set(flag).unwrap();
+            }
+            // The player has not moved, so these frames reconcile nothing.
+            admit(&mut live, STANDING, &data);
+            select_interaction_target(
+                &player_facing(Direction::North),
+                &(*runtime).with_object_events(&live),
+                &data,
+                &[],
+            )
+        },
+    )
+}
+
+#[test]
+fn an_object_the_scheduler_never_admitted_is_not_interactable_after_its_flag_clears() {
+    assert_eq!(
+        select_after_flag_flip(true),
+        Some(selected_sign()),
+        "the sign behind the unspawned object is what the player faces"
+    );
+}
+
+#[test]
+fn an_admitted_object_stays_interactable_after_its_flag_is_set() {
+    assert_eq!(select_after_flag_flip(false), Some(selected_object()));
+}
+
+/// Selects at `FRONT` through a collection admitted at each of `steps` in turn, with the hide flag
+/// set before the first step and cleared after `clear_before` steps have run.
+fn select_stacked_after_admissions(
+    objects: Vec<ObjectEvent>,
+    steps: &[(i32, i32)],
+    clear_before: usize,
+) -> Option<InteractionTarget> {
+    let flag = assets::object_event_flags::resolve(HIDDEN_BY_DEFAULT_FLAG).unwrap();
+    scene(&[], objects, vec![], |runtime, templates| {
+        let mut data = EventData::new();
+        data.flag_set(flag).unwrap();
+        let mut live = ObjectEventCollection::from_templates(templates);
+        for (index, step) in steps.iter().enumerate() {
+            if index == clear_before {
+                data.flag_clear(flag).unwrap();
+            }
+            admit(&mut live, *step, &data);
+        }
+        select_interaction_target(
+            &player_facing(Direction::North),
+            &(*runtime).with_object_events(&live),
+            &data,
+            &[],
+        )
+    })
+}
+
+fn selected_stacked(local_id: u8, script: &'static str) -> InteractionTarget {
+    InteractionTarget::Object(ObjectInteraction {
+        local_id,
+        carried_from: None,
+        script,
+        player_facing: Direction::North,
+    })
+}
+
+/// `GetObjectEventIdByPosition` returns the lowest `gObjectEvents` slot on the tile
+/// (`event_object_movement.c:2192-2206`; `field_control_avatar.c:291`). The hidden earlier
+/// template is admitted after the later one, so it holds the higher slot and loses the press.
+#[test]
+fn a_hidden_earlier_stacked_template_admitted_later_loses_the_press_to_the_lower_slot() {
+    let mut earlier = object(1, FRONT, ELEVATION, "EarlierScript");
+    earlier.flag = HIDDEN_BY_DEFAULT_FLAG;
+    let later = object(2, FRONT, ELEVATION, "LaterScript");
+    assert_eq!(
+        select_stacked_after_admissions(vec![earlier, later], &[STANDING, (3, 3)], 1),
+        Some(selected_stacked(2, "LaterScript")),
+        "the later template holds slot 1 and the earlier one slot 2"
+    );
+}
+
+/// A slot freed by a retired object goes to the next admission (`GetAvailableObjectEventId`,
+/// `event_object_movement.c:1367-1374`), so a later template can hold a lower slot than the
+/// earlier template it shares a tile with.
+#[test]
+fn a_later_stacked_template_admitted_into_a_reused_slot_wins_the_press() {
+    // The walker holds slot 1 and the earlier stacked template slot 2. The first move retires the
+    // walker (nine tiles behind the player is the view's edge); the second admits the hidden later
+    // template, which takes the freed slot 1.
+    let walker = object(1, (-7, 3), ELEVATION, "WalkerScript");
+    let earlier = object(2, FRONT, ELEVATION, "EarlierScript");
+    let mut later = object(3, FRONT, ELEVATION, "LaterScript");
+    later.flag = HIDDEN_BY_DEFAULT_FLAG;
+    assert_eq!(
+        select_stacked_after_admissions(
+            vec![walker, earlier, later],
+            &[STANDING, (3, 3), (4, 3)],
+            2,
+        ),
+        Some(selected_stacked(3, "LaterScript")),
+        "the later template reused slot 1, below the earlier template's slot 2"
+    );
+}
+
 #[test]
 fn a_moved_object_is_selected_at_its_live_tile_only() {
     scene(
@@ -417,7 +540,7 @@ fn a_moved_object_is_selected_at_its_live_tile_only() {
         vec![object(OBJECT_ID, FAR, ELEVATION, OBJECT_SCRIPT)],
         vec![any_sign(FRONT)],
         |runtime, templates| {
-            let mut live = ObjectEventCollection::from_templates(templates);
+            let mut live = admitted(templates, STANDING);
             live.get_mut(OBJECT_ID)
                 .unwrap()
                 .state_mut()
@@ -538,6 +661,10 @@ fn a_carried_object_is_selected_with_the_map_it_was_carried_from() {
                 event_data: &event_data,
                 frozen: false,
                 player_dashing: false,
+                terrain: *runtime,
+                connected_maps: &crate::overworld::NoConnectedMaps,
+                player_previous_position: STANDING,
+                player_elevation: ELEVATION,
             };
             let mut departed = ObjectEventCollection::from_templates(leaked(vec![object(
                 OBJECT_ID,

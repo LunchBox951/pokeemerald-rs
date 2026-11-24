@@ -7,7 +7,7 @@ use assets::MapId;
 use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
 
-use super::super::test_support::pressed;
+use super::super::test_support::{admitted_objects, pressed};
 use super::super::{OverworldPhase, SyntheticStartMenu};
 use super::support::*;
 use crate::flow::lead_screen::loaded_holding;
@@ -69,7 +69,7 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let mut refused = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     refused.set_fresh_lead_for_test(overwhelming_lead());
     refused.synthetic_start_menu = SyntheticStartMenu::Builds;
-    // Rhett's party constructs; the Headbutt party does not, so its id
+    // Rhett's party constructs; the Pursuit party does not, so its id
     // stands in for the refusal at Rhett's cone.
     refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
     refused.step(pressed(Buttons::START));
@@ -91,7 +91,7 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
 /// this leaked `CreateNPCTrainerParty`'s per-mon OT-id draws sixty times a
 /// second off the one stream every wild encounter and battle turn shares.
 ///
-/// All three refusal shapes are covered: an unimplemented moveset (the Headbutt
+/// All three refusal shapes are covered: an unimplemented moveset (the Pursuit
 /// party at Rhett's cone, the trigger's own "Refusals cost nothing,
 /// forever"), another unimplemented moveset
 /// (Miguel's Sing, same), and a double battle refused before construction is even
@@ -103,7 +103,7 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     let (ax, ay) = AMY_TILE;
     let cases = [
         (
-            "the Headbutt party at Rhett's cone (unimplemented moveset)",
+            "the Pursuit party at Rhett's cone (unimplemented moveset)",
             (rx, ry + 1),
         ),
         ("Miguel (unimplemented moveset)", (mx + 2, my)),
@@ -112,8 +112,8 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     for (name, tile) in cases {
         let mut phase = route_103_phase(PlayerState::new(tile, 3, Direction::North));
         phase.set_fresh_lead_for_test(overwhelming_lead());
-        if name.starts_with("the Headbutt") {
-            // Rhett's party constructs; the Headbutt party refuses.
+        if name.starts_with("the Pursuit") {
+            // Rhett's party constructs; the Pursuit party refuses.
             phase.synthetic_sight_trainer =
                 Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
         }
@@ -417,8 +417,10 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
         .iter()
         .find(|event| event.script == Some(assets::ScriptRef::new("Route103_EventScript_Rhett")))
         .expect("Route 103 declares Rhett's own object event");
-    let objects = engine::overworld::object_event::ObjectEventCollection::from_templates(
+    let objects = admitted_objects(
         scene.map_events().object_events,
+        &player,
+        &engine::event_data::EventData::new(),
     );
     assert!(
         engine::overworld::trainer_can_see_player(
@@ -428,7 +430,6 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
             &objects,
             &scene.runtime(),
             &player,
-            &engine::event_data::EventData::new(),
         ),
         "Rhett's real cone must reach a player standing one tile south of him over real \
          terrain -- including the final tile's own collision/impassability arms"
@@ -437,7 +438,7 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
     let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source)
         .with_private_object_event_rng();
     phase.set_fresh_lead_for_test(overwhelming_lead());
-    // Rhett's party constructs; the Headbutt party refuses, so its id stands
+    // Rhett's party constructs; the Pursuit party refuses, so its id stands
     // in at Rhett's real cone.
     phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_REFUSED_FOR_MOVE));
     let before = phase.rng.state();
@@ -458,5 +459,115 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
     assert!(
         phase.lead_for_test().is_some(),
         "a refused handoff must not consume the lead -- no soft lock"
+    );
+}
+
+// -- Scan order follows the live object slots ------------------------------
+
+/// Upstream scans `gObjectEvents` by slot (`trainer_see.c:198-217`) and spawns into the lowest
+/// free slot (`event_object_movement.c:1358-1380`). Route 103's east end admits Marcos (y=9)
+/// at player y=15 and Rhett (y=5, declared earlier) only at y=12, so Marcos holds the lower
+/// slot and `(67, 7)`, covered by both cones, selects him.
+#[test]
+fn sight_scan_follows_live_slot_order_not_template_order() {
+    let mut phase = route_103_phase(PlayerState::new((67, 15), 3, Direction::North));
+    phase.set_fresh_lead_for_test(overwhelming_lead());
+    phase.step(ButtonState::new());
+    assert!(phase.sight_approach.is_none(), "setup: no cone at (67, 15)");
+    assert!(
+        !phase
+            .object_events
+            .get(rhetts_object_event().local_id)
+            .unwrap()
+            .is_active(),
+        "setup: Rhett is not yet admitted"
+    );
+    phase.player = PlayerState::new((67, 12), 3, Direction::North);
+    phase.step(ButtonState::new());
+    assert!(phase.sight_approach.is_none(), "setup: no cone at (67, 12)");
+    assert!(
+        phase
+            .object_events
+            .get(rhetts_object_event().local_id)
+            .unwrap()
+            .is_active(),
+        "setup: Rhett is admitted after Marcos"
+    );
+    phase.player = PlayerState::new((67, 7), 3, Direction::North);
+    phase.step(ButtonState::new());
+    let approach = phase
+        .sight_approach
+        .as_ref()
+        .expect("both cones reach (67, 7)");
+    assert_eq!(
+        approaching_trainer(&phase).position(),
+        (67, 9),
+        "Marcos holds the lower live slot, so upstream's slot scan selects him (local id {})",
+        approach.local_id()
+    );
+}
+
+/// An object takes the lowest free slot when it spawns (`GetAvailableObjectEventId`,
+/// `event_object_movement.c:1358-1380`), so a freed slot can be reused by a later-declared
+/// trainer. Cutting the tree at `(67, 7)` (local ID 14) frees a slot below Rhett's, and
+/// re-admitted Marcos takes it; `trainer_see.c:198-217` then reaches Marcos first.
+#[test]
+fn a_reused_lower_object_slot_puts_the_later_declared_trainer_first() {
+    const TREE_LOCAL_ID: u8 = 14;
+    let marcos_id = assets::MapEventsTable::new()
+        .resolve(ROUTE_103)
+        .expect("MAP_ROUTE103 is bundled map data")
+        .object_events
+        .iter()
+        .find(|event| event.script == Some(assets::ScriptRef::new("Route103_EventScript_Marcos")))
+        .expect("Route 103 declares Marcos's own object event")
+        .local_id;
+    let mut phase = route_103_phase(PlayerState::new((67, 3), 3, Direction::North));
+    phase.set_fresh_lead_for_test(overwhelming_lead());
+    phase.step(ButtonState::new());
+    let slot = |phase: &OverworldPhase, local_id: u8| {
+        phase.object_events.get(local_id).unwrap().object_slot()
+    };
+    let tree_slot = slot(&phase, TREE_LOCAL_ID).expect("setup: the tree is admitted");
+    let rhett_slot =
+        slot(&phase, rhetts_object_event().local_id).expect("setup: Rhett is admitted");
+    let marcos_slot = slot(&phase, marcos_id).expect("setup: Marcos is admitted");
+    assert!(
+        tree_slot < rhett_slot && rhett_slot < marcos_slot,
+        "setup: declaration order"
+    );
+
+    // Cut the tree (flag set so no pass respawns it) and re-admit Marcos.
+    let tree_flag = {
+        let flag = phase
+            .object_events
+            .get(TREE_LOCAL_ID)
+            .unwrap()
+            .template()
+            .flag;
+        assets::object_event_flags::resolve(flag).expect("the tree has a hide flag")
+    };
+    phase.save1.event_data.flag_set(tree_flag).unwrap();
+    assert!(phase.object_events.remove_by_local_id(TREE_LOCAL_ID));
+    assert!(phase.object_events.remove_by_local_id(marcos_id));
+    phase.player = PlayerState::new((67, 4), 3, Direction::North);
+    phase.step(ButtonState::new());
+    assert_eq!(
+        slot(&phase, marcos_id),
+        Some(tree_slot),
+        "setup: Marcos reuses the freed slot"
+    );
+    assert_eq!(
+        slot(&phase, rhetts_object_event().local_id),
+        Some(rhett_slot)
+    );
+
+    phase.player = PlayerState::new((67, 7), 3, Direction::North);
+    phase.step(ButtonState::new());
+    assert!(phase.sight_approach.is_some(), "both cones reach (67, 7)");
+    assert_eq!(
+        approaching_trainer(&phase).position(),
+        (67, 9),
+        "Marcos holds the lower reused slot, so upstream's slot scan selects him"
     );
 }

@@ -86,6 +86,9 @@ impl OverworldPhase {
         self.advance_object_events();
         self.scene
             .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
+        // After the menu's own tasks, so a save written this frame holds the
+        // time as the frame began, as in [`Self::step`].
+        self.tick_play_time();
         true
     }
 

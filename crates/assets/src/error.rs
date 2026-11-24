@@ -43,6 +43,9 @@ pub enum AssetError {
     /// The contained index is outside the ordered TM/HM slot list.
     UnknownTmHmSlot(usize),
 
+    /// The contained index is outside the ordered move-tutor slot list.
+    UnknownTutorSlot(usize),
+
     /// The contained [`SpeciesId`](crate::species::SpeciesId) is valid but has
     /// no egg-move group.
     NoEggMoves(u16),
@@ -50,6 +53,10 @@ pub enum AssetError {
     /// The contained [`AbilityId`](crate::species::AbilityId) is outside the
     /// ability tables.
     UnknownAbility(u16),
+
+    /// The contained nature discriminant is outside
+    /// [`NATURE_COUNT`](crate::pokeblock_flavors::NATURE_COUNT).
+    UnknownNature(u8),
 
     /// The contained level exceeds [`MAX_LEVEL`](crate::experience::MAX_LEVEL).
     InvalidLevel(u8),
@@ -181,8 +188,10 @@ impl fmt::Display for AssetError {
                 write!(f, "unknown item battle-usage id `{id}`")
             }
             Self::UnknownTmHmSlot(index) => write!(f, "unknown TM/HM slot index `{index}`"),
+            Self::UnknownTutorSlot(index) => write!(f, "unknown move-tutor slot index `{index}`"),
             Self::NoEggMoves(id) => write!(f, "species id `{id}` has no egg moves"),
             Self::UnknownAbility(id) => write!(f, "unknown ability id `{id}`"),
+            Self::UnknownNature(id) => write!(f, "unknown nature id `{id}`"),
             Self::InvalidLevel(level) => write!(f, "invalid level `{level}` (exceeds MAX_LEVEL)"),
             Self::UnknownMap(name) => write!(f, "unknown map or wild-encounter label `{name}`"),
             Self::UnknownTrainer(id) => write!(f, "unknown trainer id `{id}`"),

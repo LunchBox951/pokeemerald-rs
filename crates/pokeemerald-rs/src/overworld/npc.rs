@@ -3,8 +3,9 @@
 //! [`resolve_sprite_source`] is the complete graphics-id binding table: the
 //! protagonist sheets, the 16x32 people sheets, and the [`sheets`] rows for
 //! the other 16x16, 16x32, 32x32 and 48x48 graphics the checkpoint maps place.
-//! Hidden events are filtered through `engine::overworld::object_event_is_visible`,
-//! the same visibility used for interaction. A visible unsupported event remains
+//! Only entries the scheduler has admitted draw (`LiveObjectEvent::is_active`), the same set the
+//! interaction and collision queries scan; the hide flag is applied at admission. An active
+//! unsupported event remains
 //! interaction-ready but produces no [`OamEntry`]. `OBJ_EVENT_GFX_VAR_0` binds
 //! only when its event variable contains one of the two Route 103 rival ids;
 //! decoration slots remain unsupported. Code that clears a `FLAG_DECORATION_n`

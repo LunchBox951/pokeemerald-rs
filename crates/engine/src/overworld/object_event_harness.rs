@@ -3,13 +3,157 @@
 //!
 //! Later movement types extend it by scripting [`ScriptedRng`] draws and ticking [`Rig`].
 
-use assets::{MovementType, ObjectEvent, TrainerType};
+use assets::{
+    BattleScene, CoordEvent, MapConnection, MapEvents, MapHeader, MapId, MapLayout, MapType,
+    MetatileAttributeTable, MetatileCell, MovementType, MusicId, ObjectEvent, RegionMapSectionId,
+    TrainerType, Weather,
+};
 
 use crate::event_data::EventData;
 use crate::rng::RandomSource;
 
+use super::map_runtime::{ConnectedMapData, MapRuntime, NoConnectedMaps};
 use super::object_event::{FrameContext, ObjectEventCollection};
 use super::player::TilePos;
+
+/// The side of the square synthetic map, in tiles; every tile starts as plain ground at
+/// [`FLOOR_ELEVATION`].
+pub(crate) const TERRAIN_SIDE: u16 = 64;
+
+/// The elevation of every untouched synthetic cell, matching [`template`]'s objects.
+pub(crate) const FLOOR_ELEVATION: u8 = 3;
+
+/// A synthetic map's cells and metatile behaviours, the terrain half of a [`FrameContext`].
+///
+/// Metatile id `n` has behaviour `n`, so [`Self::set_behavior`] needs no attribute table of its
+/// own.
+pub(crate) struct Terrain {
+    width: u16,
+    connections: &'static [MapConnection],
+    layout: &'static MapLayout,
+    cells: Vec<MetatileCell>,
+    /// `cells`, packed as the layout grid reads them.
+    grid_bytes: Vec<u8>,
+    attributes: Vec<u8>,
+    events: &'static MapEvents,
+}
+
+impl Terrain {
+    /// A flat, passable [`TERRAIN_SIDE`] square.
+    pub(crate) fn flat() -> Self {
+        Self::flat_sized(TERRAIN_SIDE, TERRAIN_SIDE)
+    }
+
+    /// A flat, passable map `width` by `height` tiles.
+    pub(crate) fn flat_sized(width: u16, height: u16) -> Self {
+        static EVENTS: MapEvents = MapEvents {
+            id: MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: &[],
+            warp_events: &[],
+            coord_events: &[] as &[CoordEvent],
+            bg_events: &[],
+        };
+        let layout = Box::leak(Box::new(MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        }));
+        let cell = MetatileCell {
+            metatile_id: 0,
+            collision: 0,
+            elevation: FLOOR_ELEVATION,
+        };
+        let attributes = (0..=u8::MAX)
+            .flat_map(|behavior| u16::from(behavior).to_le_bytes())
+            .collect();
+        let cell_count = usize::from(width) * usize::from(height);
+        Self {
+            width,
+            connections: &[],
+            layout,
+            cells: vec![cell; cell_count],
+            grid_bytes: cell.pack().to_le_bytes().repeat(cell_count),
+            attributes,
+            events: &EVENTS,
+        }
+    }
+
+    fn edit(&mut self, (x, y): TilePos, change: impl FnOnce(&mut MetatileCell)) {
+        let index =
+            usize::try_from(y).unwrap() * usize::from(self.width) + usize::try_from(x).unwrap();
+        change(&mut self.cells[index]);
+        self.grid_bytes[index * 2..index * 2 + 2]
+            .copy_from_slice(&self.cells[index].pack().to_le_bytes());
+    }
+
+    /// Connects this map to `connections`, as its header lists them.
+    pub(crate) fn with_connections(mut self, connections: Vec<MapConnection>) -> Self {
+        self.connections = Box::leak(connections.into_boxed_slice());
+        self
+    }
+
+    /// Makes `tile` solid (a nonzero collision field).
+    pub(crate) fn set_wall(&mut self, tile: TilePos) {
+        self.edit(tile, |cell| cell.collision = 1);
+    }
+
+    pub(crate) fn set_elevation(&mut self, tile: TilePos, elevation: u8) {
+        self.edit(tile, |cell| cell.elevation = elevation);
+    }
+
+    /// Gives `tile` the metatile behaviour `behavior`.
+    pub(crate) fn set_behavior(&mut self, tile: TilePos, behavior: u8) {
+        self.edit(tile, |cell| cell.metatile_id = u16::from(behavior));
+    }
+
+    /// Gives metatile id `metatile` the behaviour `behavior` in this map's attribute table,
+    /// where every other id keeps behaviour equal to itself.
+    pub(crate) fn set_attribute(&mut self, metatile: u8, behavior: u8) {
+        self.attributes[usize::from(metatile) * 2] = behavior;
+    }
+
+    pub(crate) fn runtime(&self) -> MapRuntime<'_> {
+        static HEADER: MapHeader = MapHeader {
+            id: MapId("MAP_TEST"),
+            group: 0,
+            num: 0,
+            name: "MapTest",
+            layout: assets::LayoutId("MAP_TEST"),
+            music: MusicId(0),
+            region_map_section: RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: Weather::None,
+            map_type: MapType::Indoor,
+            allow_bike: false,
+            allow_escape: false,
+            allow_run: false,
+            show_name: false,
+            battle_scene: BattleScene::Normal,
+            map_scripts: None,
+            connections: &[] as &[MapConnection],
+        };
+        let header: &MapHeader = if self.connections.is_empty() {
+            &HEADER
+        } else {
+            Box::leak(Box::new(MapHeader {
+                connections: self.connections,
+                ..HEADER
+            }))
+        };
+        MapRuntime::new(
+            MapId("MAP_TEST"),
+            header,
+            self.events,
+            self.layout.grid(&self.grid_bytes).unwrap(),
+            MetatileAttributeTable::new(&self.attributes),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+}
 
 /// A field RNG that replays fixed draws and panics once they run out, so a movement type that
 /// draws when it must not fails the test at the draw.
@@ -81,14 +225,86 @@ pub(crate) fn leaked(events: Vec<ObjectEvent>) -> &'static [ObjectEvent] {
     Box::leak(events.into_boxed_slice())
 }
 
-/// One collection, its flags, the player's tile, a freeze switch, and a field RNG.
+/// Runs one scheduler frame over `collection` on flat ground with the player at `player` and
+/// `event_data` as the flags: on a fresh collection, the map-load admission pass, after which
+/// every in-window entry whose hide flag is clear is active, up to the fifteen object slots the
+/// player leaves.
+pub(crate) fn admit(
+    collection: &mut ObjectEventCollection,
+    player: TilePos,
+    event_data: &EventData,
+) {
+    let terrain = Terrain::flat();
+    collection.run_frame(
+        &FrameContext {
+            player_position: player,
+            event_data,
+            frozen: false,
+            player_dashing: false,
+            terrain: terrain.runtime(),
+            connected_maps: &NoConnectedMaps,
+            player_previous_position: player,
+            player_elevation: FLOOR_ELEVATION,
+        },
+        &mut ScriptedRng::exhausted(),
+    );
+}
+
+/// Seeds `templates` and admits every one in view of `player` with no flag set.
+pub(crate) fn admitted(
+    templates: &'static [ObjectEvent],
+    player: TilePos,
+) -> ObjectEventCollection {
+    let mut collection = ObjectEventCollection::from_templates(templates);
+    admit(&mut collection, player, &EventData::new());
+    collection
+}
+
+/// One collection, its flags, the player's tile, a freeze switch, a field RNG, and terrain.
 pub(crate) struct Rig {
     pub(crate) collection: ObjectEventCollection,
     pub(crate) event_data: EventData,
+    pub(crate) terrain: Terrain,
     pub(crate) player: TilePos,
+    /// The tile the player is leaving; `None` while it stands still.
+    pub(crate) player_previous: Option<TilePos>,
+    pub(crate) player_elevation: u8,
     pub(crate) frozen: bool,
     pub(crate) dashing: bool,
     pub(crate) rng: ScriptedRng,
+    /// The maps the rig's terrain connects to; none unless a test sets them.
+    pub(crate) connected_maps: Box<dyn ConnectedMapData>,
+}
+
+/// Flat synthetic maps by id, the neighbours a [`Rig`]'s terrain connects to.
+pub(crate) struct Neighbours(Vec<(MapId, Terrain)>);
+
+impl Neighbours {
+    pub(crate) fn new(maps: Vec<(MapId, Terrain)>) -> Self {
+        Self(maps)
+    }
+
+    fn terrain(&self, map: MapId) -> Option<&Terrain> {
+        self.0
+            .iter()
+            .find(|(id, _)| *id == map)
+            .map(|(_, terrain)| terrain)
+    }
+}
+
+impl ConnectedMapData for Neighbours {
+    fn dimensions(&self, map: MapId) -> Option<(u16, u16)> {
+        self.terrain(map)
+            .map(|terrain| (terrain.layout.width, terrain.layout.height))
+    }
+
+    fn metatile_cell(&self, map: MapId, x: i32, y: i32) -> Option<MetatileCell> {
+        self.terrain(map)?.runtime().metatile_cell(x, y)
+    }
+
+    fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8> {
+        self.terrain(map)?.runtime().metatile_behavior(x, y)
+    }
 }
 
 impl Rig {
@@ -97,25 +313,45 @@ impl Rig {
         Self {
             collection: ObjectEventCollection::from_templates(leaked(templates)),
             event_data: EventData::new(),
+            terrain: Terrain::flat(),
             player,
+            player_previous: None,
+            player_elevation: FLOOR_ELEVATION,
             frozen: false,
             dashing: false,
             rng: ScriptedRng::exhausted(),
+            connected_maps: Box::new(NoConnectedMaps),
+        }
+    }
+
+    /// The frame context the rig's current state describes, for queries between frames.
+    pub(crate) fn context(&self) -> FrameContext<'_> {
+        FrameContext {
+            player_position: self.player,
+            event_data: &self.event_data,
+            frozen: self.frozen,
+            player_dashing: self.dashing,
+            terrain: self.terrain.runtime(),
+            connected_maps: &*self.connected_maps,
+            player_previous_position: self.player_previous.unwrap_or(self.player),
+            player_elevation: self.player_elevation,
         }
     }
 
     /// Runs `frames` overworld frames at the rig's current player tile and freeze state.
     pub(crate) fn tick(&mut self, frames: usize) {
         for _ in 0..frames {
-            self.collection.run_frame(
-                &FrameContext {
-                    player_position: self.player,
-                    event_data: &self.event_data,
-                    frozen: self.frozen,
-                    player_dashing: self.dashing,
-                },
-                &mut self.rng,
-            );
+            let context = FrameContext {
+                player_position: self.player,
+                event_data: &self.event_data,
+                frozen: self.frozen,
+                player_dashing: self.dashing,
+                terrain: self.terrain.runtime(),
+                connected_maps: &*self.connected_maps,
+                player_previous_position: self.player_previous.unwrap_or(self.player),
+                player_elevation: self.player_elevation,
+            };
+            self.collection.run_frame(&context, &mut self.rng);
         }
     }
 }
