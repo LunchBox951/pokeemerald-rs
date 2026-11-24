@@ -636,7 +636,7 @@ fn a_pre_trigger_retune_starts_the_duty_where_admitting_the_final_pitch_does() {
         for idle_frames in 0..3 {
             for initial_key in (24_u8..=108).step_by(6) {
                 for final_key in (24_u8..=108).step_by(6) {
-                    let run = |admitted_key: u8| {
+                    let run = |admitted_key: u8, retune: bool| {
                         let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
                         let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
                         assert!(mixer.add_cgb_voice(cgb_square_voice(
@@ -654,15 +654,19 @@ fn a_pre_trigger_retune_starts_the_duty_where_admitting_the_final_pitch_does() {
                             admitted_key,
                             None,
                         )));
-                        mixer.set_track_pitch(
-                            TRACK,
-                            i32::from(final_key) - i32::from(admitted_key),
-                            0,
-                        );
+                        // The direct-admission control takes no pitch request,
+                        // so it never reaches the first-pass retune path.
+                        if retune {
+                            mixer.set_track_pitch(
+                                TRACK,
+                                i32::from(final_key) - i32::from(admitted_key),
+                                0,
+                            );
+                        }
                         mixer.mix_frame(&mut out);
                         out
                     };
-                    if run(initial_key) != run(final_key) {
+                    if run(initial_key, true) != run(final_key, false) {
                         mismatches.push((predecessor_key, idle_frames, initial_key, final_key));
                     }
                 }
