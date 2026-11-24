@@ -332,6 +332,13 @@ fn amys_double_battle_party_is_refused() {
         !phase.is_sight_trainer_battle_active(),
         "Amy & Liv's shared double-battle party must never be selected"
     );
+    // A successful trigger sets `sight_approach` frames before the battle
+    // becomes active, so the check above alone cannot tell a refusal from a
+    // started approach.
+    assert!(
+        phase.sight_approach.is_none(),
+        "the refused double battle must not start an approach"
+    );
     assert!(phase.lead_for_test().is_some());
 }
 
@@ -346,6 +353,11 @@ fn the_trigger_with_no_party_lead_logs_and_starts_nothing() {
     assert!(phase.lead_for_test().is_none(), "setup");
     phase.step(ButtonState::new());
     assert!(!phase.is_sight_trainer_battle_active());
+    // The battle goes active frames after the approach starts.
+    assert!(
+        phase.sight_approach.is_none(),
+        "with no lead the trigger must not start an approach"
+    );
 }
 
 // -- The trigger never fires off Route 103 -----------------------------------
