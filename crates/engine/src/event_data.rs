@@ -50,7 +50,17 @@ pub const FLAG_SYS_ENC_UP_ITEM: u16 = SYSTEM_FLAGS + 0x4D;
 /// Set by the Black Flute (`src/item_use.c:877-890`) while its wild encounter rate decrease is
 /// active.
 pub const FLAG_SYS_ENC_DOWN_ITEM: u16 = SYSTEM_FLAGS + 0x4E;
+/// Set once the Regice perimeter puzzle is solved (`FLAG_SYS_BRAILLE_REGICE_COMPLETED`,
+/// `include/constants/flags.h:1443`).
+pub const FLAG_SYS_BRAILLE_REGICE_COMPLETED: u16 = SYSTEM_FLAGS + 0x51;
 const FLAG_SYS_CTRL_OBJ_DELETE: u16 = SYSTEM_FLAGS + 0x61;
+
+/// Set when the player reads the Island Cave braille message and starts the Regice puzzle
+/// (`FLAG_TEMP_REGICE_PUZZLE_STARTED` is `FLAG_TEMP_2`, `include/constants/flags.h:1656`).
+pub const FLAG_TEMP_REGICE_PUZZLE_STARTED: u16 = TEMP_FLAGS_START + 2;
+/// Set when the player steps off the Regice puzzle path (`FLAG_TEMP_REGICE_PUZZLE_FAILED` is
+/// `FLAG_TEMP_3`, `include/constants/flags.h:1657`).
+pub const FLAG_TEMP_REGICE_PUZZLE_FAILED: u16 = TEMP_FLAGS_START + 3;
 
 /// First ordinary variable id.
 pub const VARS_START: u16 = 0x4000;
@@ -76,6 +86,12 @@ pub const NUM_SPECIAL_VARS: u16 = SPECIAL_VARS_END - SPECIAL_VARS_START + 1;
 /// Remaining Repel steps (`VAR_REPEL_STEP_COUNT`, `include/constants/vars.h:51`). The
 /// ordinary variable is saved with the rest of `SaveBlock1`; nonzero means a Repel is active.
 pub const VAR_REPEL_STEP_COUNT: u16 = 0x4021;
+/// Regice puzzle path bits 0-15 (`VAR_REGICE_STEPS_1`, `include/constants/vars.h:79`).
+pub const VAR_REGICE_STEPS_1: u16 = 0x403B;
+/// Regice puzzle path bits 16-31 (`VAR_REGICE_STEPS_2`, `include/constants/vars.h:80`).
+pub const VAR_REGICE_STEPS_2: u16 = 0x403C;
+/// Regice puzzle path bits 32-35 (`VAR_REGICE_STEPS_3`, `include/constants/vars.h:81`).
+pub const VAR_REGICE_STEPS_3: u16 = 0x403D;
 const VAR_ABNORMAL_WEATHER_LOCATION: u16 = 0x4037;
 const VAR_SHOULD_END_ABNORMAL_WEATHER: u16 = 0x4039;
 const ABNORMAL_WEATHER_NONE: u16 = 0;

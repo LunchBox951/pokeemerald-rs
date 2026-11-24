@@ -29870,6 +29870,14 @@
       "status": "pending"
     },
     "src/braille_puzzles.c": {
+      "artifacts": {
+        "ShouldDoBrailleRegicePuzzle": {
+          "reason": "src/braille_puzzles.c:283-343, path table :17-55. Modelled in full as one state transition, overworld::regice_puzzle::should_do_braille_regice_puzzle(map, pos, &mut EventData) -> Result<bool, EventDataError>: false and unchanged on any map but MAP_ISLAND_CAVE, with FLAG_SYS_BRAILLE_REGICE_COMPLETED set, FLAG_TEMP_REGICE_PUZZLE_STARTED clear, or FLAG_TEMP_REGICE_PUZZLE_FAILED set; a step onto one of the 36 sRegicePathCoords tiles (PATH) sets its bit in VAR_REGICE_STEPS_1/2/3 (bits 0-15, 16-31, 32-35); a step off the path sets FAILED and clears STARTED; true only when the three vars equal 0xFFFF/0xFFFF/0xF exactly and the tile is (8, 21). It draws no RNG. NOT ported: the caller (src/field_control_avatar.c:565-568, which the ShouldDoBrailleRegicePuzzle special also reaches), the braille message and the script that starts the puzzle or opens the entrance, and all presentation; no caller invokes it, so the Island Cave entrance is not playable. The other functions in src/braille_puzzles.c stay pending, so the file stays pending.",
+          "rust_target": "crates/engine/src/overworld/regice_puzzle.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
