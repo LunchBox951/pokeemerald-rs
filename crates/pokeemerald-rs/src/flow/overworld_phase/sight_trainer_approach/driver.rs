@@ -330,6 +330,7 @@ impl OverworldPhase {
         self.active_battle = Some(ActiveBattle::SightTrainer {
             battle: approach.battle,
             trainer_id: approach.trainer_id,
+            reserves: approach.reserves,
         });
         // The approach's built battle commits here, once: `take` above leaves no approach for
         // a second call (`DoTrainerBattle`, `pokeemerald/src/battle_setup.c:462-463`).
@@ -407,6 +408,7 @@ impl OverworldPhase {
             "Whoa!",
             battle,
             TrainerId(703),
+            super::super::PartyReserves::default(),
         ));
     }
 }

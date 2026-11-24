@@ -255,6 +255,7 @@ fn approaching_from(
         "Whoa!",
         stand_in_battle(),
         TrainerId(703),
+        PartyReserves::default(),
     );
     // These tests drive the icon and the walk-up; the lock handoff in
     // front of them has its own coverage in `sight_trainer_tests`.
