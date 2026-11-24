@@ -74,6 +74,26 @@ pub(super) fn template(source: &str) -> Vec<u8> {
                     ]);
                     continue;
                 }
+                if name == "FILL_WINDOW" {
+                    out.extend([0xFC, 0x0F]);
+                    continue;
+                }
+                if let Some(index) = name.strip_prefix("HIGHLIGHT ") {
+                    out.extend([
+                        0xFC,
+                        0x02,
+                        index.parse().expect("HIGHLIGHT takes a palette index"),
+                    ]);
+                    continue;
+                }
+                if let Some(width) = name.strip_prefix("CLEAR ") {
+                    out.extend([
+                        0xFC,
+                        0x11,
+                        width.parse().expect("CLEAR takes a pixel width"),
+                    ]);
+                    continue;
+                }
                 if let Some(frames) = name.strip_prefix("PAUSE ") {
                     out.extend([
                         0xFC,
@@ -136,6 +156,28 @@ impl Fixture {
     }
 }
 
+/// The tokens of ordinary text, terminator removed, as a trainer class or name
+/// arrives from the class-name table.
+pub(super) fn text_tokens(source: &str) -> Vec<Token> {
+    let mut tokens = text::decode(&template(source)).unwrap();
+    tokens.pop();
+    tokens
+}
+
+/// A class name shaped like the rival's in `gTrainerClassNames`: the `PK` and
+/// `MN` glyph bytes, a space, then made-up letters (`ZQXJVKW`), not the
+/// game's text.
+pub(super) const RIVAL_CLASS: [u8; 11] = [
+    0x53, 0x54, 0x00, 0xD4, 0xCB, 0xD2, 0xC4, 0xD0, 0xC5, 0xD1, 0xFF,
+];
+
+/// The rival's class name decoded to tokens, terminator removed.
+pub(super) fn rival_class() -> Vec<Token> {
+    let mut tokens = text::decode(&RIVAL_CLASS).unwrap();
+    tokens.pop();
+    tokens
+}
+
 /// The text `tokens` print, with controls spelled as `decode_to_string` does.
 pub(super) fn render(tokens: &[Token]) -> String {
     text::decode_to_string(&text::encode(tokens).unwrap()).unwrap()
@@ -161,7 +203,7 @@ pub(super) fn scene(kind: BattleKind) -> Scene {
             let mut lose_text = text::decode(&template("Good battle!")).unwrap();
             lose_text.pop();
             Trainer {
-                class: "YOUNGSTER".to_owned(),
+                class: text_tokens("YOUNGSTER"),
                 name: "BEN".to_owned(),
                 lose_text,
             }
@@ -218,6 +260,7 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (52, "{B_DEF_NAME_WITH_PREFIX} was\ndefrosted!"),
     (53, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted!"),
     (54, "{B_ATK_NAME_WITH_PREFIX} was\ndefrosted by {B_CURRENT_MOVE}!"),
+    (74, "{B_ATK_NAME_WITH_PREFIX} flinched!"),
     (230, "It hurt itself in its\nconfusion!"),
     (35, "{B_EFF_NAME_WITH_PREFIX}\nfell asleep!"),
     (276, "{B_ATK_NAME_WITH_PREFIX} ignored\norders!"),
@@ -226,8 +269,12 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (279, "{B_ATK_NAME_WITH_PREFIX} won't\nobey!"),
     (280, "{B_ATK_NAME_WITH_PREFIX} turned away!"),
     (281, "{B_ATK_NAME_WITH_PREFIX} pretended\nnot to notice!"),
+    (182, "{B_ATK_NAME_WITH_PREFIX} made\n{B_DEF_NAME_WITH_PREFIX} drowsy!"),
+    (198, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nmade it the {B_BUFF1} type!"),
     (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
+    (194, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nraised its SPEED!"),
     (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!"),
+    (208, "{B_SCR_ACTIVE_NAME_WITH_PREFIX} TRACED\n{B_BUFF1}'s {B_BUFF2}!"),
     (209, "sharply "),
     (210, "rose!"),
     (211, "harshly "),
@@ -248,6 +295,7 @@ pub(super) const SLOTS: &[(u16, &str)] = &[
     (339, "{B_ATK_NAME_WITH_PREFIX} fled\nusing {B_ATK_ABILITY}!\\p"),
     (306, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nblocks {B_CURRENT_MOVE}!"),
     (321, "Player defeated\n{B_TRAINER1_CLASS} {B_TRAINER1_NAME}!\\p"),
+    (346, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nmade it ineffective!"),
     (355, "{B_ATK_NAME_WITH_PREFIX}'s {B_ATK_ABILITY}\nprevents {B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY} from working!"),
 ];
 

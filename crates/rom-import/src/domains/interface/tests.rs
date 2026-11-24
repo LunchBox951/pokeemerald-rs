@@ -1,9 +1,9 @@
 //! Interface-domain tests over a synthetic ROM.
 //!
-//! The down-arrow sheet goes through the shared image reader, covered
-//! there; these cases check that the domain writes it as an image entry with
-//! no palette beside it, that [`Roots::images`] sees it exactly once, and
-//! that a root addressed past the image fails.
+//! The down-arrow sheets (light and dark) go through the shared image reader,
+//! covered there; these cases check that the domain writes each as an image
+//! entry with no palette beside it, that [`Roots::images`] sees each exactly
+//! once, and that a root addressed past the image fails.
 
 use pack_format::{parse_directory, EntryKind, PackWriter};
 
@@ -35,6 +35,15 @@ static SHEETS: [ImageRoot; 1] = [ImageRoot {
     metatile_height: 6,
     tile_count: 6,
 }];
+
+/// The light and dark arrows are two roots over the same shape.
+static TWO_SHEETS: [ImageRoot; 2] = [
+    SHEETS[0],
+    ImageRoot {
+        id: "interface/image/test_alt",
+        ..SHEETS[0]
+    },
+];
 
 static PAST_THE_ROM: [ImageRoot; 1] = [ImageRoot {
     addr: NEAR_THE_END,
@@ -93,6 +102,20 @@ fn the_down_arrow_sheet_is_written_as_a_bare_image_entry() {
         expected[tile * 8 * 8 + 1] = u8::try_from(tile + 2).expect("a nibble");
     }
     assert_eq!(&pack[entries[0].offset..][..entries[0].length], expected);
+}
+
+#[test]
+fn two_arrow_sheets_are_written_as_two_image_entries_in_root_order() {
+    let mut writer = PackWriter::new();
+    write(&rom(), &roots(&TWO_SHEETS), &mut writer).expect("well-formed roots");
+    let pack = writer.finish().expect("distinct ids");
+    let entries = parse_directory(&pack).expect("a readable pack");
+
+    let ids: Vec<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
+    assert_eq!(ids, ["interface/image/test", "interface/image/test_alt"]);
+    assert!(entries
+        .iter()
+        .all(|entry| matches!(entry.kind, EntryKind::Image { .. })));
 }
 
 #[test]

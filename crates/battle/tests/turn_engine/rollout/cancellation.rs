@@ -1,7 +1,8 @@
 //! What releases a series besides a miss: the cancellers that cancel
 //! (`data/battle_scripts_1.s:3777`, `:3802`; `CANCELER_TRUANT`,
 //! `src/battle_util.c:2088`), accepted sleep
-//! (`src/battle_script_commands.c:2296`), and a faint.
+//! (`src/battle_script_commands.c:2296`; `ENDTURN_YAWN`,
+//! `src/battle_util.c:1761`), and a faint.
 
 use super::*;
 use assets::{AbilityId, SpeciesId};
@@ -232,5 +233,58 @@ fn an_attacker_that_faints_to_rough_skin_keeps_no_series() {
     assert!(events.contains(&BattleEvent::Fainted { by_player: true }));
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
     assert_eq!(player_lock(&battle), (None, None));
+    rng.assert_exhausted();
+}
+
+/// Marks `mon` drowsy with one end-of-turn tick left, so this turn's
+/// `ENDTURN_YAWN` (`src/battle_util.c:1753`-`:1771`) expires it.
+fn drowsy_one_tick_from_sleep(mon: &mut BattlePokemon) {
+    mon.volatiles_mut().set_yawn();
+    assert!(!mon.volatiles_mut().tick_yawn());
+    assert_eq!(mon.volatiles().yawn_turns, 1);
+}
+
+#[test]
+fn sleep_landed_by_yawn_expiry_cancels_the_series_it_just_extended() {
+    let mut player = attacker(&[ROLLOUT, SPLASH]);
+    drowsy_one_tick_from_sleep(&mut player);
+    let mut rng = SequenceRng::new(turn_script(&[
+        &CONSTRUCTION,
+        &WILD_TURN_OVERHEAD,
+        &LANDED,
+        &[SLEEP_FIVE_TURNS],
+    ]));
+    let mut battle = wild_battle(player, target(WAILORD, &[SPLASH]), &mut rng);
+
+    let events = take(&mut battle, PlayerAction::UseMove(0), &mut rng);
+
+    assert!(
+        events.contains(&BattleEvent::FellAsleepFromYawn { by_player: true }),
+        "{events:?}"
+    );
+    assert_eq!(battle.player().status1(), Status1::Asleep { turns: 5 });
+    assert_eq!(player_lock(&battle), (None, None));
+    rng.assert_exhausted();
+}
+
+#[test]
+fn a_yawn_expiry_that_cannot_land_sleep_leaves_the_series_alone() {
+    let mut player = attacker(&[ROLLOUT, SPLASH]);
+    player.set_status1(Status1::Poisoned);
+    drowsy_one_tick_from_sleep(&mut player);
+    let mut rng = SequenceRng::new(turn_script(&[&CONSTRUCTION, &WILD_TURN_OVERHEAD, &LANDED]));
+    let mut battle = wild_battle(player, target(WAILORD, &[SPLASH]), &mut rng);
+
+    let events = take(&mut battle, PlayerAction::UseMove(0), &mut rng);
+
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::FellAsleepFromYawn { .. })),
+        "{events:?}"
+    );
+    assert_eq!(battle.player().status1(), Status1::Poisoned);
+    assert_eq!(battle.player().volatiles().yawn_turns, 0);
+    assert_eq!(player_lock(&battle), (Some(ROLLOUT), Some(4)));
     rng.assert_exhausted();
 }

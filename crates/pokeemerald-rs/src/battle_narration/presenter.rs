@@ -22,11 +22,13 @@ use std::fmt;
 
 use assets::fonts::{FontId, GlyphSource, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, BattleMessageTable, PackError};
-use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, TextColors, TextSpeed, TickEvent};
 use engine::text::Token;
 use rendering::{Framebuffer, RenderError};
 
-use super::message_box::{BattleTextbox, CONTENT_HEIGHT_PX, PRINTER_ORIGIN};
+use super::message_box::{
+    BattleTextbox, CONTENT_HEIGHT_PX, CONTENT_SIZE_PX, PRINTER_ORIGIN, TEXT_COLORS,
+};
 use super::queue::{GateError, Head, HeadKind, NarrationQueue};
 use super::{expand, GateStatus, NarrationError, NarrationGate, NarrationNames, NarrationRequest};
 use crate::textbox::{self, WindowOp};
@@ -111,6 +113,9 @@ pub struct BattleMessageLayer<S> {
     printer: Printer<S>,
     textbox: BattleTextbox,
     ops: Vec<WindowOp>,
+    /// The colours the latest whole-window clear erased with
+    /// (`Printer::cleared_window_colors`); `None` before any.
+    window_fill: Option<TextColors>,
     printing: bool,
 }
 
@@ -159,12 +164,14 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
             speed,
             PRINTER_ORIGIN,
         )
-        .with_ab_speed_up_print();
+        .with_ab_speed_up_print()
+        .with_text_colors(TEXT_COLORS);
         Self {
             queue: NarrationQueue::default(),
             printer,
             textbox,
             ops: Vec::new(),
+            window_fill: None,
             printing: false,
         }
     }
@@ -251,6 +258,7 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
         match self.queue.take_head() {
             Head::Message(tokens) => {
                 self.ops.clear();
+                self.window_fill = None;
                 self.printer.restart(tokens);
                 self.printing = true;
                 self.tick_printer(input)
@@ -296,13 +304,19 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
         // `FILL_WINDOW` survives the clear (`Printer::cleared_window`).
         if self.printer.cleared_window() {
             self.ops.clear();
+            self.window_fill = self.printer.cleared_window_colors();
         }
         match &event {
             TickEvent::Glyph(glyph) => self.push_clipped(WindowOp::Glyph(glyph.clone())),
+            // `ScrollWindow` fills the exposed rows with the background in
+            // force; no token runs while a scroll is in flight.
             TickEvent::Scrolling { dy } => {
-                for op in &mut self.ops {
-                    op.shift_y(-dy);
-                }
+                textbox::scroll_window_ops(
+                    &mut self.ops,
+                    *dy,
+                    self.printer.colors(),
+                    CONTENT_SIZE_PX,
+                );
             }
             _ => {}
         }
@@ -329,6 +343,7 @@ impl<S: GlyphSource> BattleMessageLayer<S> {
     /// Draws the battle textbox and the current message over `framebuffer`.
     /// The last message stays visible until the next one starts.
     pub fn draw(&self, framebuffer: &mut Framebuffer) {
-        self.textbox.compose(framebuffer, &self.ops);
+        self.textbox
+            .compose(framebuffer, &self.ops, self.window_fill);
     }
 }
