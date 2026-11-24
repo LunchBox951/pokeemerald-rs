@@ -3,21 +3,24 @@
 //! (`MPlayMain`, `m4a_1.s:1129`).
 //!
 //! `PORT` and every `XCMD` besides the ADSR overrides (`xATTA`..`xRELE`),
-//! `xWAIT`, the pseudo-echo pair (`xIECV`/`xIECL`), and the terminal reserved
-//! kinds 0 and 3 decode but never execute.
+//! `xWAIT`, the pseudo-echo pair (`xIECV`/`xIECL`), the sample-progress
+//! command (kind `0x0D`) and the terminal reserved kinds 0 and 3 decode but
+//! never execute.
 
 use crate::cgb_envelope::CgbAdsr;
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::{self, SAMPLES_PER_FRAME};
 use crate::psg::WaveChannel;
-use crate::sequence::{clamp_tempo, xcmd_ends_track, Event, MAX_TEMPO_BPM};
+use crate::sequence::{xcmd_ends_track, Event};
 use crate::song::{Instrument, Song, SquareTone};
 use crate::voice::{channel_volume, pan_terms, Voice};
 use crate::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
 
 mod adsr_override;
+mod tempo;
 
 use adsr_override::{AdsrOverride, XCMD_ATTA, XCMD_RELE};
+use tempo::TempoControl;
 
 /// `XCMD` sub-command number for `xIECV` (pseudo-echo volume,
 /// `m4a_tables.c:252`).
@@ -27,6 +30,9 @@ const XCMD_IECV: u8 = 0x08;
 const XCMD_IECL: u8 = 0x09;
 /// `XCMD` sub-command number for `xWAIT` (`m4a_tables.c:305`).
 const XCMD_WAIT: u8 = 0x0C;
+/// `XCMD` sub-command number for `ply_xcmd_0D`, the DirectSound sample start
+/// (`m4a_tables.c:306`; `m4a.c:1639`..`:1653`).
+const XCMD_SAMPLE_PROGRESS: u8 = 0x0D;
 
 /// Ticks fire each time the accumulator crosses this threshold
 /// (`subs r0, 150`, `m4a_1.s:1169`).
@@ -201,6 +207,10 @@ struct TrackState {
     /// Combined into each new note's priority by
     /// [`Sequencer::note_priority`].
     priority: u8,
+    /// `MusicPlayerTrack::unk_3C`, set by XCMD 0x0D (`m4a.c:1651`). Snapshotted
+    /// into each new DirectSound voice as its start position; CGB notes never
+    /// read it (`m4a_1.s:1791`..`:1797`). Zero until the command runs.
+    sample_progress: u32,
     /// Set when a volume input changed since the last
     /// [`Sequencer::propagate_dirty_tracks`] pass (`MPT_FLG_VOLCHG`,
     /// `m4a_internal.h:266`).
@@ -240,6 +250,7 @@ impl TrackState {
             pseudo_echo_volume: 0,
             pseudo_echo_length: 0,
             priority: 0,
+            sample_progress: 0,
             vol_dirty: false,
             pitch_dirty: false,
         }
@@ -308,8 +319,12 @@ pub struct Sequencer {
     tracks: Vec<TrackState>,
     bursts: Vec<BurstProbe>,
     mixer: Mixer,
-    tempo_i: u16,
-    tempo_c: u16,
+    /// Base tempo, player multiplier and the effective tempo that drives the
+    /// tick accumulator.
+    tempo: TempoControl,
+    /// The tick accumulator (`tempoC`). It is wider than upstream's 16 bits
+    /// so a frame's addition of any 16-bit effective tempo cannot overflow.
+    tempo_c: u32,
     mem_acc: MemAccArea,
     paused: bool,
     /// The track whose zero-wait run yielded mid-tick. That logical tick is
@@ -319,9 +334,10 @@ pub struct Sequencer {
     suspended_tick: Option<usize>,
     /// A fade step handed to a frame whose tick was suspended. `FadeOutBody`
     /// runs only when the next `MPlayMain` begins (`m4a_1.s:1152`-`:1169`),
-    /// so the step waits for the yielded frame's ticks and propagation to
-    /// complete and `advance_frame` applies it then, through either render
-    /// path; a later step replaces it.
+    /// after `SoundMain` has mixed the completed tick (`m4a_1.s:51`-`:62`),
+    /// so the step waits for the yielded frame's ticks, propagation and mix
+    /// to complete and `render_completed_frame` applies it then, through
+    /// either render path; a later step replaces it.
     pending_fade: Option<u8>,
 }
 
@@ -364,14 +380,14 @@ impl Sequencer {
     ) -> Self {
         let tracks = (0..song.track_count()).map(|_| TrackState::new()).collect();
         let bursts = (0..song.track_count()).map(|_| BurstProbe::new()).collect();
-        let tempo_i = song.initial_tempo();
+        let tempo = TempoControl::new(song.initial_tempo());
         let mixer = Mixer::new(master_volume, max_voices)
             .with_reverb_level(reverb_level.min(MAX_REVERB_LEVEL));
         Self {
             song,
             tracks,
             mixer,
-            tempo_i,
+            tempo,
             tempo_c: 0,
             mem_acc: MemAccArea::default(),
             bursts,
@@ -431,6 +447,43 @@ impl Sequencer {
         self.paused
     }
 
+    /// Sets the player tempo multiplier, `0x100` for a factor of one
+    /// (`m4aMPlayTempoControl`, `m4a.c:1234`-`:1242`). The effective tempo
+    /// becomes `(base tempo * multiplier) >> 8`; the multiplier survives later
+    /// `TEMPO` commands, which change only the base tempo. A multiplier of
+    /// zero adds no tempo, so no new tick fires while the mixer keeps
+    /// rendering existing voices, and restoring it resumes from the same tick
+    /// accumulator. Ticks an earlier frame already paid for stay owed: a tick
+    /// that frame suspended finishes, with any remaining whole units of its
+    /// accumulator, on the next frame.
+    ///
+    /// The multiplier changes sequence ticks only: a frame still holds
+    /// [`Self::FRAME_SAMPLES`] samples and a sustained note keeps its pitch.
+    pub fn set_tempo_multiplier(&mut self, multiplier: u16) {
+        self.tempo.set_multiplier(multiplier);
+    }
+
+    /// The player tempo multiplier, `0x100` unless
+    /// [`Self::set_tempo_multiplier`] changed it.
+    #[must_use]
+    pub fn tempo_multiplier(&self) -> u16 {
+        self.tempo.multiplier()
+    }
+
+    /// The base tempo the song header or the last `TEMPO` command set,
+    /// before the multiplier.
+    #[must_use]
+    pub fn base_tempo(&self) -> u16 {
+        self.tempo.base()
+    }
+
+    /// The tempo that drives sequence ticks: the base tempo scaled by the
+    /// player multiplier.
+    #[must_use]
+    pub fn effective_tempo(&self) -> u16 {
+        self.tempo.effective()
+    }
+
     /// Advance the sequencer by one V-blank frame and render its audio into
     /// `out`, which must hold exactly [`Self::FRAME_SAMPLES`] interleaved
     /// stereo `f32`s.
@@ -440,7 +493,18 @@ impl Sequencer {
     /// Panics if `out.len() != Self::FRAME_SAMPLES`.
     pub fn render_frame(&mut self, out: &mut [f32]) {
         self.advance_frame();
+        self.render_completed_frame(out);
+    }
+
+    /// Mixes the frame, then applies the fade step that waited on a tick this
+    /// frame completed: `FadeOutBody` belongs to the next `MPlayMain`, after
+    /// the mix of the tick it waited on, so a terminal step cannot silence
+    /// that tick's first mix. A tick still suspended keeps the step waiting.
+    fn render_completed_frame(&mut self, out: &mut [f32]) {
         self.mix_committed_frame(out);
+        if self.suspended_tick.is_none() {
+            self.apply_pending_fade();
+        }
     }
 
     /// Mixes the frame unless a tick is suspended. `SoundMain` mixes only
@@ -492,17 +556,18 @@ impl Sequencer {
     /// A suspended tick is still the previous `MPlayMain`, whose tick upstream
     /// finishes before the next `FadeOutBody` runs, so a frame that resumes
     /// one applies no step before it: the step waits (the latest one wins)
-    /// and [`Self::advance_frame`] stages it, or pauses, after the yielded
-    /// frame's remaining ticks and propagation pass, whichever render path
-    /// completes it. The frame's notes therefore all share one `volX`, and
-    /// the terminal step never leaves a tick half-run.
+    /// and stages it, or pauses, after the yielded frame's remaining ticks,
+    /// propagation pass and mix, whichever render path completes it. The
+    /// frame's notes therefore all share one `volX`, the completed tick is
+    /// heard before a terminal step stops it, and the step never leaves a
+    /// tick half-run.
     pub fn render_frame_with_fade(&mut self, out: &mut [f32], fade_vol_x: Option<u8>) {
         if self.suspended_tick.is_some() && !self.paused {
             if fade_vol_x.is_some() {
                 self.pending_fade = fade_vol_x;
             }
             self.advance_frame();
-            self.mix_committed_frame(out);
+            self.render_completed_frame(out);
             return;
         }
         match fade_vol_x {
@@ -513,7 +578,7 @@ impl Sequencer {
             }
             None => self.advance_frame(),
         }
-        self.mix_committed_frame(out);
+        self.render_completed_frame(out);
     }
 
     /// Stops every not-yet-ended track's voices outright and latches
@@ -565,31 +630,28 @@ impl Sequencer {
     ///
     /// # Overflow
     ///
-    /// `tempo_c += tempo_i` never overflows: the loop below leaves
-    /// `tempo_c < TEMPO_UNIT` unless a tick is suspended, and a frame that
-    /// resumes a suspended tick adds no tempo, and every `tempo_i` ingestion point
-    /// ([`Song::new`]'s initial tempo, [`Event::Tempo`]'s runtime assignment
-    /// in [`Self::handle_event`]) clamps to [`MAX_TEMPO_BPM`], so their sum
-    /// stays far under `u16::MAX`.
+    /// `tempo_c += effective tempo` never overflows: the loop below leaves
+    /// `tempo_c < TEMPO_UNIT` unless a tick is suspended, a frame that
+    /// resumes a suspended tick adds no tempo, and the effective tempo is a
+    /// 16-bit value ([`TempoControl`]), which the 32-bit accumulator holds
+    /// with room to spare. A zero effective tempo adds nothing, so no tick
+    /// fires and the accumulator keeps its value.
     fn advance_frame(&mut self) {
         if self.paused {
             return;
         }
-        debug_assert!(self.tempo_i <= MAX_TEMPO_BPM);
-        let resumed = if let Some(track_id) = self.suspended_tick {
+        if let Some(track_id) = self.suspended_tick {
             // This frame continues the frame whose tick yielded: its tempo
             // was already added, so only that frame's remaining ticks run.
             if !self.finish_tick(track_id, false) {
                 return;
             }
-            true
         } else {
-            debug_assert!(self.tempo_c < TEMPO_UNIT);
-            self.tempo_c += self.tempo_i;
-            false
-        };
-        while self.tempo_c >= TEMPO_UNIT {
-            self.tempo_c -= TEMPO_UNIT;
+            debug_assert!(self.tempo_c < u32::from(TEMPO_UNIT));
+            self.tempo_c += u32::from(self.tempo.effective());
+        }
+        while self.tempo_c >= u32::from(TEMPO_UNIT) {
+            self.tempo_c -= u32::from(TEMPO_UNIT);
             if !self.do_tick() {
                 return;
             }
@@ -599,16 +661,11 @@ impl Sequencer {
         // A suspended tick returns above, so a half-run burst's volume or
         // pitch never reaches a voice.
         self.propagate_dirty_tracks();
-        if resumed {
-            // The fade step that waited on the yielded frame is the next
-            // `MPlayMain`'s `FadeOutBody`, so it follows that frame's whole
-            // tempo loop and propagation pass, whichever render path drove it.
-            self.apply_pending_fade();
-        }
     }
 
     /// Stages the fade step that waited on a suspended tick, or pauses on its
-    /// terminal step.
+    /// terminal step. Runs after the completed frame's mix
+    /// (`Self::render_completed_frame`).
     fn apply_pending_fade(&mut self) {
         match self.pending_fade.take() {
             Some(0) => self.pause(),
@@ -645,7 +702,7 @@ impl Sequencer {
             tracks,
             bursts,
             mixer,
-            tempo_i,
+            tempo,
             mem_acc,
             ..
         } = self;
@@ -661,7 +718,7 @@ impl Sequencer {
             &mut bursts[track_id],
             mixer,
             track_id,
-            tempo_i,
+            tempo,
             mem_acc,
         );
         // The accumulator is shared: a write here invalidates every other
@@ -703,7 +760,7 @@ impl Sequencer {
         burst: &mut BurstProbe,
         mixer: &mut Mixer,
         track_id: usize,
-        tempo_i: &mut u16,
+        tempo: &mut TempoControl,
         mem_acc: &mut MemAccArea,
     ) {
         if track.ended {
@@ -747,7 +804,7 @@ impl Sequencer {
                 }
                 let event = events[track.cursor].clone();
                 track.cursor += 1;
-                Self::handle_event(song, track, mixer, track_id, tempo_i, mem_acc, &event);
+                Self::handle_event(song, track, mixer, track_id, tempo, mem_acc, &event);
                 if track.wait > 0 || track.ended {
                     break;
                 }
@@ -770,7 +827,7 @@ impl Sequencer {
         track: &mut TrackState,
         mixer: &mut Mixer,
         track_id: usize,
-        tempo_i: &mut u16,
+        tempo: &mut TempoControl,
         mem_acc: &mut MemAccArea,
         event: &Event,
     ) {
@@ -796,10 +853,11 @@ impl Sequencer {
             }
             // Also reached from an `Event::Tempo` converted from the
             // asset-pack schema, which round-trips an unbounded on-disk
-            // `u16`; re-applying `clamp_tempo` here guards `tempo_c`'s
-            // accumulation against a malformed pack even though
-            // `decode_track`'s own `TEMPO` arm already clamped it.
-            Event::Tempo(bpm) => *tempo_i = clamp_tempo(bpm),
+            // `u16`; `set_base` re-applies `clamp_tempo` to the command's
+            // own bound even though `decode_track`'s `TEMPO` arm already
+            // clamped it. The player multiplier survives the command
+            // (`m4a_1.s:920`-`:929`).
+            Event::Tempo(bpm) => tempo.set_base(bpm),
             Event::KeyShift(k) => {
                 track.key_shift = k;
                 track.pitch_dirty = true;
@@ -908,6 +966,12 @@ impl Sequencer {
                 kind: XCMD_IECL,
                 value,
             } => track.pseudo_echo_length = u8::try_from(value).unwrap_or(0),
+            // Applies only to DirectSound notes started afterwards; a sounding
+            // voice keeps its position (`ply_xcmd_0D`, `m4a.c:1639`..`:1653`).
+            Event::Xcmd {
+                kind: XCMD_SAMPLE_PROGRESS,
+                value,
+            } => track.sample_progress = value,
             Event::Repeat { count, target } => track.repeat(count, target),
             Event::MemAcc {
                 op,
@@ -1159,6 +1223,11 @@ impl Sequencer {
                 .with_rhythm_pan(rhythm_pan)
                 .fixed_rate(tone.is_fixed_rate())
                 .with_priority(priority);
+                // An out-of-range sample start fails closed before allocation,
+                // so the note neither sounds nor steals a channel.
+                let Some(voice) = voice.with_sample_progress(track.sample_progress) else {
+                    return false;
+                };
                 // A refused note simply never sounds -- upstream's `ply_note`
                 // returns without touching any channel (`m4a_1.s:1806`).
                 mixer.add_voice(voice)
@@ -1406,6 +1475,10 @@ mod memacc_tests;
 mod pattern_tests;
 #[cfg(test)]
 mod pseudo_echo_tests;
+#[cfg(test)]
+mod sample_progress_tests;
+#[cfg(test)]
+mod tempo_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

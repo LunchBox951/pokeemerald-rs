@@ -6,8 +6,8 @@ use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_element_ids, healthbox_frame_ids,
     layout_ids, naming_screen_ids, opening_scene_ids, party_menu_ids, poke_ball_ids,
     sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
-    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS,
-    KEYPAD_ICONS, TILESETS,
+    tileset_animation_ids, title_ids, BATTLERS, FONTS, GENERAL_1_PALETTE_ID, INTERFACE_IMAGE_IDS,
+    INTERFACE_PALETTE_IDS, KEYPAD_ICONS, TALL_GRASS_IMAGE_ID, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -37,11 +37,15 @@ pub fn require_tilesets(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every pinned sprite sheet and sprite palette is present.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every pinned sprite sheet and sprite palette, and the tall-grass field-effect sheet and palette, is present.
 pub fn require_sprites(pack: &PackSource) -> Result<(), GenRomProfileError> {
     sprite_sheet_ids()
         .into_iter()
         .chain(sprite_palette_ids())
+        .chain([
+            TALL_GRASS_IMAGE_ID.to_owned(),
+            GENERAL_1_PALETTE_ID.to_owned(),
+        ])
         .try_for_each(|id| pack.get(&id).map(|_| ()))
 }
 
@@ -82,6 +86,17 @@ pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileErr
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the field-message token table is present.
 pub fn require_field_messages(pack: &PackSource) -> Result<(), GenRomProfileError> {
     pack.get(rom_import::FIELD_MESSAGE_PACK_ID).map(|_| ())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the trainer defeat-speech table is present.
+pub fn require_trainer_defeat_speeches(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::TRAINER_DEFEAT_SPEECH_PACK_ID)
+        .map(|_| ())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the trainer class-name table is present.
+pub fn require_trainer_class_names(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::TRAINER_CLASS_NAME_PACK_ID).map(|_| ())
 }
 
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle-animation catalog is present.
@@ -350,6 +365,8 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battlers(pack)?;
     require_battle_messages(pack)?;
     require_field_messages(pack)?;
+    require_trainer_defeat_speeches(pack)?;
+    require_trainer_class_names(pack)?;
     require_interface_images(pack)?;
     require_interface_palettes(pack)?;
     require_bag(pack, bag_ids)?;

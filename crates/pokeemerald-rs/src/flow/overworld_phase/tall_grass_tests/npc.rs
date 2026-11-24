@@ -13,7 +13,9 @@ use engine::overworld::{Direction, PlayerState};
 use platform::Buttons;
 
 /// The Route 101 boy (`data/maps/Route101/map.json:95-107`) at (2, 13) with
-/// the given hide `flag`.
+/// the given hide `flag`. The map has him wander left and right; these tests
+/// isolate the grass effect from the scheduler's movement, so he stands still
+/// facing west.
 const fn route_101_boy(flag: &'static str) -> assets::ObjectEvent {
     assets::ObjectEvent {
         local_id: 6,
@@ -21,7 +23,7 @@ const fn route_101_boy(flag: &'static str) -> assets::ObjectEvent {
         x: 2,
         y: 13,
         elevation: 3,
-        movement_type: assets::MovementType::WanderLeftAndRight,
+        movement_type: assets::MovementType::FaceLeft,
         movement_range_x: 1,
         movement_range_y: 1,
         trainer_type: assets::TrainerType::None,
@@ -214,8 +216,9 @@ fn the_players_and_an_npcs_effects_coexist_and_each_follows_its_own_owner() {
 
 #[test]
 fn an_npc_whose_step_begins_onto_tall_grass_starts_a_rustling_effect_and_leaves_it_behind() {
-    // The scheduler moves no wanderer yet, so the boy's step is committed to
-    // the live collection by hand, as `walk` does when a movement type steps.
+    // The boy is a fixed-facing type that takes no step of its own, so his step is
+    // committed to the live collection by hand, as `walk` does when a movement
+    // type steps.
     let scene = synthetic_scene_with_tall_grass_sprites_and_events(
         20,
         30,
@@ -410,4 +413,49 @@ fn an_npc_admitted_on_transition_grass_places_its_effect_at_the_retained_elevati
     assert_eq!((state.elevation(), state.previous_elevation()), (0, 3));
     // `sElevationToSubpriority[3]` is 115 and the row term at top 0 is 30.
     assert_eq!(phase.scene.tall_grass_effect_depths(), vec![(3, 115 + 30)]);
+}
+
+/// Birch's bag, a 16x16 object, standing on tall grass at the boy's tile.
+static BAG_ON_GRASS: [assets::ObjectEvent; 1] = [assets::ObjectEvent {
+    graphics_id: "OBJ_EVENT_GFX_BIRCHS_BAG",
+    movement_type: assets::MovementType::FaceDown,
+    ..route_101_boy("0")
+}];
+static ROUTE101_BAG_EVENTS: assets::MapEvents = route_101_events(&BAG_ON_GRASS);
+
+/// Through the scene's own sprite path, a 16x16 object's settled grass effect
+/// keeps its own subpriority and draws in front of the object: its depth bounds
+/// are the graphic's 16x16 (`field_effect_helpers.c:1676-1687`), not 16x32.
+#[test]
+fn a_16x16_objects_own_grass_effect_draws_in_front_of_it_through_the_scene() {
+    let scene = synthetic_scene_with_tall_grass_sprites_and_events(
+        20,
+        30,
+        &[(BOY_TILE, MB_TALL_GRASS, GROUND)],
+        &ROUTE101_BAG_EVENTS,
+        &["misc/birchs_bag"],
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((5, 13), GROUND, Direction::West),
+        None,
+    );
+    idle(&mut phase, 2);
+    assert_eq!(phase.scene.tall_grass_effect_count(), 1);
+    let entries = phase
+        .scene
+        .sprite_entries(&phase.player, &phase.save1.event_data);
+    let grass = entries
+        .iter()
+        .position(|entry| entry.palette_bank() == GENERAL_1_BANK)
+        .expect("the bag's grass effect is drawn");
+    let bag = entries
+        .iter()
+        .position(|entry| !matches!(entry.palette_bank(), 0 | GENERAL_1_BANK))
+        .expect("the bag is drawn");
+    assert!(
+        grass < bag,
+        "the effect (OAM {grass}) must precede the bag (OAM {bag})"
+    );
 }

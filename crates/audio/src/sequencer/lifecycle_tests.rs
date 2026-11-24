@@ -400,7 +400,7 @@ fn a_control_from_an_earlier_tick_in_the_same_frame_as_fine_must_not_reach_the_r
     let before = seq.mixer.voices()[0].base_volume();
 
     // Frame 2 runs two ticks: the first reaches `Pan`, the second `Fine`.
-    seq.tempo_i = 2 * TEMPO_UNIT;
+    seq.tempo.set_base(2 * TEMPO_UNIT);
     seq.render_frame(&mut out);
     assert!(
         seq.tracks[0].ended,
