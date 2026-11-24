@@ -6,6 +6,7 @@
 //! the species base-stats table (see [`species`]), the item table (see
 //! [`items`]), the per-species evolution table (see [`evolution`]), the
 //! per-species TM/HM learnsets (see [`tmhm_learnsets`]), the per-species
+//! move-tutor learnsets (see [`tutor_learnsets`]), the per-species
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
 //! egg-move lists (see [`egg_moves`]), the enemy battler elevation table (see
 //! [`enemy_elevation`]), the Battle Arena per-move mind ratings (see
@@ -94,6 +95,7 @@ pub mod species_names;
 pub mod tmhm_learnsets;
 pub mod trainer_hill_prizes;
 pub mod trainers;
+pub mod tutor_learnsets;
 pub mod type_chart;
 pub mod wild_encounters;
 
@@ -221,6 +223,7 @@ pub use trainers::{
     TrainerParty, TrainerPicId, TrainerTable, MAX_TRAINER_ITEMS, TRAINERS_COUNT,
     TRAINER_CLASS_NAME_COUNT, TRAINER_CLASS_NAME_ROW_BYTES, TRAINER_DEFEAT_SPEECH_COUNT,
 };
+pub use tutor_learnsets::{TutorLearnsets, TutorSlot};
 pub use type_chart::{Effectiveness, Type, TypeChart};
 pub use wild_encounters::{
     FishingEncounters, FishingRod, LandEncounters, MapId, RockSmashEncounters, WaterEncounters,
