@@ -751,13 +751,18 @@ fn rom_imported_pack_draws_every_page_like_the_checkout_pack() {
 fn rom_import_scratch_guard_spares_a_replacement() {
     let guard = claim_rom_import_scratch(b"ours");
     let path = guard.path().to_path_buf();
-    let moved = path.with_extension("moved");
+    // `create_dir` fails on an occupied name, so the move target lives in a
+    // directory only this test owns and no unowned entry is replaced.
+    let private = path.with_extension("moved-dir");
+    std::fs::create_dir(&private).expect("the private move directory is free");
+    let moved = private.join("moved.pack");
     std::fs::rename(&path, &moved).unwrap();
     std::fs::write(&path, b"someone else's").unwrap();
     drop(guard);
     let survived = std::fs::read(&path).ok();
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&moved);
+    let _ = std::fs::remove_dir(&private);
     assert_eq!(
         survived.as_deref(),
         Some(b"someone else's".as_slice()),
