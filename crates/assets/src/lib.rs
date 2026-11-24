@@ -76,6 +76,7 @@ pub mod evolution;
 pub mod experience;
 pub mod facility_classes;
 pub mod fonts;
+pub mod frontier_exchange_corner;
 pub mod hidden_item_flags;
 pub mod ingame_trades;
 pub mod items;
