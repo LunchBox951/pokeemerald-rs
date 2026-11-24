@@ -21467,7 +21467,7 @@
     "include/constants/easy_chat.h": {
       "artifacts": {
         "EC_WORD_EVENTS": {
-          "reason": "The EC_WORD_* indices of EC_GROUP_EVENTS (include/constants/easy_chat.h:1034-1062, EC_WORD_APPEAL 0 through EC_WORD_FRONTIER 28) are the associated constants of assets::easy_chat_events::EventsWordIndex. The group id and every other group's words are not modelled.",
+          "reason": "The EC_WORD_* indices of EC_GROUP_EVENTS (include/constants/easy_chat.h:1034-1062, EC_WORD_APPEAL 0 through EC_WORD_FRONTIER 28) are the associated constants of assets::easy_chat_events::EventsWordIndex. The Trainer and Greetings indices are modelled separately in assets::easy_chat (TrainerWordIndex, GreetingsWordIndex). The EC_GROUP_* group ids and the words of every group other than Trainer, Greetings and Events are not modelled.",
           "rust_target": "crates/assets/src/easy_chat_events.rs",
           "spec": "S-4",
           "status": "ported"
