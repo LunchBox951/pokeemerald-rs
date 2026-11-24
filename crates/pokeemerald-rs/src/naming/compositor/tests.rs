@@ -692,13 +692,17 @@ fn production_pack_draws_every_page_and_avatar() {
     );
 }
 
-/// Removes the imported scratch pack when dropped, even if a test panics.
-struct ImportedScratch(std::path::PathBuf);
-
-impl Drop for ImportedScratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
+/// The scratch file the ROM-import fixture loads its imported pack from,
+/// claimed under a name unique to this process and thread. Dropping the claim
+/// removes the file only while the pathname still names the file it created,
+/// even if a test panics.
+fn claim_rom_import_scratch(bytes: impl AsRef<[u8]>) -> crate::pack_test_support::ScratchClaim {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-naming-imported-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    crate::pack_test_support::ScratchClaim::claim_with(path, bytes)
 }
 
 /// The pack imported from the supported ROM the environment names, or `None`
@@ -707,14 +711,8 @@ fn rom_imported_pack() -> Option<AssetPack> {
     let rom = std::env::var_os("POKEEMERALD_ROM").filter(|value| !value.is_empty())?;
     let bytes =
         rom_import::import_to_bytes(std::path::Path::new(&rom)).expect("the ROM import succeeds");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-naming-imported-{}-{:?}.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    crate::pack_test_support::write_scratch_exclusive(&path, bytes);
-    let _cleanup = ImportedScratch(path.clone());
-    Some(AssetPack::load(&path).expect("the imported pack loads"))
+    let claim = claim_rom_import_scratch(bytes);
+    Some(AssetPack::load(claim.path()).expect("the imported pack loads"))
 }
 
 /// The ROM-imported pack draws every page with the same art assertions, and
@@ -745,4 +743,24 @@ fn rom_imported_pack_draws_every_page_like_the_checkout_pack() {
             }
         }
     }
+}
+
+/// The ROM-import fixture's scratch claim removes only the file it created: a
+/// file renamed away and replaced under the same name survives its drop.
+#[test]
+fn rom_import_scratch_guard_spares_a_replacement() {
+    let guard = claim_rom_import_scratch(b"ours");
+    let path = guard.path().to_path_buf();
+    let moved = path.with_extension("moved");
+    std::fs::rename(&path, &moved).unwrap();
+    std::fs::write(&path, b"someone else's").unwrap();
+    drop(guard);
+    let survived = std::fs::read(&path).ok();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&moved);
+    assert_eq!(
+        survived.as_deref(),
+        Some(b"someone else's".as_slice()),
+        "the guard removed a replacement it never created"
+    );
 }
