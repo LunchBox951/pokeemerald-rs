@@ -63,6 +63,7 @@
 //! - `live_writeback`: the approach's write-back to the live collection,
 //!   seen after the battle (tile, facing, collision, sight, rendered OAM).
 //! - `trigger`: cone geometry, refusals, honest cuts, real-pack terrain.
+//! - `party`: the saved party behind the lead, handed over and filed back.
 //! - `battle`: frame ownership, win/loss outcomes, the defeated flag, abort.
 //! - `approach_timing`: the approach's tile timing, handoff and icon frames.
 //! - `approach_handoff`: the intro speech and the handoff into the battle.
@@ -72,6 +73,7 @@ mod approach_timing;
 mod battle;
 mod live_selection;
 mod live_writeback;
+mod party;
 mod real_parties;
 mod support;
 mod trigger;
