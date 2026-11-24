@@ -33,7 +33,8 @@ fn expected_dimensions(stem: &str) -> ImageDimensions {
 }
 
 /// Extracts every text-window frame image and palette into the asset pack,
-/// rejecting a directory whose contents differ from the manifests.
+/// rejecting a directory whose `.png` and `.pal` files differ from the
+/// manifests. Files with other extensions are ignored.
 pub(super) fn extract_text_window(
     upstream: &Path,
     writer: &mut PackWriter,
@@ -170,11 +171,21 @@ fn validate_text_window_manifest(directory: &Path) -> Result<(), ExtractError> {
         .map_err(|error| ExtractError::ReadFailed(directory.to_path_buf(), error.to_string()))?;
     paths.sort();
     for path in paths {
-        if !is_expected_text_window_asset(&path) {
+        if is_candidate_text_window_asset(&path) && !is_expected_text_window_asset(&path) {
             return Err(ExtractError::UnexpectedTextWindowAsset(path));
         }
     }
     Ok(())
+}
+
+/// Whether `path` could enter the pack: only `.png` and `.pal` files are
+/// candidates. Files with any other extension (`.4bpp` and `.gbapal` build
+/// products, editor backups) are never read, so they are not manifest drift.
+fn is_candidate_text_window_asset(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some(PNG_EXTENSION | PALETTE_EXTENSION)
+    )
 }
 
 fn is_expected_text_window_asset(path: &Path) -> bool {
@@ -268,6 +279,32 @@ mod tests {
         }
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn text_window_manifest_ignores_non_asset_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-text-window-non-asset-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for stem in TEXT_WINDOW_IMAGE_STEMS {
+            std::fs::write(dir.join(format!("{stem}.png")), []).unwrap();
+        }
+        for stem in TEXT_WINDOW_PALETTE_STEMS {
+            std::fs::write(dir.join(format!("{stem}.pal")), []).unwrap();
+        }
+        // Files an upstream `make` or an editor leaves beside the sources.
+        for filename in ["1.4bpp", "text_pal1.gbapal", "1.png.bak", "README"] {
+            std::fs::write(dir.join(filename), []).unwrap();
+        }
+        let result = validate_text_window_manifest(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            result.is_ok(),
+            "non-asset file aborted extraction: {result:?}"
+        );
     }
 
     #[test]
