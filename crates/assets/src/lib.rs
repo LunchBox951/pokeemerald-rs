@@ -29,8 +29,9 @@
 //! starting positions (see [`slot_machine_reels`]), the region-map section
 //! grid (see [`region_map_layout`]), the Battle Palace per-nature
 //! move-group, target and flavor tables (see [`battle_palace`]), the Easy Chat
-//! Events word group (see [`easy_chat_events`]), and the facility-class
-//! portrait and trainer-class lookups (see [`facility_classes`]); more data
+//! Events word group (see [`easy_chat_events`]), the facility-class portrait
+//! and trainer-class lookups (see [`facility_classes`]), and the four NPC
+//! trade offers with their mail messages (see [`ingame_trades`]); more data
 //! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -76,6 +77,7 @@ pub mod experience;
 pub mod facility_classes;
 pub mod fonts;
 pub mod hidden_item_flags;
+pub mod ingame_trades;
 pub mod items;
 pub mod keypad_icons;
 pub mod level_up_learnsets;
@@ -156,6 +158,10 @@ pub use fonts::{
     FontGlyphSheet, FontId, FontImageRef, Glyph, GlyphSource, GlyphSources, OwnedFontGlyphSheet,
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
     SHEET_HEIGHT, SHEET_WIDTH,
+};
+pub use ingame_trades::{
+    InGameTrade, InGameTradeError, InGameTradeId, InGameTradeMail, InGameTradeTable, TradeOtGender,
+    INGAME_TRADES_COUNT, INGAME_TRADE_MAIL_COUNT, INGAME_TRADE_MAIL_WORDS_COUNT,
 };
 pub use keypad_icons::KeypadIconSheet;
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
