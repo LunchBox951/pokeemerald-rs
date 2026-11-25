@@ -5,8 +5,8 @@
 //! The battle engine resolves a whole turn when asked, so the sequencer is the
 //! contract under test: it asks for the next turn, and reports the result, only
 //! on a gate that reads complete. Text comes from upstream template strings in
-//! [`upstream_fixture`], and the trainer's defeat speech is supplied by the test
-//! from `data/text/trainers.inc:6`-`:8`, since no runtime producer carries it.
+//! [`upstream_fixture`], and the trainer's defeat speech is a made-up line
+//! supplied by the test, since no runtime producer carries it.
 
 use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
@@ -257,11 +257,8 @@ fn a_longer_wild_battle_never_starts_a_turn_over_the_previous_turns_text() {
     }
 }
 
-fn calvin_defeat_speech() -> Vec<Token> {
-    let mut tokens = text::decode(&template(
-        "Arrgh, I lost…\nI should have trained mine more…",
-    ))
-    .unwrap();
+fn made_up_defeat_speech() -> Vec<Token> {
+    let mut tokens = text::decode(&template("Zzz, lost it…\nZz zz zz zz…")).unwrap();
     tokens.pop();
     tokens
 }
@@ -276,9 +273,9 @@ fn a_trainer_battle_prints_the_challenge_the_defeat_speech_and_the_prize_before_
     )
     .unwrap();
     let trainer = Trainer {
-        class: super::fixtures::text_tokens("YOUNGSTER"),
-        name: "CALVIN".to_owned(),
-        lose_text: calvin_defeat_speech(),
+        class: super::fixtures::text_tokens("ZQVX"),
+        name: "ZOL".to_owned(),
+        lose_text: made_up_defeat_speech(),
     };
     let narrator = Narrator::new(scene(BattleKind::Trainer, "POOCHYENA", Some(trainer)));
     let mut sequencer = Sequencer::new(battle, narrator, rng, TextSpeed::Fast);
@@ -296,14 +293,14 @@ fn a_trainer_battle_prints_the_challenge_the_defeat_speech_and_the_prize_before_
     assert_eq!(
         sequencer.script[..3],
         [
-            "YOUNGSTER CALVIN\nwould like to battle!{CLEAR}",
-            "YOUNGSTER CALVIN sent\nout POOCHYENA!",
+            "ZQVX ZOL\nwould like to battle!{CLEAR}",
+            "ZQVX ZOL sent\nout POOCHYENA!",
             "Go! TREECKO!",
         ]
     );
     let tail = &sequencer.script[sequencer.script.len() - 3..];
-    assert_eq!(tail[0], "Player defeated\nYOUNGSTER CALVIN!{CLEAR}");
-    assert!(tail[1].starts_with("Arrgh, I lost…\nI should have trained mine more…"));
+    assert_eq!(tail[0], "Player defeated\nZQVX ZOL!{CLEAR}");
+    assert!(tail[1].starts_with("Zzz, lost it…\nZz zz zz zz…"));
     assert!(tail[2].starts_with("BRENDAN got ¥"));
 }
 

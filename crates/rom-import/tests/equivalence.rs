@@ -49,6 +49,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use assets::audio::{CRY_TABLE_LEN, CRY_TABLE_PACK_ID};
+use assets::pack::FieldMessageTable;
 use assets::{
     AssetPack, CryTable, SampleId, Song, TrainerClass, TrainerClassNameTable,
     TrainerDefeatSpeechContext, TrainerDefeatSpeechTable, VoiceEntry, VoiceGroup,
@@ -306,13 +307,14 @@ const TRAINER_BATTLER_IDS: [&str; 6] = [
     "trainer/may/palette",
 ];
 
-/// `field-message/table` as both backends must write it: schema header, then
-/// `gText_PkmnFainted_FldPsn` (`{STR_VAR_1} fainted…\p\n`, `EOS`) spelled
-/// through `charmap.txt`.
-const FIELD_MESSAGE_TABLE: [u8; 28] = [
-    b'F', b'M', b'S', b'G', 1, 0, 1, 0, 0, 0, 14, 0, 0, 0, 0xFD, 0x02, 0x00, 0xDA, 0xD5, 0xDD,
-    0xE2, 0xE8, 0xD9, 0xD8, 0xB0, 0xFB, 0xFE, 0xFF,
-];
+/// The upstream symbol the field-message pin reads from `strings.c`; the
+/// expected text is read at test time from the contributor's own checkout, so
+/// no game text is committed here.
+const FIELD_MESSAGE_SYMBOL: &str = "gText_PkmnFainted_FldPsn";
+
+/// The upstream file [`FIELD_MESSAGE_SYMBOL`] is defined in, relative to the
+/// checkout.
+const FIELD_MESSAGE_SOURCE: &str = "src/strings.c";
 
 /// The `Route103_Text_*Defeated` labels in `TrainerDefeatSpeechContext::ALL`
 /// order. Labels only: the expected strings are read at test time from the
@@ -388,6 +390,14 @@ fn synthetic_speech_table() -> Vec<u8> {
     record_table(*b"TDFS", &streams)
 }
 
+/// A synthetic field-message payload: a made-up line keeping the
+/// `{STR_VAR_1}` placeholder and the `\p\n` ending the real message has; not
+/// game text.
+fn synthetic_field_message_table() -> Vec<u8> {
+    let stream = spell("{STR_VAR_1} zz…\\p\\n$").expect("synthetic message spells");
+    record_table(*b"FMSG", &[stream])
+}
+
 #[test]
 fn the_hand_charmap_spells_glyphs_controls_and_placeholders() {
     assert_eq!(spell("Az"), Ok(vec![0xBB, 0xEE]));
@@ -403,6 +413,10 @@ fn the_hand_charmap_spells_glyphs_controls_and_placeholders() {
     assert_eq!(
         spell("\\n\\p\\l{PLAYER}{KUN}$"),
         Ok(vec![0xFE, 0xFB, 0xFA, 0xFD, 0x01, 0xFD, 0x05, 0xFF])
+    );
+    assert_eq!(
+        spell("{STR_VAR_1} z\\p\\n$"),
+        Ok(vec![0xFD, 0x02, 0x00, 0xEE, 0xFB, 0xFE, 0xFF])
     );
     assert!(spell("{RIVAL}").is_err());
     assert!(spell("~").is_err());
@@ -464,6 +478,46 @@ Want_A:
 }
 
 #[test]
+fn a_reference_c_string_is_read_by_whole_symbol() {
+    let source = "\
+const u8 gText_Zq2[] = _(\"Zb\");
+const u8 gText_Zq[] = _(\"{STR_VAR_1} za\\p\\n\");
+";
+    assert_eq!(
+        reference_c_string(source, "gText_Zq"),
+        Ok(vec![0xFD, 0x02, 0x00, 0xEE, 0xD5, 0xFB, 0xFE, 0xFF])
+    );
+    // A symbol defined nowhere, or twice, and a literal that does not close on
+    // its own line all fail; so does a character the hand charmap lacks.
+    assert!(reference_c_string(source, "gText_Zr").is_err());
+    assert!(reference_c_string(&format!("{source}{source}"), "gText_Zq").is_err());
+    let open = "const u8 gText_Zq[] = _(\"Za\"\n    \"Zb\");\n";
+    assert!(reference_c_string(open, "gText_Zq").is_err());
+    let unspellable = source.replace("za", "z~");
+    assert!(reference_c_string(&unspellable, "gText_Zq").is_err());
+}
+
+#[test]
+fn the_field_message_reference_is_read_from_the_checkout_file() {
+    let checkout = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-field-message-reference-{}",
+        std::process::id()
+    ));
+    let source = checkout.join(FIELD_MESSAGE_SOURCE);
+    std::fs::create_dir_all(source.parent().expect("a parent")).expect("a scratch checkout");
+    std::fs::write(
+        &source,
+        format!("const u8 {FIELD_MESSAGE_SYMBOL}[] = _(\"{{STR_VAR_1}} zz…\\p\\n\");\n"),
+    )
+    .expect("a scratch strings.c");
+    let table = reference_field_message_table(&checkout);
+    std::fs::remove_dir_all(&checkout).expect("the scratch checkout is removable");
+    assert_eq!(table, Ok(synthetic_field_message_table()));
+    // A checkout that is not there is an error, never an empty reference.
+    assert!(reference_field_message_table(&checkout).is_err());
+}
+
+#[test]
 fn the_structural_checks_accept_the_synthetic_tables_and_catch_merges() {
     assert_eq!(class_name_structure(&synthetic_class_name_table()), Ok(()));
     assert_eq!(speech_structure(&synthetic_speech_table()), Ok(()));
@@ -481,6 +535,21 @@ fn the_structural_checks_accept_the_synthetic_tables_and_catch_merges() {
     assert!(class_name_structure(&record_table(*b"TCLN", &streams)).is_err());
     assert!(class_name_structure(b"TCLN").is_err());
     assert!(speech_structure(&synthetic_class_name_table()).is_err());
+    assert_eq!(
+        field_message_structure(&synthetic_field_message_table()),
+        Ok(())
+    );
+    assert!(field_message_structure(&synthetic_speech_table()).is_err());
+}
+
+/// The structural check `id`'s payload is held to.
+fn structure_of(id: &str, payload: &[u8]) -> Result<(), String> {
+    match id {
+        TRAINER_CLASS_NAME_PACK_ID => class_name_structure(payload),
+        TRAINER_DEFEAT_SPEECH_PACK_ID => speech_structure(payload),
+        FIELD_MESSAGE_PACK_ID => field_message_structure(payload),
+        other => Err(format!("`{other}` has no structural check")),
+    }
 }
 
 /// A pack holding just `id` with `payload`, or none.
@@ -505,27 +574,42 @@ type PackDifferences = fn(
 
 #[test]
 fn the_reference_checks_catch_an_absent_corrupt_or_identically_wrong_entry() {
-    let cases: [(&str, Vec<u8>, PackDifferences); 2] = [
+    // Each case also names how far from the end of its payload a glyph sits
+    // that can be flipped and still leave a well-formed stream.
+    let cases: [(&str, Vec<u8>, PackDifferences, usize); 3] = [
         (
             TRAINER_CLASS_NAME_PACK_ID,
             synthetic_class_name_table(),
             trainer_class_name_differences,
+            // The first letter of class 64, whose name no other class shares.
+            16,
         ),
         (
             TRAINER_DEFEAT_SPEECH_PACK_ID,
             synthetic_speech_table(),
             trainer_defeat_speech_differences,
+            2,
+        ),
+        (
+            FIELD_MESSAGE_PACK_ID,
+            synthetic_field_message_table(),
+            field_message_differences,
+            5,
         ),
     ];
-    for (id, good, differences) in cases {
+    for (id, good, differences, glyph_from_end) in cases {
         let reference = Ok(good.clone());
         let (good_bytes, good_index) = single_entry_pack(id, Some(good.clone()));
         let (none_bytes, none_index) = single_entry_pack(id, None);
         let mut wrong = good.clone();
-        // A glyph both backends could misencode together: the last record's
-        // last glyph, still a well-formed stream.
-        let last = wrong.len() - 2;
-        wrong[last] ^= 0x01;
+        // A glyph both backends could misencode: still a well-formed stream.
+        let glyph = wrong.len() - glyph_from_end;
+        wrong[glyph] ^= 0x01;
+        assert_eq!(
+            structure_of(id, &wrong),
+            Ok(()),
+            "{id}: the flip must keep the stream well-formed"
+        );
         let (wrong_bytes, wrong_index) = single_entry_pack(id, Some(wrong));
 
         let same = differences(
@@ -554,6 +638,16 @@ fn the_reference_checks_catch_an_absent_corrupt_or_identically_wrong_entry() {
         );
         assert_eq!(one_corrupt.len(), 1, "{id}: {one_corrupt:?}");
         assert!(one_corrupt[0].contains("the checkout pack"));
+        assert!(one_corrupt[0].contains("other than the local checkout's"));
+        // The same flip in the ROM backend's payload fails just as surely.
+        let rom_corrupt = differences(
+            (&wrong_bytes, &wrong_index),
+            (&good_bytes, &good_index),
+            &reference,
+        );
+        assert_eq!(rom_corrupt.len(), 1, "{id}: {rom_corrupt:?}");
+        assert!(rom_corrupt[0].contains("the ROM backend"));
+        assert!(rom_corrupt[0].contains("other than the local checkout's"));
         // Equal packs are not enough: both wrong the same way still fails twice.
         let both_wrong = differences(
             (&wrong_bytes, &wrong_index),
@@ -692,14 +786,14 @@ fn the_rom_backend_matches_the_checkout_pack() {
         .collect();
     differences.extend(missing_from_either(&pinned, &imported, &checkout));
 
-    differences.extend(field_message_differences(
-        (&rom_bytes, &imported),
-        (&checkout_bytes, &checkout),
-    ));
-
     // Pinned against strings read from the local checkout, so a record both
     // backends drop or misencode together still fails.
     let reference = reference_checkout();
+    differences.extend(field_message_differences(
+        (&rom_bytes, &imported),
+        (&checkout_bytes, &checkout),
+        &reference_field_message_table(&reference),
+    ));
     differences.extend(trainer_defeat_speech_differences(
         (&rom_bytes, &imported),
         (&checkout_bytes, &checkout),
@@ -1398,33 +1492,6 @@ fn missing_from_either(
     differences
 }
 
-/// The `field-message/table` pin applied to each backend's pack, given as
-/// `(bytes, index)` pairs: named by id and bytes so a message both backends
-/// drop or misencode together still fails.
-fn field_message_differences(
-    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
-    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
-) -> Vec<String> {
-    let mut differences = Vec::new();
-    for (what, (bytes, entries)) in [
-        ("the ROM backend", imported),
-        ("the checkout pack", checkout),
-    ] {
-        let Some(entry) = entries.get(FIELD_MESSAGE_PACK_ID) else {
-            differences.push(format!(
-                "{FIELD_MESSAGE_PACK_ID}: {what} wrote no such entry"
-            ));
-            continue;
-        };
-        if bytes[entry.offset..entry.offset + entry.length] != FIELD_MESSAGE_TABLE {
-            differences.push(format!(
-                "{FIELD_MESSAGE_PACK_ID}: {what} wrote a payload other than gText_PkmnFainted_FldPsn"
-            ));
-        }
-    }
-    differences
-}
-
 /// The `pokeemerald/` checkout `cargo xtask extract` reads, at the repo root.
 fn reference_checkout() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1441,14 +1508,15 @@ fn read_reference(checkout: &Path, relative: &str) -> Result<String, String> {
 }
 
 /// Upstream text through the charmap, spelled here so no code under test
-/// vouches for it. Covers what the class names and Route 103 defeat speeches
-/// use: space `00`, `A`..`Z` from `BB`, `a`..`z` from `D5`, digits from `A1`,
-/// the punctuation below, `é` `1B`, `♂` `B5`, `♀` `B6`, `{PKMN}` `53 54`,
-/// `{PLAYER}` `FD 01`, `{KUN}` `FD 05`, `\n` `FE`, `\p` `FB`, `\l` `FA`, and
-/// `$` (`EOS`) `FF`.
+/// vouches for it. Covers what the class names, Route 103 defeat speeches, and
+/// the field message use: space `00`, `A`..`Z` from `BB`, `a`..`z` from `D5`,
+/// digits from `A1`, the punctuation below, `é` `1B`, `♂` `B5`, `♀` `B6`,
+/// `{PKMN}` `53 54`, `{STR_VAR_1}` `FD 02`, `{PLAYER}` `FD 01`, `{KUN}`
+/// `FD 05`, `\n` `FE`, `\p` `FB`, `\l` `FA`, and `$` (`EOS`) `FF`.
 fn spell(text: &str) -> Result<Vec<u8>, String> {
-    const MULTI: [(&str, &[u8]); 6] = [
+    const MULTI: [(&str, &[u8]); 7] = [
         ("{PKMN}", &[0x53, 0x54]),
+        ("{STR_VAR_1}", &[0xFD, 0x02]),
         ("{PLAYER}", &[0xFD, 0x01]),
         ("{KUN}", &[0xFD, 0x05]),
         ("\\n", &[0xFE]),
@@ -1624,6 +1692,37 @@ fn reference_trainer_defeat_speech_table(checkout: &Path) -> Result<Vec<u8>, Str
     Ok(record_table(*b"TDFS", &streams))
 }
 
+/// The text of the one `const u8 symbol[] = _("…");` line in `source`,
+/// spelled and `EOS`-terminated as the `_()` macro assembles it. Read line by
+/// line, matching the whole `symbol[]` so a longer symbol sharing the prefix is
+/// not taken, and failing on a missing, repeated, or multi-line definition.
+fn reference_c_string(source: &str, symbol: &str) -> Result<Vec<u8>, String> {
+    let head = format!("const u8 {symbol}[] = _(\"");
+    let mut found = None;
+    for line in source.lines() {
+        let Some(rest) = line.trim().strip_prefix(head.as_str()) else {
+            continue;
+        };
+        if found.is_some() {
+            return Err(format!("`{symbol}` is defined twice"));
+        }
+        let text = rest
+            .strip_suffix("\");")
+            .ok_or_else(|| format!("`{symbol}` is not one single-line literal"))?;
+        let mut stream = spell(text)?;
+        stream.push(0xFF);
+        found = Some(stream);
+    }
+    found.ok_or_else(|| format!("`{symbol}` is defined in no source"))
+}
+
+/// The `field-message/table` payload derived from the local checkout.
+fn reference_field_message_table(checkout: &Path) -> Result<Vec<u8>, String> {
+    let source = read_reference(checkout, FIELD_MESSAGE_SOURCE)?;
+    let stream = reference_c_string(&source, FIELD_MESSAGE_SYMBOL)?;
+    Ok(record_table(*b"FMSG", &[stream]))
+}
+
 /// Invariants of the class-name payload that carry no game text: it decodes,
 /// covers every class, keeps [`SHARED_CLASS_NAMES`] equal and every other
 /// class distinct, and the shared `{PKMN}` name begins with the two glyphs.
@@ -1686,6 +1785,14 @@ fn speech_structure(payload: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Invariants of the field-message payload that carry no game text: it
+/// decodes strictly, holding every inventory message as a well-formed string.
+fn field_message_structure(payload: &[u8]) -> Result<(), String> {
+    FieldMessageTable::decode(payload)
+        .map(drop)
+        .map_err(|err| err.to_string())
+}
+
 /// Each backend's `id` payload checked against `reference`, derived from the
 /// local checkout, and against `structure`: named by id and bytes so a
 /// record both backends drop, merge, reorder, or misencode together still
@@ -1724,6 +1831,20 @@ fn reference_differences(
         }
     }
     differences
+}
+
+fn field_message_differences(
+    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    reference: &Result<Vec<u8>, String>,
+) -> Vec<String> {
+    reference_differences(
+        FIELD_MESSAGE_PACK_ID,
+        imported,
+        checkout,
+        reference,
+        field_message_structure,
+    )
 }
 
 fn trainer_class_name_differences(

@@ -203,7 +203,7 @@ pub(super) fn scene(kind: BattleKind) -> Scene {
             let mut lose_text = text::decode(&template("Good battle!")).unwrap();
             lose_text.pop();
             Trainer {
-                class: text_tokens("YOUNGSTER"),
+                class: text_tokens("ZQVX"),
                 name: "BEN".to_owned(),
                 lose_text,
             }
