@@ -134,7 +134,7 @@ impl OverworldPhase {
     /// unlocks the controls: the walk goes through the player's normal step,
     /// and its landing is latched as held movement
     /// ([`Self::latch_escalator_walk_off_landing`]).
-    fn start_escalator_walk_off(&mut self) {
+    pub(super) fn start_escalator_walk_off(&mut self) {
         let mut walk_east = ButtonState::new();
         walk_east.update(Buttons::RIGHT);
         walk_east.update(Buttons::RIGHT);
