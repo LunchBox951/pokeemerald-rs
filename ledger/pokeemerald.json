@@ -21668,6 +21668,14 @@
       "status": "pending"
     },
     "include/constants/pokemon.h": {
+      "artifacts": {
+        "FRIENDSHIP_score_ids": {
+          "reason": "include/constants/pokemon.h:184-191: the seven GetLeadMonFriendshipScore result ids FRIENDSHIP_NONE (0), FRIENDSHIP_1_TO_49 (1), FRIENDSHIP_50_TO_99 (2), FRIENDSHIP_100_TO_149 (3), FRIENDSHIP_150_TO_199 (4), FRIENDSHIP_200_TO_254 (5) and FRIENDSHIP_MAX (6), as the explicit u8 discriminants of engine::field_specials::FriendshipScore, pinned by field_specials::tests::category_ids_match_the_upstream_constants. MAX_FRIENDSHIP (pokemon.h:196) is modelled only as the 255 arm of friendship_score; the FRIENDSHIP_EVENT_* ids above this block are not modelled.",
+          "rust_target": "crates/engine/src/field_specials.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -32627,6 +32635,12 @@
     },
     "src/field_specials.c": {
       "artifacts": {
+        "GetLeadMonFriendshipScore": {
+          "reason": "field_specials.c:949-966: the classifier half. engine::field_specials::friendship_score maps a friendship byte to FriendshipScore: 0 is FRIENDSHIP_NONE, 1-49, 50-99, 100-149, 150-199 and 200-254 are the middle categories, and 255 (MAX_FRIENDSHIP, pokemon.h:196) is FRIENDSHIP_MAX, with ids 0 to 6 as in include/constants/pokemon.h:184-191. It is a pure function of the byte, with no mutation and no RNG draw. Not modelled: GetLeadMonIndex's choice of lead Pokemon (field_specials.c:1531-1542, the first party slot that is neither an Egg nor empty, else slot 0), reading MON_DATA_FRIENDSHIP from the party, dispatching the special (crate::script::specials lists only its name) and the branching on its result in VerdanturfTown_FriendshipRatersHouse_EventScript_FriendshipRater (data/maps/VerdanturfTown_FriendshipRatersHouse/scripts.inc:4-16) and SlateportCity_PokemonFanClub_EventScript_SootheBellWoman (data/maps/SlateportCity_PokemonFanClub/scripts.inc:189-195). The special has a third caller, PacifidlogTown_House2 (data/maps/PacifidlogTown_House2/scripts.inc:13,15), also not modelled.",
+          "rust_target": "crates/engine/src/field_specials.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "IncrementBirthIslandRockStepCount": {
           "reason": "field_specials.c:3377-3387, called from ProcessPlayerFieldInput on tookStep right after IncrementGameStat(GAME_STAT_STEPS) and before TryStartStepBasedScript (field_control_avatar.c:155-160). OverworldPhase::increment_birth_island_rock_step_count, run from count_took_step, advances VAR_DEOXYS_ROCK_STEP_COUNT (vars.h:72, a saved event var) on MAP_BIRTH_ISLAND_EXTERIOR only, as a u16 wrapping increment that stores zero once the result passes 99, so a loaded value of 99 or more resets rather than climbing and 0xFFFF wraps to zero with no panic and no RNG draw. A landing a coord event or door-shaped warp then claims is still counted; the forced landing, the escalator arrival's held walk-off and an unfinished crossing are not (take_stepped_onto), as for GAME_STAT_STEPS. Not modelled: the rock movement and palette (SetDeoxysRockPalette, the Deoxys triangle scripts), the puzzle outcome, the Deoxys encounter and the trip to the island.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/birth_island_rock.rs",
