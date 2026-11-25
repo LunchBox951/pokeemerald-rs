@@ -63,6 +63,15 @@ const QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD: u16 = 80;
 const RESISTED_DRAIN_PENALTY_THRESHOLD: u16 = 50;
 const RESISTED_DRAIN_PENALTY: i8 = -3;
 const STAT_DROP_DISCOURAGEMENT_THRESHOLD: u16 = 50;
+/// The tie-break draw is `Random() & 1` (`src/battle_main.c:4745`).
+const SPEED_TIE_DRAW_MASK: u16 = 1;
+/// `AI_CV_SpeedUp` (`data/battle_ai_scripts.s:956`-`:965`): a slower target
+/// costs three points; a faster one rolls `if_random_less_than 70` for +3.
+const SPEED_UP_BONUS_THRESHOLD: u16 = 70;
+const SPEED_UP_BONUS: i8 = 3;
+const SPEED_UP_SLOWER_TARGET_PENALTY: i8 = -3;
+/// The one- and two-stage Speed raises, both routed to `AI_CV_SpeedUp`.
+const SPEED_RAISE_EFFECTS: [MoveEffect; 2] = [MoveEffect::SPEED_UP, MoveEffect::SPEED_UP_2];
 const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
 const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
 const DEFENSE_DROP_USER_HP_THRESHOLD: u32 = 70;
@@ -218,7 +227,8 @@ enum ScoreableEffect {
     UnchangedAfterPrologue(MoveEffect),
     /// Any other shared stat-stage label (see [`ai_stat_label`]). Its
     /// `AI_CheckViability` and `AI_SetupFirstTurn` branches are not ported,
-    /// except that Defense Curl has no viability branch.
+    /// except that Defense Curl has no viability branch and the Speed raises
+    /// have `AI_CV_SpeedUp`.
     StatLabel(MoveEffect, StatChangeEffect),
 }
 
@@ -275,6 +285,7 @@ impl ScoreableEffect {
             Self::StatLabel(effect, _) => {
                 return !flags.contains(AiFlags::SETUP_FIRST_TURN)
                     && (effect == MoveEffect::DEFENSE_CURL
+                        || SPEED_RAISE_EFFECTS.contains(&effect)
                         || !flags.contains(AiFlags::CHECK_VIABILITY));
             }
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
@@ -1090,6 +1101,9 @@ fn score_viability(
         ScoreableEffect::HighRiskForDamage => {
             return Err(BattleError::UnscoreableMoveEffect(move_id))
         }
+        ScoreableEffect::StatLabel(effect, _) if SPEED_RAISE_EFFECTS.contains(&effect) => {
+            score_speed_up_viability(scores, slot, user, target, rng);
+        }
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
         // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
@@ -1130,6 +1144,43 @@ fn score_always_hit_viability(
     };
     if rolls && random_roll_is_at_least(rng, ALWAYS_HIT_BONUS_THRESHOLD) {
         scores.adjust(slot, SLIGHTLY_ENCOURAGE);
+    }
+}
+
+/// `if_target_faster` (`asm/macros/battle_ai_script.inc:595`-`:597`), i.e.
+/// `GetWhoStrikesFirst(user, target, TRUE) == 1`
+/// (`src/battle_ai_script_commands.c:1268`-`:1273`). `ignoreChosenMoves` zeroes
+/// both moves, so priority never decides (`src/battle_main.c:4743`-`:4753`).
+/// An equal Speed draws once (`Random() & 1`, `:4745`) and neither
+/// result means "target faster": the draw selects between the user going first
+/// and upstream's third, tied outcome, so it is spent and discarded.
+fn target_is_faster(
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> bool {
+    let user_speed = user.speed_for_turn_order();
+    let target_speed = target.speed_for_turn_order();
+    if user_speed == target_speed {
+        let _ = rng.next_u16() & SPEED_TIE_DRAW_MASK;
+    }
+    user_speed < target_speed
+}
+
+/// `AI_CV_SpeedUp` (`data/battle_ai_scripts.s:661`, `:690`, `:956`-`:965`),
+/// shared by the one- and two-stage raises: a user that is not already
+/// outsped loses three; otherwise one roll of 70 or more gains three.
+fn score_speed_up_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if !target_is_faster(user, target, rng) {
+        scores.adjust(slot, SPEED_UP_SLOWER_TARGET_PENALTY);
+    } else if random_roll_is_at_least(rng, SPEED_UP_BONUS_THRESHOLD) {
+        scores.adjust(slot, SPEED_UP_BONUS);
     }
 }
 
@@ -2513,5 +2564,7 @@ mod leech_seed_tests;
 mod prologue_tests;
 #[cfg(test)]
 mod quick_attack_tests;
+#[cfg(test)]
+mod speed_raise_viability_tests;
 #[cfg(test)]
 mod stat_stage_tests;
