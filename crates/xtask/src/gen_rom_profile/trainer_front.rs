@@ -25,7 +25,7 @@ use rom_import::Encoding;
 use super::error::GenRomProfileError;
 use super::images::{locate_image_copies, ImageQuery};
 use super::inventory;
-use super::locate::{camel_case, only_one_matching, to_addr, u16_at_addr, u32_at_addr};
+use super::locate::{camel_case, only_one_matching, to_addr, to_offset, u16_at_addr, u32_at_addr};
 use super::plan::{
     PalettePlan, ReportLine, Resolution, SymbolExpectation, TrainerFrontPicPlan, TrainerFrontPlan,
 };
@@ -237,6 +237,14 @@ fn palette_plan(
 /// Find the one table of `table_rows` rows whose every trainer row points at
 /// that trainer's art; `rows` pairs each trainer's table index with the
 /// addresses its art may sit at.
+///
+/// A base outside the cartridge window is no candidate: it could not be
+/// emitted as a `GbaPtr`, whatever its rows read.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::StructMismatch`] if `rows` is empty or the rows do
+/// not pin exactly one base.
 pub(super) fn find_table(
     ctx: &Context<'_>,
     name: &'static str,
@@ -256,6 +264,7 @@ pub(super) fn find_table(
         .iter()
         .flat_map(|&art| ctx.pointers.refs_to(art).iter().copied())
         .filter_map(|at| at.checked_sub(first_bias))
+        .filter(|&base| to_offset(base).is_some())
         .collect();
     let base = only_one_matching(
         name,
