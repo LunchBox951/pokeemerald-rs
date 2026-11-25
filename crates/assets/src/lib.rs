@@ -23,7 +23,8 @@
 //! normal-ribbon description lines (see [`ribbon_descriptions`]), the Battle
 //! Factory move-style lists and required counts (see
 //! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
-//! [`battle_pike_wild_mons`]), the Battle Pyramid floor-item and Pickup
+//! [`battle_pike_wild_mons`]), the Battle Pike room hint and Queen-healing
+//! tables (see [`battle_pike_rooms`]), the Battle Pyramid floor-item and Pickup
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
 //! starting positions (see [`slot_machine_reels`]), the region-map section
@@ -62,6 +63,7 @@ pub mod battle_anim;
 pub mod battle_factory_styles;
 pub mod battle_moves;
 pub mod battle_palace;
+pub mod battle_pike_rooms;
 pub mod battle_pike_wild_mons;
 pub mod battle_pyramid_items;
 pub mod berries;
@@ -131,6 +133,10 @@ pub use battle_moves::{
 pub use battle_palace::{
     battle_palace_flavor_text, battle_palace_move_group_likelihood, battle_palace_move_target,
     BattlePalaceError, MoveGroupLikelihood, PalaceFlavorText, PalaceTarget, NATURES_COUNT,
+};
+pub use battle_pike_rooms::{
+    queen_heal_count, room_hint, PikeHint, PikeRoomError, PikeRoomType, PIKE_QUEEN_HEAL_ROWS,
+    PIKE_ROOM_POSITIONS, PIKE_ROOM_TYPES,
 };
 pub use battle_pike_wild_mons::{
     pike_header, pike_wild_mon, PikeLevelDecrement, PikeLevelMode, PikeWildMon, PikeWildMonError,
