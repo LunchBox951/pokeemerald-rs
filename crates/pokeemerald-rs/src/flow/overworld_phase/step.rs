@@ -651,15 +651,12 @@ impl OverworldPhase {
         self.sync_saved_position();
     }
 
-    /// Bumps `GAME_STAT_STEPS` for this frame's `tookStep` landing
-    /// (`field_control_avatar.c:116-118`), ahead of
-    /// `TryStartStepBasedScript`'s coord event, door warp and step scripts
-    /// (`:155-163`), so a landing those then claim still counts.
-    /// [`Self::take_stepped_onto`] already withholds the forced landing and
-    /// the escalator arrival's held walk-off, neither of which sets `tookStep`.
+    /// `IncrementGameStat(GAME_STAT_STEPS)` and `IncrementBirthIslandRockStepCount`
+    /// (`field_control_avatar.c:116-118,155-160`); a landing a later step script claims still counts.
     fn count_took_step(&mut self, stepped_onto: Option<TilePos>) {
         if stepped_onto.is_some() {
             self.save1.game_stats.increment(GameStat::Steps);
+            self.increment_birth_island_rock_step_count();
         }
     }
 

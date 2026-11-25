@@ -28,9 +28,12 @@
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
 //! starting positions (see [`slot_machine_reels`]), the region-map section
 //! grid (see [`region_map_layout`]), the Battle Palace per-nature
-//! move-group, target and flavor tables (see [`battle_palace`]), and the Easy
-//! Chat Events word group (see [`easy_chat_events`]); more data follows as
-//! the crate fills out.
+//! move-group, target and flavor tables (see [`battle_palace`]), the Easy Chat
+//! Events word group (see [`easy_chat_events`]), the facility-class portrait
+//! and trainer-class lookups (see [`facility_classes`]), the four NPC trade
+//! offers with their mail messages (see [`ingame_trades`]), and the Lilycove
+//! Lady quiz, favor, and contest data (see [`lilycove_lady`]); more data
+//! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
 //! audio-extraction backends emit into (S-4) live in [`audio`].
@@ -54,6 +57,7 @@
 pub mod abilities;
 pub mod arena_mind_ratings;
 pub mod audio;
+pub mod bard_events;
 pub mod battle_anim;
 pub mod battle_factory_styles;
 pub mod battle_moves;
@@ -62,6 +66,7 @@ pub mod battle_pike_wild_mons;
 pub mod battle_pyramid_items;
 pub mod berries;
 pub mod bundled_overworld;
+pub mod credits;
 pub mod decorations;
 pub mod easy_chat;
 pub mod easy_chat_events;
@@ -71,11 +76,15 @@ pub mod error;
 pub mod event_scripts;
 pub mod evolution;
 pub mod experience;
+pub mod facility_classes;
 pub mod fonts;
+pub mod frontier_exchange_corner;
 pub mod hidden_item_flags;
+pub mod ingame_trades;
 pub mod items;
 pub mod keypad_icons;
 pub mod level_up_learnsets;
+pub mod lilycove_lady;
 pub mod map_events;
 pub mod map_headers;
 pub mod map_layouts;
@@ -114,6 +123,7 @@ pub use audio::{
     ProgrammableWaveVoice, RhythmVoice, Sample, SampleId, Song, SongEvent, Square1Voice,
     Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId, MAX_TRACKS, VOICE_SLOT_COUNT,
 };
+pub use bard_events::{BardEventsError, BardSlot, BardSoundTemplate, EventsBardTemplates};
 pub use battle_factory_styles::{FactoryStyle, FACTORY_LISTED_STYLE_COUNT};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
@@ -144,13 +154,26 @@ pub use enemy_elevation::{enemy_elevation, ENEMY_ELEVATED_SPECIES_COUNT};
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 pub use experience::{experience_for_level, MAX_LEVEL};
+pub use facility_classes::{
+    facility_class_to_pic_index, facility_class_to_trainer_class, FacilityClass,
+    FacilityClassError, FACILITY_CLASSES_COUNT,
+};
 pub use fonts::{
     FontGlyphSheet, FontId, FontImageRef, Glyph, GlyphSource, GlyphSources, OwnedFontGlyphSheet,
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
     SHEET_HEIGHT, SHEET_WIDTH,
 };
+pub use ingame_trades::{
+    InGameTrade, InGameTradeError, InGameTradeId, InGameTradeMail, InGameTradeTable, TradeOtGender,
+    INGAME_TRADES_COUNT, INGAME_TRADE_MAIL_COUNT, INGAME_TRADE_MAIL_WORDS_COUNT,
+};
 pub use keypad_icons::KeypadIconSheet;
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
+pub use lilycove_lady::{
+    ContestCategory, ContestLadyRecord, FavorLadyRequest, LilycoveLadyData, LilycoveLadyError,
+    LilycoveLadyKind, QuizLadyQuiz, CONTEST_CATEGORY_COUNT, EC_EMPTY_WORD, FAVOR_REQUEST_COUNT,
+    LILYCOVE_LADY_COUNT, QUIZ_COUNT, QUIZ_QUESTION_LEN,
+};
 pub use map_events::{
     BgEvent, BgEventKind, CoordEvent, CoordEventKind, CoordWeather, FacingDirection, MapEvents,
     MapEventsTable, MovementType, ObjectEvent, SecretBaseId, TrainerType, WarpDestination,

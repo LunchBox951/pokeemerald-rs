@@ -209,6 +209,14 @@ impl Oscillator {
         }
     }
 
+    /// Undoes the admitted pitch's retime of an inherited square clock before
+    /// the first pass writes its own pitch; a no-op otherwise.
+    pub(super) fn rewind_inherited_clock(&mut self) {
+        if let Self::Square(square) = self {
+            square.rewind_to_predecessor_clock();
+        }
+    }
+
     /// Plays the replacement's note-on writes against the noise or square
     /// predecessor it inherited; a no-op otherwise.
     pub(super) fn commit_initial_writes(&mut self, retires_on_first_pass: bool) {
