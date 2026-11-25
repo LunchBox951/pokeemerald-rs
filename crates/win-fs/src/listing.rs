@@ -42,12 +42,10 @@ impl DirectoryEntry {
 ///
 /// Never in practice: the 64 KiB listing buffer's size fits in `u32`.
 pub fn list_directory_by_file_id(dir: &std::fs::File) -> std::io::Result<Vec<DirectoryEntry>> {
-    use std::os::windows::ffi::OsStringExt as _;
     use std::os::windows::io::AsRawHandle as _;
     use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
     use windows_sys::Win32::Storage::FileSystem::{
         FileIdExtdDirectoryInfo, FileIdExtdDirectoryRestartInfo, GetFileInformationByHandleEx,
-        FILE_ID_EXTD_DIR_INFO,
     };
 
     // `u64` elements keep the buffer 8-aligned, as the entries require.
@@ -56,7 +54,15 @@ pub fn list_directory_by_file_id(dir: &std::fs::File) -> std::io::Result<Vec<Dir
     let mut class = FileIdExtdDirectoryRestartInfo;
     let mut entries = Vec::new();
     loop {
-        // SAFETY: `dir` stays open for this call and `buffer` is `size` bytes.
+        // SAFETY: no safe form exists: neither `std` nor an approved
+        // `windows-sys` feature lists a directory through its handle by file
+        // ID, and this call is the only way to ask. It is sound because
+        // `dir` is a live `File`, so `as_raw_handle` is a valid open handle
+        // for the whole call, and `buffer` is a live, exclusively borrowed
+        // allocation of exactly `size` bytes, 8-aligned as the class
+        // requires, that the call may write up to `size` bytes into and keeps
+        // no pointer to afterwards. Everything it wrote is read back through
+        // the bounds-checked `walk_records`, not trusted.
         let ok = unsafe {
             GetFileInformationByHandleEx(
                 dir.as_raw_handle(),
@@ -77,41 +83,83 @@ pub fn list_directory_by_file_id(dir: &std::fs::File) -> std::io::Result<Vec<Dir
             return Err(error);
         }
         class = FileIdExtdDirectoryInfo;
-        let base = buffer.as_ptr().cast::<u8>();
-        let mut offset = 0usize;
-        loop {
-            #[expect(
-                clippy::cast_ptr_alignment,
-                reason = "the buffer is 8-aligned and the system 8-aligns each record"
-            )]
-            // SAFETY: the call above filled `buffer` with a chain of
-            // `FILE_ID_EXTD_DIR_INFO` records, each 8-aligned and ending
-            // within it; `NextEntryOffset` is zero on the last one.
-            let (next, attributes, file_id, name) = unsafe {
-                let record = base.add(offset).cast::<FILE_ID_EXTD_DIR_INFO>();
-                let name_at = base
-                    .add(offset + std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, FileName))
-                    .cast::<u16>();
-                let units = usize::try_from((*record).FileNameLength).unwrap_or(0) / 2;
-                (
-                    (*record).NextEntryOffset,
-                    (*record).FileAttributes,
-                    (*record).FileId.Identifier,
-                    std::ffi::OsString::from_wide(std::slice::from_raw_parts(name_at, units)),
-                )
-            };
-            if name != "." && name != ".." {
-                entries.push(DirectoryEntry {
-                    name,
-                    file_id,
-                    attributes,
-                });
-            }
-            if next == 0 {
-                break;
-            }
-            offset += usize::try_from(next).unwrap_or(usize::MAX);
+        walk_records(&buffer, &mut entries).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "a directory listing record lies outside the listing buffer",
+            )
+        })?;
+    }
+}
+
+/// The `N` bytes of `buffer`, read in memory order, starting at byte `at`;
+/// `None` unless all of them lie inside it. Reading through `u64` elements
+/// keeps the walk in safe code: no pointer is cast to a record type, so no
+/// alignment or length is assumed.
+fn field<const N: usize>(buffer: &[u64], at: usize) -> Option<[u8; N]> {
+    let mut bytes = [0u8; N];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        let index = at.checked_add(i)?;
+        *byte = *buffer.get(index / 8)?.to_ne_bytes().get(index % 8)?;
+    }
+    Some(bytes)
+}
+
+/// Appends the entries of the `FILE_ID_EXTD_DIR_INFO` chain the system wrote
+/// at the start of `buffer`, other than `.` and `..`. `None` when any record,
+/// or the name it claims, does not lie wholly inside `buffer`; entries
+/// appended before that point stay. Every offset and length is checked
+/// against `buffer` before it is read, and `NextEntryOffset` is zero on the
+/// last record, so the walk ends at the end of the chain or the buffer,
+/// whichever comes first.
+fn walk_records(buffer: &[u64], entries: &mut Vec<DirectoryEntry>) -> Option<()> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ID_EXTD_DIR_INFO;
+
+    let mut offset = 0usize;
+    loop {
+        let at = |field_offset: usize| offset.checked_add(field_offset);
+        let next = u32::from_ne_bytes(field(
+            buffer,
+            at(std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, NextEntryOffset))?,
+        )?);
+        let attributes = u32::from_ne_bytes(field(
+            buffer,
+            at(std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, FileAttributes))?,
+        )?);
+        let name_bytes = usize::try_from(u32::from_ne_bytes(field(
+            buffer,
+            at(std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, FileNameLength))?,
+        )?))
+        .ok()?;
+        let file_id = field(
+            buffer,
+            at(std::mem::offset_of!(
+                FILE_ID_EXTD_DIR_INFO,
+                FileId.Identifier
+            ))?,
+        )?;
+        let name_at = at(std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, FileName))?;
+        // The name must end inside the buffer before it is read, so a bad
+        // length cannot size an allocation.
+        if name_at.checked_add(name_bytes)? > buffer.len() * 8 {
+            return None;
         }
+        let units = (0..name_bytes / 2)
+            .map(|unit| field(buffer, name_at + unit * 2).map(u16::from_ne_bytes))
+            .collect::<Option<Vec<u16>>>()?;
+        let name = std::ffi::OsString::from_wide(&units);
+        if name != "." && name != ".." {
+            entries.push(DirectoryEntry {
+                name,
+                file_id,
+                attributes,
+            });
+        }
+        if next == 0 {
+            return Some(());
+        }
+        offset = offset.checked_add(usize::try_from(next).ok()?)?;
     }
 }
 
@@ -132,7 +180,13 @@ pub fn volume_supports_open_by_file_id(handle: &std::fs::File) -> std::io::Resul
     const FILE_SUPPORTS_OPEN_BY_FILE_ID: u32 = 0x0100_0000;
 
     let mut flags = 0u32;
-    // SAFETY: `handle` stays open for this call, `flags` is an out parameter, and every other buffer is null with a zero size.
+    // SAFETY: no safe form exists: `std` does not expose volume flags, and
+    // the approved `windows-sys` features offer this call only as `unsafe`.
+    // It is sound because `handle` is a live `File`, so `as_raw_handle` is a
+    // valid open handle for the whole call; `flags` is a live `u32` the call
+    // writes through `&raw mut flags` and keeps no pointer to; and every
+    // other pointer is null with a zero size, which the API defines as "do
+    // not return this field".
     let ok = unsafe {
         GetVolumeInformationByHandleW(
             handle.as_raw_handle(),
@@ -153,7 +207,7 @@ pub fn volume_supports_open_by_file_id(handle: &std::fs::File) -> std::io::Resul
 
 #[cfg(test)]
 mod tests {
-    use super::list_directory_by_file_id;
+    use super::{list_directory_by_file_id, walk_records, DirectoryEntry};
     use crate::{
         delete_through_handle, delete_through_handle_ignoring_read_only, open_for_verified_delete,
         wide_file_id, VerifiedRemoval,
@@ -168,6 +222,91 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
         dir
+    }
+
+    /// Writes `bytes` at byte `at` of `buffer`, in memory order.
+    fn put(buffer: &mut [u64], at: usize, bytes: &[u8]) {
+        for (i, byte) in bytes.iter().enumerate() {
+            let index = at + i;
+            let mut word = buffer[index / 8].to_ne_bytes();
+            word[index % 8] = *byte;
+            buffer[index / 8] = u64::from_ne_bytes(word);
+        }
+    }
+
+    /// Writes one `FILE_ID_EXTD_DIR_INFO` record for `name` at `at`, claiming
+    /// `name_bytes` of name and `next` as the distance to the next record.
+    fn put_record(buffer: &mut [u64], at: usize, name: &str, name_bytes: u32, next: u32, id: u8) {
+        use windows_sys::Win32::Storage::FileSystem::FILE_ID_EXTD_DIR_INFO;
+        let field = |offset: usize| at + offset;
+        put(
+            buffer,
+            field(std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, NextEntryOffset)),
+            &next.to_ne_bytes(),
+        );
+        put(
+            buffer,
+            field(std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, FileAttributes)),
+            &0x10u32.to_ne_bytes(),
+        );
+        put(
+            buffer,
+            field(std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, FileNameLength)),
+            &name_bytes.to_ne_bytes(),
+        );
+        put(
+            buffer,
+            field(std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, FileId)),
+            &[id; 16],
+        );
+        let units: Vec<u8> = name.encode_utf16().flat_map(u16::to_ne_bytes).collect();
+        put(
+            buffer,
+            field(std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, FileName)),
+            &units,
+        );
+    }
+
+    /// A well-formed chain yields its entries without `.` and `..`.
+    #[test]
+    fn a_record_chain_is_read_without_the_dot_entries() {
+        let mut buffer = vec![0u64; 64];
+        put_record(&mut buffer, 0, ".", 2, 128, 1);
+        put_record(&mut buffer, 128, "..", 4, 128, 2);
+        put_record(&mut buffer, 256, "a.txt", 10, 0, 3);
+        let mut entries = Vec::new();
+        assert_eq!(walk_records(&buffer, &mut entries), Some(()));
+        assert_eq!(
+            entries,
+            [DirectoryEntry {
+                name: "a.txt".into(),
+                file_id: [3; 16],
+                attributes: 0x10,
+            }]
+        );
+    }
+
+    /// A name that claims to run past the buffer is refused, not read.
+    #[test]
+    fn a_name_past_the_buffer_is_refused() {
+        let mut buffer = vec![0u64; 16];
+        put_record(&mut buffer, 0, "a", u32::MAX, 0, 1);
+        assert_eq!(walk_records(&buffer, &mut Vec::new()), None);
+        let mut buffer = vec![0u64; 16];
+        put_record(&mut buffer, 0, "a", 128 - 88 + 2, 0, 1);
+        assert_eq!(walk_records(&buffer, &mut Vec::new()), None);
+    }
+
+    /// A next-entry offset that leaves the buffer, or leaves too little of it
+    /// for a record header, is refused.
+    #[test]
+    fn a_next_offset_past_the_buffer_is_refused() {
+        let mut buffer = vec![0u64; 16];
+        put_record(&mut buffer, 0, "a", 2, u32::MAX, 1);
+        assert_eq!(walk_records(&buffer, &mut Vec::new()), None);
+        let mut buffer = vec![0u64; 16];
+        put_record(&mut buffer, 0, "a", 2, 124, 1);
+        assert_eq!(walk_records(&buffer, &mut Vec::new()), None);
     }
 
     /// Each listed entry carries the 128-bit ID a handle opened by its name
