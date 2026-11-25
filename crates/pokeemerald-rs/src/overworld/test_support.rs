@@ -923,6 +923,50 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
     sprite_paths: &[&str],
     with_tall_grass: bool,
 ) {
+    let entries = route101_oldale_entries(oldale_specials, sprite_paths, with_tall_grass);
+    write_scratch_exclusive(path, write_synthetic_pack(entries));
+}
+
+/// The bytes of [`write_route101_oldale_layout_pack_with`]'s pack (with the tall-grass sheet) where
+/// Route 101's cells at `route101_grass` hold the metatile Oldale's tileset decodes as
+/// `MB_TALL_GRASS`, so the same tiles read as tall grass from Oldale's connected band. The caller
+/// claims a scratch file for the bytes.
+pub(crate) fn route101_oldale_pack_bytes_with_route101_grass(
+    oldale_specials: &[((u16, u16), u8)],
+    route101_grass: &[(u16, u16)],
+    sprite_paths: &[&str],
+) -> Vec<u8> {
+    // The grass metatile follows `oldale_specials`' own, and sits on Oldale's `(0, 0)`.
+    let grass_metatile = FIRST_SPECIAL_METATILE_ID
+        + u16::try_from(oldale_specials.len()).expect("a fixture has few special tiles");
+    let specials: Vec<_> = oldale_specials
+        .iter()
+        .copied()
+        .chain([((0, 0), engine::overworld::metatile_behavior::MB_TALL_GRASS)])
+        .collect();
+    let mut entries = route101_oldale_entries(&specials, sprite_paths, true);
+    let grid = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/route101/map")
+        .expect("the fixture carries Route 101's layout");
+    let cell = assets::MetatileCell {
+        metatile_id: grass_metatile,
+        collision: 0,
+        elevation: WALKABLE_ELEVATION,
+    }
+    .pack();
+    for &(x, y) in route101_grass {
+        let idx = (usize::from(y) * 20 + usize::from(x)) * 2;
+        grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    }
+    write_synthetic_pack(entries)
+}
+
+fn route101_oldale_entries(
+    oldale_specials: &[((u16, u16), u8)],
+    sprite_paths: &[&str],
+    with_tall_grass: bool,
+) -> Vec<Entry> {
     let rename = |mut e: Entry, layout: &str| {
         if e.id == "layout/map_test/map" {
             e.id = format!("layout/{layout}/map");
@@ -965,7 +1009,7 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
     if with_tall_grass {
         entries.extend(tall_grass_entries());
     }
-    write_scratch_exclusive(path, write_synthetic_pack(entries));
+    entries
 }
 
 /// Writes a synthetic pack at `path` that loads the *real* bundled
