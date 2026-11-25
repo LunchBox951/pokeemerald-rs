@@ -64,7 +64,7 @@ use platform::{ButtonState, Buttons, Frame};
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroScene, IntroStatus};
 use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
-use crate::new_game::NewGameOptions;
+use crate::new_game::{NewGameOptions, RngSeedSource};
 use crate::title::TitleScene;
 use fade_wait::{
     advance_main_menu, advance_main_menu_fade_in, advance_main_menu_fade_wait, advance_title,
@@ -164,6 +164,9 @@ mod save_continue_warp_tests;
 /// `#[ignore]`d real-pack lane for continue-time room loading, warps and gender.
 #[cfg(test)]
 mod save_continue_real_pack_tests;
+/// `#[ignore]`d real-pack lane for the session RNG seed reaching a new game and a continue.
+#[cfg(test)]
+mod session_seed_real_pack_tests;
 
 /// Legacy/malformed-save migrations on continue: facing, elevation, heal
 /// location, and fainted-lead fallbacks.
@@ -654,11 +657,16 @@ fn load_menu_for(
 /// own pack loads -- and, for the `Overworld` arm, into the
 /// [`OverworldPhase`] it builds, which retains it for every load *it*
 /// performs afterwards (`crate::pack_source`'s own module docs).
-pub(crate) fn advance_scene(
+///
+/// `seeds` is where a new game's and a continue's RNG seed comes from
+/// ([`RngSeedSource`]): [`App`](crate::App) holds one for the whole session,
+/// varying for a real window and fixed for a headless scenario.
+pub(crate) fn advance_scene_seeded(
     scene: AppScene,
     buttons: ButtonState,
     save_slot: &mut SaveSlot,
     pack_source: crate::pack_source::PackSource,
+    seeds: RngSeedSource,
 ) -> (AppScene, Box<Frame>) {
     // `ReadKeys` (`pokeemerald/src/main.c:279-288`) applies the saved L=A
     // mode before any scene reads input, so the projection lives here, ahead
@@ -677,7 +685,7 @@ pub(crate) fn advance_scene(
             let frame = state.scene.compose_frame();
             (AppScene::MainMenu(state), frame)
         }
-        AppScene::MainMenuFadeWait(wait) => advance_main_menu_fade_wait(wait, pack_source),
+        AppScene::MainMenuFadeWait(wait) => advance_main_menu_fade_wait(wait, pack_source, seeds),
         AppScene::Options(state) => advance_options(state, buttons, &pack_source),
         AppScene::MainMenuFadeIn(fade) => advance_main_menu_fade_in(fade),
         // Issue #393: B is an ordinary dialogue-advance button here, not a
@@ -686,10 +694,11 @@ pub(crate) fn advance_scene(
             let status = intro_scene.tick(intro_printer_input(buttons));
 
             if status == IntroStatus::Finished {
-                match OverworldPhase::load(
+                match OverworldPhase::load_seeded(
                     pack_source,
                     intro_scene.new_game_options(),
                     intro_scene.new_game_identity(),
+                    seeds.draw(),
                 ) {
                     Ok(phase) => {
                         log_new_game_started(&phase);
@@ -715,10 +724,11 @@ pub(crate) fn advance_scene(
         }
         AppScene::OverworldLoadFailed(intro_scene) => {
             if should_retry_overworld_load(buttons) {
-                match OverworldPhase::load(
+                match OverworldPhase::load_seeded(
                     pack_source,
                     intro_scene.new_game_options(),
                     intro_scene.new_game_identity(),
+                    seeds.draw(),
                 ) {
                     Ok(phase) => {
                         log_new_game_started(&phase);
@@ -749,6 +759,19 @@ pub(crate) fn advance_scene(
             (AppScene::Overworld(phase), frame)
         }
     }
+}
+
+/// [`advance_scene_seeded`] with the fixed [`RngSeedSource::FIXED`] seed, so
+/// every test that drives a new game or a continue through it stays
+/// deterministic.
+#[cfg(test)]
+pub(crate) fn advance_scene(
+    scene: AppScene,
+    buttons: ButtonState,
+    save_slot: &mut SaveSlot,
+    pack_source: crate::pack_source::PackSource,
+) -> (AppScene, Box<Frame>) {
+    advance_scene_seeded(scene, buttons, save_slot, pack_source, RngSeedSource::FIXED)
 }
 
 #[cfg(test)]

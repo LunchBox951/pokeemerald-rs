@@ -5,7 +5,8 @@
 
 use super::connections::MapConnections;
 use super::tall_grass_tests::{
-    grass_entries, route_101_phase_crossing_into_oldale, shown_image, LANDING_X, OLDALE_TOWN,
+    grass_entries, route_101_phase_crossing_into_oldale,
+    route_101_phase_crossing_into_oldale_with_grass, shown_image, LANDING_X, OLDALE_TOWN,
     ROUTE_101,
 };
 use super::test_support::*;
@@ -48,8 +49,18 @@ fn idle(phase: &mut OverworldPhase, frames: usize) {
 fn route_101_with_live_npcs(
     npcs: Vec<ObjectEvent>,
 ) -> (OverworldPhase, &'static [ObjectEvent], std::path::PathBuf) {
-    let (mut phase, path) =
-        route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
+    route_101_with_live_npcs_on_grass(npcs, &[])
+}
+
+/// [`route_101_with_live_npcs`] whose pack has tall grass on Route 101's `grass` cells.
+fn route_101_with_live_npcs_on_grass(
+    npcs: Vec<ObjectEvent>,
+    grass: &[(u16, u16)],
+) -> (OverworldPhase, &'static [ObjectEvent], std::path::PathBuf) {
+    let (mut phase, path) = route_101_phase_crossing_into_oldale_with_grass(
+        engine::overworld::metatile_behavior::MB_NORMAL,
+        grass,
+    );
     let templates: &'static [ObjectEvent] = Box::leak(npcs.into_boxed_slice());
     phase.object_events = ObjectEventCollection::from_templates(templates);
     idle(&mut phase, 1);
@@ -424,7 +435,7 @@ fn route_101_with_npcs_on_grass(
     npcs: Vec<ObjectEvent>,
     grass: &[(u16, u16)],
 ) -> (OverworldPhase, &'static [ObjectEvent], std::path::PathBuf) {
-    let (mut phase, templates, path) = route_101_with_live_npcs(npcs);
+    let (mut phase, templates, path) = route_101_with_live_npcs_on_grass(npcs, grass);
     let specials: Vec<_> = grass
         .iter()
         .map(|&tile| (tile, MB_TALL_GRASS, GROUND))
@@ -490,8 +501,10 @@ fn a_lone_carried_npc_keeps_its_settled_grass_effect() {
 /// (`DoGroundEffects_OnSpawn`, `event_object_movement.c:8078-8096`).
 #[test]
 fn a_crossing_on_the_first_frame_carries_an_in_view_npcs_settled_grass_effect() {
-    let (mut phase, path) =
-        route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
+    let (mut phase, path) = route_101_phase_crossing_into_oldale_with_grass(
+        engine::overworld::metatile_behavior::MB_NORMAL,
+        &[(13, 4)],
+    );
     phase.scene = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(
         20,
         20,
@@ -512,8 +525,10 @@ fn a_crossing_on_the_first_frame_carries_an_in_view_npcs_settled_grass_effect() 
 /// the admission, and the NPC still gets its spawn-time pass before the input ends the visit.
 #[test]
 fn a_first_frame_crossing_carries_the_grass_effect_of_an_npc_admitted_at_map_load() {
-    let (mut phase, path) =
-        route_101_phase_crossing_into_oldale(engine::overworld::metatile_behavior::MB_NORMAL);
+    let (mut phase, path) = route_101_phase_crossing_into_oldale_with_grass(
+        engine::overworld::metatile_behavior::MB_NORMAL,
+        &[(13, 4)],
+    );
     phase.scene = crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(
         20,
         20,
@@ -635,7 +650,7 @@ fn return_step(phase: &OverworldPhase) -> StepOutcome {
         pack: &phase.connection_pack,
         source: phase.pack_source.clone(),
         departed: phase.map_id,
-        departed_objects: &phase.object_events,
+        departed_objects: Some(&phase.object_events),
     };
     let mut probe = phase.player;
     probe.step(
@@ -731,4 +746,100 @@ fn a_carried_npc_on_the_landing_tile_refuses_the_crossing() {
     assert_eq!(phase.player.position(), (LANDING_X, 0));
     assert!(entry_of(&phase, &templates[0]).is_active());
     assert_eq!(entry_of(&phase, &templates[0]).carried_from(), None);
+}
+
+/// A carried NPC's ground-effect passes read the backup layout like the scheduler's terrain does
+/// (`MapGridGetMetatileBehaviorAt`, `fieldmap.c:121-314,375-388`; `DoGroundEffects_OnBeginStep`,
+/// `event_object_movement.c:8098-8116`; `UpdateTallGrassFieldEffect`,
+/// `field_effect_helpers.c:324-337`). Oldale's south band holds Route 101's north rows, decoded by
+/// Oldale's tileset: Route 101's `(13, 5)` is `(13, 25)` there, and reads as tall grass.
+#[test]
+fn a_carried_npc_stepping_onto_band_tall_grass_rustles_for_the_whole_animation() {
+    const BAND_GRASS: (i32, i32) = (13, 25);
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-band-grass-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _pack = crate::pack_test_support::ScratchClaim::claim_with(
+        path.clone(),
+        crate::overworld::test_support::route101_oldale_pack_bytes_with_route101_grass(
+            &[],
+            &[(13, 5)],
+            &super::tall_grass_tests::CROSSING_SPRITES,
+        ),
+    );
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::test_support::synthetic_scene_with_tall_grass_sprites(20, 20, &[]),
+        ROUTE_101,
+        engine::overworld::PlayerState::new((LANDING_X, 0), GROUND, Direction::North),
+        None,
+    );
+    phase.pack_source = crate::pack_source::PackSource::Test(Box::leak(path.into_boxed_path()));
+    let templates: &'static [ObjectEvent] = Box::leak(vec![npc(9, 13, 4)].into_boxed_slice());
+    phase.object_events = ObjectEventCollection::from_templates(templates);
+    idle(&mut phase, 1);
+    cross_north(&mut phase);
+    idle(&mut phase, 3);
+    assert_eq!(
+        entry_of(&phase, &templates[0]).state().position(),
+        (13, 24),
+        "fixture precondition: the NPC stands in Oldale's south band"
+    );
+    assert_eq!(phase.scene.tall_grass_effect_count(), 0);
+    let maps = MapConnections {
+        pack: &phase.connection_pack,
+        source: phase.pack_source.clone(),
+        departed: phase.map_id,
+        departed_objects: None,
+    };
+    assert_eq!(
+        phase
+            .scene
+            .runtime()
+            .metatile_behavior_in_band(BAND_GRASS.0, BAND_GRASS.1, &maps),
+        Some(MB_TALL_GRASS),
+        "fixture precondition: the band tile decodes as tall grass"
+    );
+
+    phase
+        .object_events
+        .find_mut(Some(ROUTE_101), 9)
+        .unwrap()
+        .state_mut()
+        .walk(Direction::South);
+    idle(&mut phase, 1);
+    assert_eq!(
+        entry_of(&phase, &templates[0]).state().position(),
+        BAND_GRASS,
+        "fixture precondition: the NPC stepped onto the band tile"
+    );
+    assert_eq!(shown_image(&phase), 1, "the step began a rustle");
+    idle(&mut phase, 15);
+    assert_eq!(
+        shown_image(&phase),
+        2,
+        "the rustle plays on past its first image"
+    );
+    idle(&mut phase, 60);
+    assert_eq!(
+        phase.scene.tall_grass_effect_count(),
+        1,
+        "the owner still stands on the grass"
+    );
+
+    for _ in 0..2 {
+        phase
+            .object_events
+            .find_mut(Some(ROUTE_101), 9)
+            .unwrap()
+            .state_mut()
+            .walk(Direction::North);
+        idle(&mut phase, 30);
+    }
+    assert_eq!(
+        phase.scene.tall_grass_effect_count(),
+        0,
+        "the rustle ends once its owner has left and the animation has finished"
+    );
 }
