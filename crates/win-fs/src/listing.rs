@@ -267,7 +267,6 @@ mod tests {
         );
     }
 
-    /// A well-formed chain yields its entries without `.` and `..`.
     #[test]
     fn a_record_chain_is_read_without_the_dot_entries() {
         let mut buffer = vec![0u64; 64];
@@ -286,7 +285,7 @@ mod tests {
         );
     }
 
-    /// A name that claims to run past the buffer is refused, not read.
+    /// The second length ends two bytes past the 128-byte buffer (88 + 42).
     #[test]
     fn a_name_past_the_buffer_is_refused() {
         let mut buffer = vec![0u64; 16];
@@ -297,8 +296,7 @@ mod tests {
         assert_eq!(walk_records(&buffer, &mut Vec::new()), None);
     }
 
-    /// A next-entry offset that leaves the buffer, or leaves too little of it
-    /// for a record header, is refused.
+    /// Offset 124 leaves room for the first four bytes of a header only.
     #[test]
     fn a_next_offset_past_the_buffer_is_refused() {
         let mut buffer = vec![0u64; 16];
