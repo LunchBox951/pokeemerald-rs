@@ -535,6 +535,9 @@ fn a_first_frame_crossing_carries_the_grass_effect_of_an_npc_admitted_at_map_loa
     assert_eq!(after, (1, Some(0)));
 }
 
+/// Frames the rustle gets to reach image 2; a frozen animation fails instead of spinning.
+const RUSTLE_FRAME_BUDGET: u32 = 60;
+
 /// `UpdateTallGrassFieldEffect` follows the camera for any owner, not only the player
 /// (`field_effect_helpers.c:324-337`): an NPC that has just stepped onto grass crosses with its
 /// rustle, which goes on from the image it had reached.
@@ -550,9 +553,18 @@ fn a_carried_npc_crosses_mid_rustle_and_the_effect_continues() {
         .walk(Direction::South);
     idle(&mut phase, 1);
     assert_eq!(shown_image(&phase), 1, "the step began a rustle");
-    while shown_image(&phase) < 2 {
+    let mut waited = 0;
+    while shown_image(&phase) < 2 && waited < RUSTLE_FRAME_BUDGET {
         idle(&mut phase, 1);
+        waited += 1;
     }
+    assert_eq!(
+        shown_image(&phase),
+        2,
+        "the rustle should reach image 2 within {RUSTLE_FRAME_BUDGET} frames; \
+         still at image {} after {waited} frames",
+        shown_image(&phase)
+    );
     cross_north(&mut phase);
     let after = effects(&phase);
     // The effect is drawn in the entered scene without a second pass restarting it.
