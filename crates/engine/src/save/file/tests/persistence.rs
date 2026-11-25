@@ -476,3 +476,81 @@ fn a_save_path_swapped_after_inspection_is_still_not_followed() {
         ),
     }
 }
+
+/// The directory sync opens its target by a fresh path lookup, so a parent
+/// symlink retargeted to a FIFO after the rename would otherwise park a
+/// blocking read-only open on a writer that never comes.
+#[cfg(unix)]
+#[test]
+fn a_parent_symlink_retargeted_to_a_fifo_cannot_stall_the_post_rename_directory_sync() {
+    let dir = TempDir::new("sync-fifo");
+    let real = dir.join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let fifo = dir.join("fifo");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo must run")
+            .success(),
+        "mkfifo must create the FIFO this test stands on"
+    );
+    let path = link.join(SAVE_FILE_NAME);
+    let staged = real.join("pokeemerald.sav.tmp.retarget");
+    let (store, _, _) = saved_store();
+    let expected_image = store.flash_image().to_vec();
+
+    let (outcomes, outcome) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = SaveFile::at(&path).write_with(
+            &store,
+            |containing| {
+                std::fs::remove_file(&link).unwrap();
+                std::os::unix::fs::symlink(&fifo, &link).unwrap();
+                SaveFile::sync_directory_best_effort(containing);
+            },
+            |bytes| {
+                staging::stage_at_first_free_name(
+                    std::iter::once(staged.clone()),
+                    staging::create_new_exclusive,
+                    bytes,
+                )
+            },
+            |_| {},
+        );
+        drop(outcomes.send(result.map_err(|err| err.to_string())));
+    });
+
+    let result = outcome
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect(
+            "the directory sync after the rename must return rather than wait for a writer to \
+         the FIFO its parent symlink now names",
+        );
+    result
+        .expect("the rename already published the save, so a refused sync must not fail the write");
+    assert_eq!(
+        SaveFile::at(real.join(SAVE_FILE_NAME))
+            .read()
+            .unwrap()
+            .expect("the save was renamed into the real directory")
+            .flash_image(),
+        expected_image.as_slice(),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_directory_sync_open_accepts_a_directory_and_refuses_anything_else() {
+    let dir = TempDir::new("sync-open");
+    crate::save::file::open::open_directory_for_sync(&dir.join("."))
+        .expect("a directory is what the sync opens");
+
+    let plain = dir.join("plain");
+    std::fs::write(&plain, b"x").unwrap();
+    let refused = crate::save::file::open::open_directory_for_sync(&plain)
+        .expect_err("a plain file is not a directory to synchronise");
+    assert_eq!(refused.kind(), std::io::ErrorKind::NotADirectory);
+}

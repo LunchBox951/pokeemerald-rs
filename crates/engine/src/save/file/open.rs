@@ -321,6 +321,31 @@ pub(super) fn refuse_unusable_opens(options: &mut std::fs::OpenOptions) {
     }
 }
 
+/// Opens `path` to synchronise it as a directory, so that a FIFO swapped in
+/// by a parent symlink retargeted after the rename cannot block the open,
+/// and a handle that is not a directory is refused before anything syncs it.
+/// A symlink is still followed: the save's own parent may legitimately be
+/// one.
+///
+/// # Errors
+///
+/// Any error opening `path` or inspecting the handle, or
+/// [`std::io::ErrorKind::NotADirectory`] if the handle is not a directory.
+pub(super) fn open_directory_for_sync(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(open_flags::O_NONBLOCK);
+    }
+    let directory = options.open(path)?;
+    if !directory.metadata()?.is_dir() {
+        return Err(std::io::ErrorKind::NotADirectory.into());
+    }
+    Ok(directory)
+}
+
 /// Whether `error` is [`refuse_unusable_opens`]'s flags refusing to follow a
 /// symlinked final component.
 pub(super) fn open_refused_a_symlink(error: &std::io::Error) -> bool {
