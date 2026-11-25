@@ -130,6 +130,8 @@ mod layouts;
 mod layouts_json;
 pub(crate) mod midi;
 mod naming_screen;
+#[cfg(test)]
+mod occupied_fixture_names;
 mod opening_scene;
 #[cfg(test)]
 mod owned_fixture;

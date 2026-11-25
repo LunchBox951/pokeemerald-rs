@@ -1,4 +1,6 @@
 use super::*;
+use crate::extract::occupied_fixture_names::assert_claim_steps_around_occupied_names;
+use crate::extract::owned_fixture::OwnedDir;
 use assets::pack::AssetPack;
 
 /// `a`..`m` stand for the texts in the fixtures below.
@@ -214,9 +216,10 @@ fn a_rival_text_with_no_terminator_names_the_script_file() {
     assert!(fault_.detail.contains("id 13"), "{fault_:?}");
 }
 
-#[test]
-fn extractor_pushes_exactly_one_entry_and_nothing_on_failure() {
-    let dir = std::env::temp_dir().join(format!("pokeemerald-rs-tdfs-{}", std::process::id()));
+/// A fresh directory holding the three source files the extractor reads.
+fn source_fixture(prefix: &str) -> OwnedDir {
+    let owned = OwnedDir::create(prefix).unwrap();
+    let dir = owned.path();
     for (path, text) in [
         (CHARMAP_PATH, CHARMAP),
         (TRAINERS_PATH, TRAINERS),
@@ -226,29 +229,41 @@ fn extractor_pushes_exactly_one_entry_and_nothing_on_failure() {
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(target, text).unwrap();
     }
+    owned
+}
+
+#[test]
+fn the_source_fixture_steps_around_names_it_did_not_create() {
+    let legacy = std::env::temp_dir().join(format!("pokeemerald-rs-tdfs-{}", std::process::id()));
+    assert_claim_steps_around_occupied_names("pokeemerald-rs-tdfs-occupied", &legacy, || {
+        source_fixture("pokeemerald-rs-tdfs-occupied")
+    });
+}
+
+#[test]
+fn extractor_pushes_exactly_one_entry_and_nothing_on_failure() {
+    let owned = source_fixture("pokeemerald-rs-tdfs");
+    let dir = owned.path();
     let mut writer = PackWriter::new();
-    extract_trainer_defeat_speech(&dir, &mut writer).unwrap();
+    extract_trainer_defeat_speech(dir, &mut writer).unwrap();
     assert_eq!(writer.len(), 1);
 
     std::fs::write(dir.join(ROUTE_103_PATH), "").unwrap();
     let mut writer = PackWriter::new();
     assert!(matches!(
-        extract_trainer_defeat_speech(&dir, &mut writer),
+        extract_trainer_defeat_speech(dir, &mut writer),
         Err(ExtractError::TrainerDefeatSpeechSource { line: 0, ref path, .. })
             if path.ends_with(ROUTE_103_PATH)
     ));
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn defeat_speeches_are_extracted_from_the_real_checkout() {
     assert!(super::super::upstream_present(), "run ./init.sh first");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-extract-test-trainer-defeat-speech-{}.pack",
-        std::process::id()
-    ));
+    let owned = OwnedDir::create("pokeemerald-rs-extract-test-trainer-defeat-speech").unwrap();
+    let path = owned.path().join("extract.pack");
     super::super::extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = AssetPack::load(&path).unwrap();
     let table = pack.trainer_defeat_speeches().unwrap();
@@ -283,5 +298,4 @@ fn defeat_speeches_are_extracted_from_the_real_checkout() {
             assert_ne!(table.speech(*a), table.speech(*b));
         }
     }
-    let _ = std::fs::remove_file(path);
 }
