@@ -1,199 +1,72 @@
 //! The Events Easy Chat vocabulary group: word identity, text, enabled flag,
-//! and alphabetical ordering for every `gEasyChatGroup_Events` row.
+//! and alphabetical ordering for every `gEasyChatGroup_Events` row, over the
+//! shared model in [`easy_chat_word`](crate::easy_chat_word).
 //!
-//! Source: `src/data/easy_chat/easy_chat_group_events.h`, the
-//! `struct EasyChatWordInfo` layout in `include/easy_chat.h`, and the
-//! `EC_WORD_*` indices 0 through 28 in `include/constants/easy_chat.h`. The
-//! other groups, the group registry, unlock state, and the editor UI are not
-//! part of this table.
+//! Source: `src/data/easy_chat/easy_chat_group_events.h` and the `EC_WORD_*`
+//! indices 0 through 28 in `include/constants/easy_chat.h`. The other groups,
+//! the group registry, unlock state, and the editor UI are not part of this
+//! table.
 
-use std::error::Error;
-use std::fmt;
+use crate::easy_chat_word::{
+    define_easy_chat_group, EasyChatGroup, EasyChatWordIndex, EasyChatWordInfo,
+};
 
 /// The number of words in the Events group (`EC_GROUP_EVENTS`).
 pub const EVENTS_WORD_COUNT: usize = 29;
 
-/// A failed decoding of an Events word index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EasyChatError {
-    /// The value is not below [`EVENTS_WORD_COUNT`].
-    UnknownEventsWord(u8),
-}
-
-impl fmt::Display for EasyChatError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownEventsWord(index) => {
-                write!(f, "unknown events easy chat word index `{index}`")
-            }
-        }
-    }
-}
-
-impl Error for EasyChatError {}
+/// Marks the Events group in the shared model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Events {}
 
 /// A word's index within the Events group (`EC_INDEX` of an `EC_WORD_*`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EventsWordIndex(u8);
-
-impl EventsWordIndex {
-    /// Validates a raw group index.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EasyChatError::UnknownEventsWord`] when `index` is
-    /// [`EVENTS_WORD_COUNT`] or more.
-    pub const fn new(index: u8) -> Result<Self, EasyChatError> {
-        if (index as usize) < EVENTS_WORD_COUNT {
-            Ok(Self(index))
-        } else {
-            Err(EasyChatError::UnknownEventsWord(index))
-        }
-    }
-
-    /// Returns the raw group index.
-    #[must_use]
-    pub const fn index(self) -> u8 {
-        self.0
-    }
-}
+pub type EventsWordIndex = EasyChatWordIndex<Events>;
 
 /// One `gEasyChatGroup_Events` row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EventsWord {
-    /// The row's index, equal to its table position.
-    pub index: EventsWordIndex,
-    /// The word text (`.text`), in the game's charmap notation; the
-    /// `{POKEBLOCK}` charmap token stays a token.
-    pub text: &'static str,
-    /// The word at this alphabetical position (`.alphabeticalOrder`), as
-    /// `SetSelectedWordGroup_GroupMode` reads it while walking rows in order.
-    pub alphabetical_order: EventsWordIndex,
-    /// Whether the word is offered (`.enabled`).
-    pub enabled: bool,
-}
+pub type EventsWord = EasyChatWordInfo<Events>;
 
 /// Lookup over the Events group.
-#[derive(Debug, Clone, Copy)]
-pub struct EventsGroup {
-    rows: &'static [EventsWord; EVENTS_WORD_COUNT],
-}
-
-impl EventsGroup {
-    /// Creates a handle on the canonical group.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            rows: &EVENTS_WORDS,
-        }
-    }
-
-    /// Returns the number of words.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        EVENTS_WORD_COUNT
-    }
-
-    /// Returns `false`; the group is never empty.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        false
-    }
-
-    /// Returns the row for `index`.
-    #[must_use]
-    pub const fn get(&self, index: EventsWordIndex) -> &EventsWord {
-        &self.rows[index.0 as usize]
-    }
-
-    /// Iterates in ascending [`EventsWordIndex`] order.
-    pub fn iter(&self) -> impl Iterator<Item = &EventsWord> {
-        self.rows.iter()
-    }
-
-    /// Iterates the words in alphabetical order, enabled or not.
-    pub fn alphabetical(&self) -> impl Iterator<Item = &EventsWord> {
-        self.rows.iter().map(|row| self.get(row.alphabetical_order))
-    }
-
-    /// Returns how many words have `enabled` set.
-    #[must_use]
-    pub fn enabled_count(&self) -> usize {
-        self.iter().filter(|word| word.enabled).count()
-    }
-}
-
-impl Default for EventsGroup {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-macro_rules! define_events_words {
-    ($($name:ident = $index:literal => ($text:literal, $alphabetical:ident, $enabled:literal)),+ $(,)?) => {
-        impl EventsWordIndex {
-            $(
-                #[doc = concat!("`EC_WORD_", stringify!($name), "`.")]
-                pub const $name: Self = Self($index);
-            )+
-        }
-
-        const EVENTS_WORDS: [EventsWord; EVENTS_WORD_COUNT] = [
-            $(EventsWord {
-                index: EventsWordIndex::$name,
-                text: $text,
-                alphabetical_order: EventsWordIndex::$alphabetical,
-                enabled: $enabled,
-            }),+
-        ];
-
-        const _: () = {
-            let indices: [usize; EVENTS_WORD_COUNT] = [$($index),+];
-            let mut position = 0;
-            while position < EVENTS_WORD_COUNT {
-                assert!(indices[position] == position);
-                position += 1;
-            }
-        };
-    };
-}
+pub type EventsGroup = EasyChatGroup<Events>;
 
 #[rustfmt::skip]
-define_events_words! {
-    APPEAL = 0 => ("APPEAL", APPEAL, true),
-    EVENTS = 1 => ("EVENTS", BATTLE_ROOM, true),
-    STAY_AT_HOME = 2 => ("STAY-AT-HOME", BATTLE_TOWER, true),
-    BERRY = 3 => ("BERRY", BERRY, true),
-    CONTEST = 4 => ("CONTEST", BLEND, true),
-    MC = 5 => ("MC", CONTEST, true),
-    JUDGE = 6 => ("JUDGE", CRUSH, true),
-    SUPER = 7 => ("SUPER", DIRECT, true),
-    STAGE = 8 => ("STAGE", EVENTS, true),
-    HALL_OF_FAME = 9 => ("HALL OF FAME", EVOLUTION, true),
-    EVOLUTION = 10 => ("EVOLUTION", FRONTIER, true),
-    HYPER = 11 => ("HYPER", HALL_OF_FAME, true),
-    BATTLE_TOWER = 12 => ("BATTLE TOWER", HIDDEN, true),
-    LEADERS = 13 => ("LEADERS", HYPER, true),
-    BATTLE_ROOM = 14 => ("BATTLE ROOM", JUDGE, true),
-    HIDDEN = 15 => ("HIDDEN", LEADERS, true),
-    SECRET_BASE = 16 => ("SECRET BASE", MASTER, true),
-    BLEND = 17 => ("BLEND", MC, true),
-    POKEBLOCK = 18 => ("{POKEBLOCK}", POKEBLOCK, true),
-    MASTER = 19 => ("MASTER", RANK, true),
-    RANK = 20 => ("RANK", RIBBON, true),
-    RIBBON = 21 => ("RIBBON", ROOM, true),
-    CRUSH = 22 => ("CRUSH", SECRET_BASE, true),
-    DIRECT = 23 => ("DIRECT", STAGE, true),
-    TOWER = 24 => ("TOWER", STAY_AT_HOME, true),
-    UNION = 25 => ("UNION", SUPER, true),
-    ROOM = 26 => ("ROOM", TOWER, true),
-    WIRELESS = 27 => ("WIRELESS", UNION, true),
-    FRONTIER = 28 => ("FRONTIER", WIRELESS, true),
+define_easy_chat_group! {
+    Events, "events", EVENTS_WORDS, EVENTS_WORD_COUNT, {
+        APPEAL = 0 => ("APPEAL", APPEAL, true),
+        EVENTS = 1 => ("EVENTS", BATTLE_ROOM, true),
+        STAY_AT_HOME = 2 => ("STAY-AT-HOME", BATTLE_TOWER, true),
+        BERRY = 3 => ("BERRY", BERRY, true),
+        CONTEST = 4 => ("CONTEST", BLEND, true),
+        MC = 5 => ("MC", CONTEST, true),
+        JUDGE = 6 => ("JUDGE", CRUSH, true),
+        SUPER = 7 => ("SUPER", DIRECT, true),
+        STAGE = 8 => ("STAGE", EVENTS, true),
+        HALL_OF_FAME = 9 => ("HALL OF FAME", EVOLUTION, true),
+        EVOLUTION = 10 => ("EVOLUTION", FRONTIER, true),
+        HYPER = 11 => ("HYPER", HALL_OF_FAME, true),
+        BATTLE_TOWER = 12 => ("BATTLE TOWER", HIDDEN, true),
+        LEADERS = 13 => ("LEADERS", HYPER, true),
+        BATTLE_ROOM = 14 => ("BATTLE ROOM", JUDGE, true),
+        HIDDEN = 15 => ("HIDDEN", LEADERS, true),
+        SECRET_BASE = 16 => ("SECRET BASE", MASTER, true),
+        BLEND = 17 => ("BLEND", MC, true),
+        POKEBLOCK = 18 => ("{POKEBLOCK}", POKEBLOCK, true),
+        MASTER = 19 => ("MASTER", RANK, true),
+        RANK = 20 => ("RANK", RIBBON, true),
+        RIBBON = 21 => ("RIBBON", ROOM, true),
+        CRUSH = 22 => ("CRUSH", SECRET_BASE, true),
+        DIRECT = 23 => ("DIRECT", STAGE, true),
+        TOWER = 24 => ("TOWER", STAY_AT_HOME, true),
+        UNION = 25 => ("UNION", SUPER, true),
+        ROOM = 26 => ("ROOM", TOWER, true),
+        WIRELESS = 27 => ("WIRELESS", UNION, true),
+        FRONTIER = 28 => ("FRONTIER", WIRELESS, true),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{EasyChatError, EventsGroup, EventsWordIndex, EVENTS_WORD_COUNT};
+    use crate::easy_chat_word::EasyChatError;
+
+    use super::{EventsGroup, EventsWordIndex, EVENTS_WORD_COUNT};
 
     /// `(text, alphabetical rank, enabled)` per row, in upstream table order.
     const ROWS: [(&str, u8, bool); EVENTS_WORD_COUNT] = [
@@ -349,11 +222,18 @@ mod tests {
         for raw in [29, 30, u8::MAX] {
             assert_eq!(
                 EventsWordIndex::new(raw),
-                Err(EasyChatError::UnknownEventsWord(raw))
+                Err(EasyChatError::UnknownWord {
+                    group: "events",
+                    index: raw
+                })
             );
         }
         assert_eq!(
-            EasyChatError::UnknownEventsWord(29).to_string(),
+            EasyChatError::UnknownWord {
+                group: "events",
+                index: 29
+            }
+            .to_string(),
             "unknown events easy chat word index `29`"
         );
     }

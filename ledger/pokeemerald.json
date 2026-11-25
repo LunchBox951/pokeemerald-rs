@@ -21475,13 +21475,13 @@
     "include/constants/easy_chat.h": {
       "artifacts": {
         "EC_WORD_EVENTS": {
-          "reason": "The EC_WORD_* indices of EC_GROUP_EVENTS (include/constants/easy_chat.h:1034-1062, EC_WORD_APPEAL 0 through EC_WORD_FRONTIER 28) are the associated constants of assets::easy_chat_events::EventsWordIndex. The Trainer and Greetings indices are modelled separately in assets::easy_chat (TrainerWordIndex, GreetingsWordIndex). The EC_GROUP_* group ids and the words of every group other than Trainer, Greetings and Events are not modelled.",
+          "reason": "The EC_WORD_* indices of EC_GROUP_EVENTS (include/constants/easy_chat.h:1034-1062, EC_WORD_APPEAL 0 through EC_WORD_FRONTIER 28) are the associated constants of assets::easy_chat_events::EventsWordIndex, an alias of assets::easy_chat_word::EasyChatWordIndex<Events>. The Trainer and Greetings indices are modelled separately in assets::easy_chat (TrainerWordIndex, GreetingsWordIndex). The EC_GROUP_* group ids and the words of every group other than Trainer, Greetings and Events are not modelled.",
           "rust_target": "crates/assets/src/easy_chat_events.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "EC_WORD_GREETINGS": {
-          "reason": "The EC_WORD_* indices of EC_GROUP_GREETINGS (include/constants/easy_chat.h:260-302, EC_WORD_THANKS 0 through EC_WORD_COUNT_ON 41) are the associated constants of assets::easy_chat::GreetingsWordIndex. The group id and every other group's words are not modelled.",
+          "reason": "The EC_WORD_* indices of EC_GROUP_GREETINGS (include/constants/easy_chat.h:260-302, EC_WORD_THANKS 0 through EC_WORD_COUNT_ON 41) are the associated constants of assets::easy_chat::GreetingsWordIndex, an alias of assets::easy_chat_word::EasyChatWordIndex<Greetings>. The EC_GROUP_* group ids and the words of every group other than Trainer, Greetings and Events are not modelled.",
           "rust_target": "crates/assets/src/easy_chat.rs",
           "spec": "S-4",
           "status": "ported"
@@ -21908,8 +21908,8 @@
     "include/easy_chat.h": {
       "artifacts": {
         "EasyChatWordInfo": {
-          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91) is modelled only as per-group row shapes: assets::easy_chat::GreetingsWord, assets::easy_chat::TrainerWord and assets::easy_chat_events::EventsWord each carry text (a charmap-notation str), alphabeticalOrder and enabled (a bool), with alphabeticalOrder typed as that group's own index (a GreetingsWordIndex whose domain is 0..41, a TrainerWordIndex whose domain is 0..26, an EventsWordIndex whose domain is 0..28). The struct is shared by every Easy Chat group (easy_chat_group_status.h uses alphabetical indices past 41), so the general row type and index domain, and every other group's use of it, are not modelled.",
-          "rust_target": "crates/assets/src/easy_chat.rs",
+          "reason": "struct EasyChatWordInfo (include/easy_chat.h:86-91) is modelled as one generic row, assets::easy_chat_word::EasyChatWordInfo<G>, shared by every group: text (a charmap-notation str), alphabeticalOrder and enabled (a bool), with alphabeticalOrder and the row's own index typed as assets::easy_chat_word::EasyChatWordIndex<G>, a group-local index checked against the word count of its group G (an out-of-range value is assets::easy_chat_word::EasyChatError::UnknownWord). Each group is a marker type implementing EasyChatWordGroup whose WORDS table is the group's rows; assets::easy_chat::TrainerWord (domain 0..26) and GreetingsWord (0..41) and assets::easy_chat_events::EventsWord (0..28) are aliases of the shared row. The other groups' tables (easy_chat_group_status.h uses alphabetical indices past 41), easy_chat_groups.h and every other use of the struct are not modelled.",
+          "rust_target": "crates/assets/src/easy_chat_word.rs",
           "spec": "S-4",
           "status": "stubbed"
         }
@@ -30274,7 +30274,7 @@
     "src/data/easy_chat/easy_chat_group_events.h": {
       "category": "code.header",
       "kind": "file",
-      "reason": "gEasyChatGroup_Events (src/data/easy_chat/easy_chat_group_events.h:31-206) and the 29 gEasyChatWord_* texts (lines 1-29) extracted to assets::easy_chat_events::EventsGroup keyed by EventsWordIndex (EC_WORD_APPEAL..EC_WORD_FRONTIER, include/constants/easy_chat.h:1034-1062): text, alphabeticalOrder permutation and the enabled flag per row; all 29 words are enabled upstream, the link-themed ones included, and the {POKEBLOCK} charmap token is kept as a token. Other groups, easy_chat_groups.h, unlock state and the editor UI are not modelled, and nothing consumes the table yet.",
+      "reason": "gEasyChatGroup_Events (src/data/easy_chat/easy_chat_group_events.h:31-206) and the 29 gEasyChatWord_* texts (lines 1-29) extracted to assets::easy_chat_events::EventsGroup (an alias of assets::easy_chat_word::EasyChatGroup over that group) keyed by EventsWordIndex (EC_WORD_APPEAL..EC_WORD_FRONTIER, include/constants/easy_chat.h:1034-1062): text, alphabeticalOrder permutation and the enabled flag per row; all 29 words are enabled upstream, the link-themed ones included, and the {POKEBLOCK} charmap token is kept as a token. The groups other than Trainer, Greetings and Events, easy_chat_groups.h, unlock state and the editor UI are not modelled, and nothing consumes the table yet.",
       "rust_target": "crates/assets/src/easy_chat_events.rs",
       "spec": "S-4",
       "status": "ported"
@@ -30287,7 +30287,7 @@
     "src/data/easy_chat/easy_chat_group_greetings.h": {
       "category": "code.header",
       "kind": "file",
-      "reason": "gEasyChatGroup_Greetings (src/data/easy_chat/easy_chat_group_greetings.h:44-297) and the 42 gEasyChatWord_* texts (lines 1-42) extracted to assets::easy_chat::GreetingsGroup keyed by GreetingsWordIndex (EC_WORD_THANKS..EC_WORD_COUNT_ON, include/constants/easy_chat.h:261-302): text, alphabeticalOrder permutation and the enabled flag per row; all 42 words are enabled upstream. Other groups, easy_chat_groups.h, unlock state and the editor UI are not modelled.",
+      "reason": "gEasyChatGroup_Greetings (src/data/easy_chat/easy_chat_group_greetings.h:44-297) and the 42 gEasyChatWord_* texts (lines 1-42) extracted to assets::easy_chat::GreetingsGroup (an alias of assets::easy_chat_word::EasyChatGroup over that group) keyed by GreetingsWordIndex (EC_WORD_THANKS..EC_WORD_COUNT_ON, include/constants/easy_chat.h:261-302): text, alphabeticalOrder permutation and the enabled flag per row; all 42 words are enabled upstream. The groups other than Trainer, Greetings and Events, easy_chat_groups.h, unlock state and the editor UI are not modelled.",
       "rust_target": "crates/assets/src/easy_chat.rs",
       "spec": "S-4",
       "status": "ported"
@@ -30350,7 +30350,7 @@
     "src/data/easy_chat/easy_chat_group_trainer.h": {
       "category": "code.header",
       "kind": "file",
-      "reason": "gEasyChatGroup_Trainer (src/data/easy_chat/easy_chat_group_trainer.h:29-192) and the 27 gEasyChatWord_* texts (lines 1-27) extracted to assets::easy_chat::TrainerGroup keyed by TrainerWordIndex (EC_WORD_I_CHOOSE_YOU..EC_WORD_EMERALD, include/constants/easy_chat.h:56-82): text, alphabeticalOrder permutation and the enabled flag per row, with the six disabled words (RED, GREEN, FLAME, GOLD, LEAF, SILVER) preserved. Other groups, easy_chat_groups.h, unlock state and the editor UI are not modelled.",
+      "reason": "gEasyChatGroup_Trainer (src/data/easy_chat/easy_chat_group_trainer.h:29-192) and the 27 gEasyChatWord_* texts (lines 1-27) extracted to assets::easy_chat::TrainerGroup (an alias of assets::easy_chat_word::EasyChatGroup over that group) keyed by TrainerWordIndex (EC_WORD_I_CHOOSE_YOU..EC_WORD_EMERALD, include/constants/easy_chat.h:56-82): text, alphabeticalOrder permutation and the enabled flag per row, with the six disabled words (RED, GREEN, FLAME, GOLD, LEAF, SILVER) preserved. The groups other than Trainer, Greetings and Events, easy_chat_groups.h, unlock state and the editor UI are not modelled.",
       "rust_target": "crates/assets/src/easy_chat.rs",
       "spec": "S-4",
       "status": "ported"

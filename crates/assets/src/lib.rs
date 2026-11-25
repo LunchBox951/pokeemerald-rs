@@ -12,7 +12,8 @@
 //! [`enemy_elevation`]), the Battle Arena per-move mind ratings (see
 //! [`arena_mind_ratings`]), the species/move/ability display text
 //! (see [`species_names`], [`move_names`], [`abilities`]), the Trainer and
-//! Greetings Easy Chat vocabulary groups (see [`easy_chat`]), the experience
+//! Greetings Easy Chat vocabulary groups (see [`easy_chat`]), the row and index
+//! model every Easy Chat group shares (see [`easy_chat_word`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
 //! [`wild_encounters`]), the trainer roster and parties (see [`trainers`]),
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
@@ -70,6 +71,7 @@ pub mod credits;
 pub mod decorations;
 pub mod easy_chat;
 pub mod easy_chat_events;
+pub mod easy_chat_word;
 pub mod egg_moves;
 pub mod enemy_elevation;
 pub mod error;
@@ -143,8 +145,11 @@ pub use battle_pyramid_items::{
     PYRAMID_ROUNDS,
 };
 pub use easy_chat::{
-    EasyChatError, GreetingsGroup, GreetingsWord, GreetingsWordIndex, TrainerGroup, TrainerWord,
-    TrainerWordIndex, GREETINGS_WORD_COUNT, TRAINER_WORD_COUNT,
+    GreetingsGroup, GreetingsWord, GreetingsWordIndex, TrainerGroup, TrainerWord, TrainerWordIndex,
+    GREETINGS_WORD_COUNT, TRAINER_WORD_COUNT,
+};
+pub use easy_chat_word::{
+    EasyChatError, EasyChatGroup, EasyChatWordGroup, EasyChatWordIndex, EasyChatWordInfo,
 };
 pub use egg_moves::{
     EggMoveList, EggMoveTable, EGG_MOVES_SPECIES_OFFSET, EGG_MOVES_TERMINATOR,
