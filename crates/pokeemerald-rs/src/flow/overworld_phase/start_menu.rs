@@ -36,6 +36,7 @@ use crate::game_save::{SaveFileStatus, SaveSlot, StoreOutcome};
 use crate::party;
 use crate::start_menu::{self, SaveMode, SaveTarget, StartMenu, StartMenuOutcome};
 
+use super::connections::MapConnections;
 use super::{take_item_message, OverworldPhase};
 use crate::overworld::NpcDialog;
 
@@ -84,8 +85,17 @@ impl OverworldPhase {
         // As in `step`: the menu is a task, so the sprites run after it
         // (`OverworldBasic`, `src/overworld.c:1465-1476`).
         self.advance_object_events();
-        self.scene
-            .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
+        let maps = MapConnections::terrain_only(
+            &self.connection_pack,
+            self.pack_source.clone(),
+            self.map_id,
+        );
+        self.scene.advance_tall_grass(
+            &self.player,
+            &self.object_events,
+            &self.save1.event_data,
+            &maps,
+        );
         // After the menu's own tasks, so a save written this frame holds the
         // time as the frame began, as in [`Self::step`].
         self.tick_play_time();
