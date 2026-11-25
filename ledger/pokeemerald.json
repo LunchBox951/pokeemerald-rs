@@ -21388,6 +21388,20 @@
       "status": "pending"
     },
     "include/constants/battle_pike.h": {
+      "artifacts": {
+        "PIKE_HINT_ids": {
+          "reason": "include/constants/battle_pike.h:21-25 PIKE_HINT_NOSTALGIA 0, PIKE_HINT_WHISPERING 1, PIKE_HINT_POKEMON 2, PIKE_HINT_PEOPLE 3 and PIKE_HINT_BRAIN 4, ported as the PikeHint variants and their id. They are ids only; the hint dialogue is not modelled. Pinned by unit tests and an ignored test that re-parses src/battle_pike.c against the header.",
+          "rust_target": "crates/assets/src/battle_pike_rooms.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "PIKE_ROOM_types": {
+          "reason": "include/constants/battle_pike.h:6-15 PIKE_ROOM_SINGLE_BATTLE 0 through PIKE_ROOM_BRAIN 8 and NUM_PIKE_ROOM_TYPES 9, ported as the PikeRoomType variants (id and from_id) and PIKE_ROOM_TYPES. Pinned by unit tests and an ignored test that re-parses the header. NOT modelled: NUM_PIKE_ROOMS (14) and the PIKE_ROOM_LEFT, PIKE_ROOM_CENTER and PIKE_ROOM_RIGHT position names (lines 17-19), which queen_heal_count takes as a bare column index below PIKE_ROOM_POSITIONS.",
+          "rust_target": "crates/assets/src/battle_pike_rooms.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -29311,6 +29325,18 @@
         "sLvlOpenMons": {
           "reason": "src/battle_pike.c:93-265 sLvlOpen_Mons1 to sLvlOpen_Mons4 and the sLvlOpenMons pointer table, transcribed as the Open Level roster: 4 headers of 3 records (12 in all), selected with the Level 50 roster by the sWildMons table (FRONTIER_LVL_50 and FRONTIER_LVL_OPEN). The species and levelDelta values match the Level 50 roster; the moves differ in ten records: Poison Fang replaces Body Slam on Seviper, Ice Beam replaces Surf on Milotic, Ice Beam replaces Shadow Punch on the Dusclops header, and Encore replaces Destiny Bond on the Wobbuffet header. Pinned record by record by unit tests and by an ignored test that re-parses src/battle_pike.c. NOT modelled: TryGenerateBattlePikeWildMon (src/battle_pike.c:1105-1151), its RNG, level arithmetic, ability draws and encounter checks.",
           "rust_target": "crates/assets/src/battle_pike_wild_mons.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sNumMonsToHealBeforePikeQueen": {
+          "reason": "src/battle_pike.c:524-532 sNumMonsToHealBeforePikeQueen, transcribed as 6 rows of 3 counts, each row a permutation of 0, 1 and 2, behind queen_heal_count, which refuses a hinted room index of 6 or more and a room position of 3 or more. The row is the saved pikeHintedRoomIndex and the column is gSpecialVar_0x8007, set by the Queen scripts to a room position (data/scripts/battle_pike.inc:73-83); HealSomeMonsBeforePikeQueen (src/battle_pike.c:1538-1544) reads the table. Pinned by unit tests against a column-wise hand layout and by an ignored test that re-parses src/battle_pike.c. NOT modelled: TryHealMons, the party healing, SetHintedRoom's RNG draws, the speeches and the Queen battle.",
+          "rust_target": "crates/assets/src/battle_pike_rooms.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sRoomTypeHints": {
+          "reason": "src/battle_pike.c:512-522 sRoomTypeHints, transcribed as nine hint categories in room-type id order (PIKE_ROOM_SINGLE_BATTLE 0 through PIKE_ROOM_BRAIN 8), behind room_hint and PikeRoomType::hint, which refuse a room id of 9 or more. Hint categories are shared: two room types give People, two Nostalgia, two Pokemon and two Whispering, one gives Brain. GetRoomTypeHint (src/battle_pike.c:1382-1385) reads the table with the saved room type. Pinned by unit tests against hand-laid numeric ids and by an ignored test that re-parses src/battle_pike.c. NOT modelled: the hint dialogue, SetHintedRoom's room choice and RNG, and the save field. A second reader, the room-candidate selection at src/battle_pike.c:1040-1044, disables every room type sharing the hinted type's category; that selection is not modelled.",
+          "rust_target": "crates/assets/src/battle_pike_rooms.rs",
           "spec": "S-4",
           "status": "ported"
         }
