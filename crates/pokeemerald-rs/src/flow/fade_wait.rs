@@ -16,6 +16,7 @@ use super::{
 };
 use crate::frame::to_platform_frame;
 use crate::main_menu::{MainMenuItem, MainMenuScene};
+use crate::new_game::RngSeedSource;
 use engine::save::ButtonMode;
 
 /// [`AppScene::TitleFadeWait`]'s state: the title retained for its
@@ -255,6 +256,7 @@ fn navigate(
 pub(super) fn advance_main_menu_fade_wait(
     mut wait: Box<MainMenuFadeWait>,
     pack_source: crate::pack_source::PackSource,
+    seeds: RngSeedSource,
 ) -> (AppScene, Box<Frame>) {
     if wait.fade.is_done() {
         let action = match wait.exit {
@@ -270,7 +272,7 @@ pub(super) fn advance_main_menu_fade_wait(
                 }
             };
         }
-        if let Some(result) = dispatch_main_menu_action(action, pack_source, &wait.state) {
+        if let Some(result) = dispatch_main_menu_action(action, pack_source, seeds, &wait.state) {
             return result;
         }
         let frame = wait.state.scene.compose_frame();
@@ -442,6 +444,7 @@ pub(super) fn advance_main_menu_fade_in(mut wait: Box<MainMenuFadeIn>) -> (AppSc
 fn dispatch_main_menu_action(
     action: MainMenuAction,
     pack_source: crate::pack_source::PackSource,
+    seeds: RngSeedSource,
     state: &MainMenuState,
 ) -> Option<(AppScene, Box<Frame>)> {
     match action {
@@ -464,7 +467,12 @@ fn dispatch_main_menu_action(
         // save it could not resume.
         MainMenuAction::Continue => {
             let (block1, block2) = (state.saved.block1.clone(), state.saved.block2.clone());
-            match OverworldPhase::continue_saved_game(pack_source, block1, block2) {
+            match OverworldPhase::continue_saved_game_seeded(
+                pack_source,
+                block1,
+                block2,
+                seeds.draw(),
+            ) {
                 Ok(phase) => {
                     log_game_continued(&phase);
                     let frame = phase.compose_frame();

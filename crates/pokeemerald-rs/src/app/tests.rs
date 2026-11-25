@@ -13,6 +13,23 @@ use platform::{ButtonState, Buttons};
 mod music_lifecycle;
 mod subprocess_harness;
 
+/// A headless `App` -- every scripted scenario and e2e lane -- keeps the fixed
+/// seed, so its new games and continues replay exactly; only the real
+/// window's [`WINDOWED_SEEDS`] draws a fresh one.
+#[test]
+fn headless_apps_pin_the_fixed_session_seed() {
+    use crate::new_game::RngSeedSource;
+    assert_eq!(App::new_headless().seeds, RngSeedSource::FIXED);
+}
+
+/// The real window's seed source, which [`App::new`] installs, varies; a
+/// change to a fixed seed would put every adventure back on one trainer ID.
+#[test]
+fn the_real_window_draws_its_session_seed_from_entropy() {
+    use crate::new_game::RngSeedSource;
+    assert_eq!(super::WINDOWED_SEEDS, RngSeedSource::Entropy);
+}
+
 /// The animated path's `frame()` contract (I-2): after every step,
 /// `frame()` is the frame that step actually presented — the first
 /// step presents the initial tick-0 composition, the second tick 1's,
