@@ -79,6 +79,7 @@ impl<G: EasyChatWordGroup> EasyChatWordIndex<G> {
         }
     }
 
+    /// Returns the raw index, always below the group's word count.
     #[must_use]
     pub const fn index(self) -> u8 {
         self.0
@@ -115,26 +116,32 @@ pub struct EasyChatGroup<G: EasyChatWordGroup> {
 }
 
 impl<G: EasyChatWordGroup> EasyChatGroup<G> {
+    /// Creates a handle on the group's canonical table; the handle holds no state.
     #[must_use]
     pub const fn new() -> Self {
         Self { group: PhantomData }
     }
 
+    /// Returns the group's word count, the bound [`EasyChatWordIndex::new`] checks against.
     #[must_use]
     pub const fn len(&self) -> usize {
         G::WORDS.len()
     }
 
+    /// Returns whether the table has no rows; false for every defined group.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         G::WORDS.is_empty()
     }
 
+    /// Returns the row at `index`; it cannot fail, because an index is checked against `G`'s
+    /// word count when built.
     #[must_use]
     pub const fn get(&self, index: EasyChatWordIndex<G>) -> &'static EasyChatWordInfo<G> {
         &G::WORDS[index.0 as usize]
     }
 
+    /// Yields every row in table order, enabled or not.
     pub fn iter(&self) -> impl Iterator<Item = &'static EasyChatWordInfo<G>> {
         G::WORDS.iter()
     }
@@ -148,6 +155,7 @@ impl<G: EasyChatWordGroup> EasyChatGroup<G> {
             .map(move |row| group.get(row.alphabetical_order))
     }
 
+    /// Returns how many rows have `enabled` set.
     #[must_use]
     pub fn enabled_count(&self) -> usize {
         self.iter().filter(|word| word.enabled).count()
