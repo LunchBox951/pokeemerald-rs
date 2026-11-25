@@ -415,3 +415,33 @@ fn the_inventory_is_each_trainers_image_then_palette() {
         ]
     );
 }
+
+#[test]
+fn a_table_base_below_the_cartridge_window_is_refused() {
+    // The rows sit lower than the first trainer's byte bias, so the base
+    // they imply lies below the window though both rows read correctly.
+    let first_row = 0x200;
+    let mut rom = RomFixture::new().emerald_header();
+    for (index, pic) in TRAINER_FRONT_PICS.iter().enumerate() {
+        let trainer_pic = u16::from(pic.trainer_pic.index());
+        rom = rom
+            .write(
+                first_row + index * RECORD_BYTES as usize,
+                &picture_row(BUS + image_at(index), trainer_pic),
+            )
+            .write(
+                row_offset(PALETTE_TABLE, index),
+                &palette_row(BUS + palette_at(index), trainer_pic),
+            )
+            .write(image_at(index) as usize, &lz77_literals(&tiles(index)))
+            .write(
+                palette_at(index) as usize,
+                &lz77_literals(&colour_bytes(index)),
+            );
+    }
+    let rom = rom.finish();
+    assert_struct_mismatch(
+        located("trainer-front-below-window", &rom, entries()),
+        "gTrainerFrontPicTable",
+    );
+}
