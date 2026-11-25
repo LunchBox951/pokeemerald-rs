@@ -78,10 +78,10 @@ pub const NUM_SPECIAL_VARS: u16 = SPECIAL_VARS_END - SPECIAL_VARS_START + 1;
 /// Remaining Repel steps (`VAR_REPEL_STEP_COUNT`, `include/constants/vars.h:51`). The
 /// ordinary variable is saved with the rest of `SaveBlock1`; nonzero means a Repel is active.
 pub const VAR_REPEL_STEP_COUNT: u16 = 0x4021;
-/// Set after defeating Wally outside Mauville Gym; arms the first PokéNav call
+/// Set after defeating Wally outside Mauville Gym; arms the first `PokéNav` call
 /// (`FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL`, `include/constants/flags.h:158`).
 pub const FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL: u16 = 0x88;
-/// Steps counted toward Wally's first PokéNav call (`VAR_WALLY_CALL_STEP_COUNTER`,
+/// Steps counted toward Wally's first `PokéNav` call (`VAR_WALLY_CALL_STEP_COUNTER`,
 /// `include/constants/vars.h:262`).
 pub const VAR_WALLY_CALL_STEP_COUNTER: u16 = 0x40F2;
 /// Step count at which Wally's call is due (the literal in `ShouldDoWallyCall`,
@@ -270,7 +270,7 @@ impl EventData {
         }
     }
 
-    /// Counts one step toward Wally's first PokéNav call and reports whether
+    /// Counts one step toward Wally's first `PokéNav` call and reports whether
     /// the call is due (`ShouldDoWallyCall`, `src/field_specials.c:353-376`).
     ///
     /// Nothing counts unless [`FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL`] is set and
