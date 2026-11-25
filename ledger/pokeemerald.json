@@ -29293,6 +29293,12 @@
     },
     "src/battle_pyramid.c": {
       "artifacts": {
+        "sFloorTemplateOffsets": {
+          "reason": "src/battle_pyramid.c:284-287 sFloorTemplateOffsets, transcribed as the index in the 34-entry option list where each of the 7 floors starts (0, 4, 9, 14, 19, 24, 29), behind floor_template_option_offset, which refuses an out-of-range floor; it also bounds each floor's slice from floor_template_options. Pinned by unit tests, a compile-time shape check and an ignored test that re-parses src/battle_pyramid.c. NOT modelled: the selection walk that starts at this offset (src/battle_pyramid.c:1919-1927).",
+          "rust_target": "crates/assets/src/battle_pyramid_floors.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "sPickupItemOffsets": {
           "reason": "src/battle_pyramid.c:411 sPickupItemOffsets, transcribed as the first row of each of the 7 floors in the floor-row list (0, 9, 18, 27, 36, 45, 54), behind floor_item_row_offset, which refuses an out-of-range floor. Pinned by unit tests and an ignored test that re-parses src/battle_pyramid.c.",
           "rust_target": "crates/assets/src/battle_pyramid_items.rs",
@@ -29320,6 +29326,18 @@
         "sPickupPercentages": {
           "reason": "src/battle_pyramid.c:832 sPickupPercentages, transcribed as the ten Pickup thresholds (30, 40, 50, 60, 70, 80, 85, 90, 95, 100), behind pickup_thresholds/pickup_threshold, which refuse an out-of-range index. Pinned, including the final 100, by unit tests and an ignored test that re-parses src/battle_pyramid.c. NOT modelled: GetBattlePyramidPickupItemId (src/battle_pyramid.c:1958-1983), its RNG draw and Pickup eligibility.",
           "rust_target": "crates/assets/src/battle_pyramid_items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sPyramidFloorTemplateOptions": {
+          "reason": "src/battle_pyramid.c:239-282 sPyramidFloorTemplateOptions, transcribed as the 34 {cumulative cutoff, template id} options, floor after floor, behind floor_template_options/all_floor_template_options, which refuse an out-of-range floor. The cutoffs stay cumulative, not weights; each floor's cutoffs increase and end at 100 and every option names one of the 16 templates, checked at compile time and by unit tests, and the table is pinned against an independently laid-out per-floor literal and by an ignored test that re-parses src/battle_pyramid.c. NOT modelled: the draw and the walk over the options (GetPyramidFloorTemplateId, src/battle_pyramid.c:1919-1927) and its RNG.",
+          "rust_target": "crates/assets/src/battle_pyramid_floors.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sPyramidFloorTemplates": {
+          "reason": "src/battle_pyramid.c:107-237 sPyramidFloorTemplates, transcribed as the 16 floor templates: item and trainer counts, the item and trainer object-position policies (named after the OBJ_POSITIONS_* constants of include/constants/battle_pyramid.h), the run multiplier and the 8 ordered layout offsets, behind floor_template/floor_templates, which refuse an out-of-range template id. Pinned record by record against an independently laid-out literal table by unit tests and by an ignored test that re-parses src/battle_pyramid.c. NOT modelled: the placement the position policies ask for, the use of the run multiplier, the per-square layout-offset choice (src/battle_pyramid.c:1900-1913), map generation, trainer parties, items and wild rosters.",
+          "rust_target": "crates/assets/src/battle_pyramid_floors.rs",
           "spec": "S-4",
           "status": "ported"
         }

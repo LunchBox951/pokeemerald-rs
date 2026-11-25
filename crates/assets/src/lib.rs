@@ -23,17 +23,18 @@
 //! normal-ribbon description lines (see [`ribbon_descriptions`]), the Battle
 //! Factory move-style lists and required counts (see
 //! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
-//! [`battle_pike_wild_mons`]), the Battle Pyramid floor-item and Pickup
-//! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
-//! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
-//! starting positions (see [`slot_machine_reels`]), the region-map section
-//! grid (see [`region_map_layout`]), the Battle Palace per-nature
-//! move-group, target and flavor tables (see [`battle_palace`]), the Easy Chat
-//! Events word group (see [`easy_chat_events`]), the facility-class portrait
-//! and trainer-class lookups (see [`facility_classes`]), the four NPC trade
-//! offers with their mail messages (see [`ingame_trades`]), and the Lilycove
-//! Lady quiz, favor, and contest data (see [`lilycove_lady`]); more data
-//! follows as the crate fills out.
+//! [`battle_pike_wild_mons`]), the Battle Pyramid floor templates and their
+//! per-floor options (see [`battle_pyramid_floors`]), the Battle Pyramid
+//! floor-item and Pickup distributions (see [`battle_pyramid_items`]), the
+//! Trainer Hill prize lists (see [`trainer_hill_prizes`]), the slot-machine
+//! reel strips and starting positions (see [`slot_machine_reels`]), the
+//! region-map section grid (see [`region_map_layout`]), the Battle Palace
+//! per-nature move-group, target and flavor tables (see [`battle_palace`]),
+//! the Easy Chat Events word group (see [`easy_chat_events`]), the
+//! facility-class portrait and trainer-class lookups (see
+//! [`facility_classes`]), the four NPC trade offers with their mail messages
+//! (see [`ingame_trades`]), and the Lilycove Lady quiz, favor, and contest
+//! data (see [`lilycove_lady`]); more data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
 //! audio-extraction backends emit into (S-4) live in [`audio`].
@@ -63,6 +64,7 @@ pub mod battle_factory_styles;
 pub mod battle_moves;
 pub mod battle_palace;
 pub mod battle_pike_wild_mons;
+pub mod battle_pyramid_floors;
 pub mod battle_pyramid_items;
 pub mod berries;
 pub mod bundled_overworld;
@@ -135,6 +137,12 @@ pub use battle_palace::{
 pub use battle_pike_wild_mons::{
     pike_header, pike_wild_mon, PikeLevelDecrement, PikeLevelMode, PikeWildMon, PikeWildMonError,
     PIKE_WILD_HEADERS, PIKE_WILD_MON_MOVES, PIKE_WILD_MON_SLOTS,
+};
+pub use battle_pyramid_floors::{
+    all_floor_template_options, floor_template, floor_template_option_offset,
+    floor_template_options, floor_templates, FloorTemplateOption, ObjectPositions,
+    PyramidFloorError, PyramidFloorTemplate, FLOOR_TEMPLATE_COUNT, FLOOR_TEMPLATE_OPTION_COUNT,
+    LAYOUT_OFFSETS_PER_TEMPLATE,
 };
 pub use battle_pyramid_items::{
     floor_item_row_offset, floor_item_rows, pickup_threshold, pickup_thresholds, pyramid_item,
