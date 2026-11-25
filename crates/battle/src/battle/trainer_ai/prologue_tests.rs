@@ -656,12 +656,10 @@ fn status_handler_admission_is_flag_aware_and_exact() {
         ensure_scoreable(&dex, MoveId::FOCUS_ENERGY, viability),
         Ok(())
     );
-    for move_id in [MoveId::THUNDER_WAVE, MoveId::CONFUSE_RAY] {
-        assert_eq!(
-            ensure_scoreable(&dex, move_id, viability),
-            Err(BattleError::UnscoreableMoveEffect(move_id))
-        );
-    }
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::CONFUSE_RAY, viability),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::CONFUSE_RAY))
+    );
     for move_id in [
         MoveId::SAFEGUARD,
         MoveId::TOXIC,

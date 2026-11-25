@@ -3,8 +3,9 @@
 //!
 //! The trainer's position, facing, and elevation come from its
 //! [`LiveObjectEvent`] state, and intermediate blockers are the
-//! [`ObjectEventCollection`]'s live entries; the immutable template supplies
-//! only the trainer type, sight range, and hide flag.
+//! [`ObjectEventCollection`]'s live entries plus the player's departing tile;
+//! the immutable template supplies only the trainer type, sight range, and
+//! hide flag.
 //!
 //! A pure, stateless query over an already-decided player position, facing,
 //! and world snapshot; call-site timing relative to movement is the
@@ -125,7 +126,7 @@ fn sight_line_clear(
     for _ in 0..intermediate_tiles {
         x += dx;
         y += dy;
-        if tile_blocks_intermediate_sight(world, standing_behavior, x, y, facing) {
+        if tile_blocks_intermediate_sight(world, standing_behavior, x, y, facing, player) {
             return false;
         }
     }
@@ -157,14 +158,16 @@ fn sight_line_clear(
 /// Whether intermediate tile `(x, y)` -- one step along `facing`, strictly
 /// between the trainer and the player -- blocks the sight line: any
 /// collision bit, a directional wall, an elevation mismatch, or another
-/// active object event occupying it. An undecodable cell fails
-/// closed (`true`).
+/// active object event occupying it, or the player's own object leaving it
+/// (`DoesObjectCollideWithObjectAt`, `event_object_movement.c:4724-4739`).
+/// An undecodable cell fails closed (`true`).
 fn tile_blocks_intermediate_sight(
     world: &SightWorld<'_>,
     standing_behavior: u8,
     x: i32,
     y: i32,
     facing: Direction,
+    player: &PlayerState,
 ) -> bool {
     let SightWorld {
         trainer_elevation,
@@ -182,6 +185,13 @@ fn tile_blocks_intermediate_sight(
         return true;
     }
     if elevation_mismatch(trainer_elevation, cell.elevation) {
+        return true;
+    }
+    // The player is not in `objects`; its departing tile is held like a
+    // walking NPC's. Its current tile is the line's end, never between.
+    if player.previous_position() == (x, y)
+        && elevations_compatible(trainer_elevation, player.elevation())
+    {
         return true;
     }
     objects
@@ -813,5 +823,38 @@ mod tests {
             "the walker still holds (5, 7), as `GetCollisionFlagsAtCoords` sees it"
         );
         assert!(live_sees(vec![t, blocker], settled, 2, &player));
+    }
+
+    #[test]
+    fn the_player_holds_its_departing_tile_until_its_crossing_settles() {
+        let hdr = header(&[]);
+        let events = empty_events();
+        let runtime = runtime_over(&hdr, &events, 20, 20, cell(0, 0, 3));
+        let event_data = EventData::new();
+        let mut player = player_at(5, 7, 3);
+        let _ = player.step(
+            Some(Direction::South),
+            &runtime,
+            &crate::overworld::NoConnectedMaps,
+            &event_data,
+        );
+        assert_eq!(
+            (player.position(), player.previous_position()),
+            ((5, 8), (5, 7))
+        );
+
+        // A trainer that was facing away turns to the player's column
+        // while the crossing is still in flight.
+        let t = trainer(5, 5, 3, MovementType::FaceLeft, "3");
+        let turn_south = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.face(Direction::South);
+        };
+        assert!(!live_sees(vec![t], turn_south, 1, &player));
+
+        while player.in_transit() {
+            player.tick();
+        }
+        assert_eq!(player.previous_position(), (5, 8));
+        assert!(live_sees(vec![t], turn_south, 1, &player));
     }
 }
