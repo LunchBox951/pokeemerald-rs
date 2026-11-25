@@ -176,12 +176,14 @@ fn a_speed_tie_draws_once_and_is_never_target_faster() {
 }
 
 #[test]
-fn the_chosen_moves_priority_is_ignored_by_the_speed_query() {
-    // Quick Attack has priority +1; a priority-aware comparison would put the
-    // slower user first. Upstream passes `ignoreChosenMoves`
-    // (`src/battle_ai_script_commands.c:1268-1273`).
+fn move_priority_does_not_change_the_speed_comparison() {
+    // Quick Attack (+1) against Counter (-5) would put the slower user first
+    // if priority counted; upstream passes `ignoreChosenMoves`
+    // (`src/battle_ai_script_commands.c:1268-1273`), so the target is still
+    // the faster battler.
     let user = mon(MUDKIP, &[MoveId::THUNDER_WAVE, MoveId::QUICK_ATTACK]);
-    let target = mon(TREECKO, &[MoveId::QUICK_ATTACK]);
+    let target = mon(TREECKO, &[MoveId::COUNTER]);
+    assert!(user.speed_for_turn_order() < target.speed_for_turn_order());
     assert_eq!(
         viability(
             MoveId::THUNDER_WAVE,
