@@ -1,4 +1,6 @@
 use super::*;
+use crate::extract::occupied_fixture_names::assert_claim_steps_around_occupied_names;
+use crate::extract::owned_fixture::OwnedDir;
 use assets::pack::AssetPack;
 use assets::TrainerClass;
 
@@ -344,9 +346,10 @@ fn an_explicit_terminator_in_the_text_is_refused_by_the_schema() {
     assert!(fault_.detail.contains("terminator"), "{fault_:?}");
 }
 
-#[test]
-fn extractor_pushes_exactly_one_entry_and_nothing_on_failure() {
-    let dir = std::env::temp_dir().join(format!("pokeemerald-rs-tcln-{}", std::process::id()));
+/// A fresh directory holding the three source files the extractor reads.
+fn source_fixture(prefix: &str) -> OwnedDir {
+    let owned = OwnedDir::create(prefix).unwrap();
+    let dir = owned.path();
     for (path, text) in [
         (CHARMAP_PATH, CHARMAP.to_owned()),
         (CONSTANTS_PATH, constants(&in_order())),
@@ -356,29 +359,41 @@ fn extractor_pushes_exactly_one_entry_and_nothing_on_failure() {
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(target, text).unwrap();
     }
+    owned
+}
+
+#[test]
+fn the_source_fixture_steps_around_names_it_did_not_create() {
+    let legacy = std::env::temp_dir().join(format!("pokeemerald-rs-tcln-{}", std::process::id()));
+    assert_claim_steps_around_occupied_names("pokeemerald-rs-tcln-occupied", &legacy, || {
+        source_fixture("pokeemerald-rs-tcln-occupied")
+    });
+}
+
+#[test]
+fn extractor_pushes_exactly_one_entry_and_nothing_on_failure() {
+    let owned = source_fixture("pokeemerald-rs-tcln");
+    let dir = owned.path();
     let mut writer = PackWriter::new();
-    extract_trainer_class_names(&dir, &mut writer).unwrap();
+    extract_trainer_class_names(dir, &mut writer).unwrap();
     assert_eq!(writer.len(), 1);
 
     std::fs::write(dir.join(NAMES_PATH), "").unwrap();
     let mut writer = PackWriter::new();
     assert!(matches!(
-        extract_trainer_class_names(&dir, &mut writer),
+        extract_trainer_class_names(dir, &mut writer),
         Err(ExtractError::TrainerClassNameSource { line: 0, ref path, .. })
             if path.ends_with(NAMES_PATH)
     ));
     assert_eq!(writer.len(), 0);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn class_names_are_extracted_from_the_real_checkout() {
     assert!(super::super::upstream_present(), "run ./init.sh first");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-extract-test-trainer-class-name-{}.pack",
-        std::process::id()
-    ));
+    let owned = OwnedDir::create("pokeemerald-rs-extract-test-trainer-class-name").unwrap();
+    let path = owned.path().join("extract.pack");
     super::super::extract_to(&path).expect("extraction should succeed against a real checkout");
     let pack = AssetPack::load(&path).unwrap();
     let table = pack.trainer_class_names().unwrap();
@@ -410,7 +425,6 @@ fn class_names_are_extracted_from_the_real_checkout() {
         assert_eq!(name.last(), Some(&0xFF), "{class:?}");
         assert!(name.len() <= 13, "{class:?}");
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]

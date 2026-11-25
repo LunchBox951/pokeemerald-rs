@@ -8,6 +8,8 @@ use super::super::png::tests::indexed_png_from_raw_with_plte;
 use super::super::scope::PC_WALLPAPER_DIRECTORY;
 use super::super::{extract_to, jasc_pal, png, repo_root, upstream_present};
 use super::extract_pc_wallpapers;
+use crate::extract::occupied_fixture_names::assert_claim_steps_around_occupied_names;
+use crate::extract::owned_fixture::OwnedDir;
 use crate::extract::ExtractError;
 
 /// One style written out from `graphics_file_rules.mk`, independently of the
@@ -81,14 +83,8 @@ enum Half {
     Background,
 }
 
-fn scratch_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-pc-wallpaper-{name}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch_dir(name: &str) -> OwnedDir {
+    OwnedDir::create(&format!("pokeemerald-rs-pc-wallpaper-{name}")).unwrap()
 }
 
 fn style_dir(upstream: &Path, style: &Style) -> PathBuf {
@@ -203,8 +199,9 @@ fn the_inventory_is_forty_eight_ids_in_wallpaper_order() {
 
 #[test]
 fn a_complete_checkout_yields_typed_wallpapers_with_the_upstream_sheet_shape() {
-    let upstream = scratch_dir("valid");
-    write_valid_checkout(&upstream);
+    let owned = scratch_dir("valid");
+    let upstream = owned.path();
+    write_valid_checkout(upstream);
     // A neighbouring Walda or default style must not change the pack.
     write(
         &upstream
@@ -215,7 +212,7 @@ fn a_complete_checkout_yields_typed_wallpapers_with_the_upstream_sheet_shape() {
     );
 
     let mut writer = PackWriter::new();
-    extract_pc_wallpapers(&upstream, &mut writer).unwrap();
+    extract_pc_wallpapers(upstream, &mut writer).unwrap();
     assert_eq!(writer.len(), 48);
     let pack_path = upstream.join("pack.bin");
     write(&pack_path, &writer.finish().unwrap());
@@ -251,20 +248,31 @@ fn a_complete_checkout_yields_typed_wallpapers_with_the_upstream_sheet_shape() {
         assert_eq!(wallpaper.palettes[0].color(0), Some(0b00001_00001_00001));
         assert_eq!(wallpaper.palettes[1].color(15), Some(0b00010_00010_00010));
     }
-    std::fs::remove_dir_all(upstream).unwrap();
+}
+
+#[test]
+fn the_scratch_directory_steps_around_names_it_did_not_create() {
+    let prefix = "pokeemerald-rs-pc-wallpaper-occupied";
+    let legacy = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
+    assert_claim_steps_around_occupied_names(prefix, &legacy, || {
+        let owned = scratch_dir("occupied");
+        write_valid_checkout(owned.path());
+        owned
+    });
 }
 
 #[test]
 fn a_missing_source_fails_naming_that_file_and_queues_nothing() {
-    let upstream = scratch_dir("missing");
-    write_valid_checkout(&upstream);
+    let owned = scratch_dir("missing");
+    let upstream = owned.path();
+    write_valid_checkout(upstream);
     for style in &STYLES {
         for file in ["frame.png", "bg.png", "tilemap.bin"] {
-            let path = style_dir(&upstream, style).join(file);
+            let path = style_dir(upstream, style).join(file);
             let bytes = std::fs::read(&path).unwrap();
             std::fs::remove_file(&path).unwrap();
 
-            let (result, queued) = extract(&upstream);
+            let (result, queued) = extract(upstream);
             let err = result.unwrap_err();
             assert!(
                 matches!(&err, ExtractError::ReadFailed(missing, _) if *missing == path),
@@ -275,7 +283,6 @@ fn a_missing_source_fails_naming_that_file_and_queues_nothing() {
             write(&path, &bytes);
         }
     }
-    std::fs::remove_dir_all(upstream).unwrap();
 }
 
 #[test]
@@ -287,15 +294,15 @@ fn a_tilemap_that_is_not_twenty_by_eighteen_words_is_rejected() {
         TILEMAP_BYTES + 2,
         2 * TILEMAP_BYTES,
     ] {
-        let upstream = scratch_dir("tilemap-length");
-        write_valid_checkout(&upstream);
-        let path = style_dir(&upstream, &STYLES[5]).join("tilemap.bin");
+        let owned = scratch_dir("tilemap-length");
+        let upstream = owned.path();
+        write_valid_checkout(upstream);
+        let path = style_dir(upstream, &STYLES[5]).join("tilemap.bin");
         write(&path, &vec![0; length]);
 
-        let (result, queued) = extract(&upstream);
+        let (result, queued) = extract(upstream);
         assert_eq!(mismatch_path(result.unwrap_err()), path, "{length} bytes");
         assert_eq!(queued, 0, "{length} bytes");
-        std::fs::remove_dir_all(upstream).unwrap();
     }
 }
 
@@ -310,17 +317,17 @@ fn a_tilemap_word_the_accessor_would_refuse_is_rejected() {
         ("bank 3", 0x3001),
         ("blank over a coloured tile 0", 0x0000),
     ] {
-        let upstream = scratch_dir("tilemap-word");
-        write_valid_checkout(&upstream);
-        let path = style_dir(&upstream, style).join("tilemap.bin");
+        let owned = scratch_dir("tilemap-word");
+        let upstream = owned.path();
+        write_valid_checkout(upstream);
+        let path = style_dir(upstream, style).join("tilemap.bin");
         let mut tilemap = tilemap_bytes(style);
         tilemap[200..202].copy_from_slice(&word.to_le_bytes());
         write(&path, &tilemap);
 
-        let (result, queued) = extract(&upstream);
+        let (result, queued) = extract(upstream);
         assert_eq!(mismatch_path(result.unwrap_err()), path, "{case}");
         assert_eq!(queued, 0, "{case}");
-        std::fs::remove_dir_all(upstream).unwrap();
     }
 }
 
@@ -328,10 +335,11 @@ fn a_tilemap_word_the_accessor_would_refuse_is_rejected() {
 fn a_palette_that_is_not_sixteen_colours_is_rejected() {
     for (file, half) in [("frame.png", Half::Frame), ("bg.png", Half::Background)] {
         for colors in [1, 15] {
-            let upstream = scratch_dir("palette-colors");
-            write_valid_checkout(&upstream);
+            let owned = scratch_dir("palette-colors");
+            let upstream = owned.path();
+            write_valid_checkout(upstream);
             let style = &STYLES[2];
-            let path = style_dir(&upstream, style).join(file);
+            let path = style_dir(upstream, style).join(file);
             let bytes = if half == Half::Frame {
                 half_png(style, half, style.frame_size, style.frame_tiles, colors)
             } else {
@@ -345,14 +353,13 @@ fn a_palette_that_is_not_sixteen_colours_is_rejected() {
             };
             write(&path, &bytes);
 
-            let (result, queued) = extract(&upstream);
+            let (result, queued) = extract(upstream);
             assert_eq!(
                 mismatch_path(result.unwrap_err()),
                 path,
                 "{file} with {colors} colours"
             );
             assert_eq!(queued, 0);
-            std::fs::remove_dir_all(upstream).unwrap();
         }
     }
 }
@@ -374,27 +381,25 @@ fn a_png_of_the_wrong_size_depth_or_cut_is_rejected() {
         ("8-bit", eight_bit),
         ("colour past the cut", colour_past_the_cut),
     ] {
-        let upstream = scratch_dir("png-shape");
-        write_valid_checkout(&upstream);
-        let path = style_dir(&upstream, style).join("frame.png");
+        let owned = scratch_dir("png-shape");
+        let upstream = owned.path();
+        write_valid_checkout(upstream);
+        let path = style_dir(upstream, style).join("frame.png");
         write(&path, &bytes);
 
-        let (result, queued) = extract(&upstream);
+        let (result, queued) = extract(upstream);
         assert_eq!(mismatch_path(result.unwrap_err()), path, "{case}");
         assert_eq!(queued, 0, "{case}");
-        std::fs::remove_dir_all(upstream).unwrap();
     }
 }
 
-fn real_pack(name: &str) -> (PathBuf, AssetPack) {
+fn real_pack(name: &str) -> (OwnedDir, AssetPack) {
     assert!(upstream_present(), "run ./init.sh first");
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-pc-wallpaper-real-{name}-{}.bin",
-        std::process::id()
-    ));
+    let owned = scratch_dir(&format!("real-{name}"));
+    let path = owned.path().join("pack.bin");
     extract_to(&path).unwrap();
     let pack = AssetPack::load(&path).unwrap();
-    (path, pack)
+    (owned, pack)
 }
 
 /// One source half read straight from the checkout PNG.
@@ -499,7 +504,7 @@ fn render_source(style: &Style, source_root: &Path) -> Vec<Option<u16>> {
 #[test]
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn the_real_checkout_decodes_all_twelve_wallpapers_through_the_typed_accessor() {
-    let (path, pack) = real_pack("inventory");
+    let (_owned, pack) = real_pack("inventory");
     let ids: BTreeSet<String> = pack
         .entries()
         .filter(|entry| entry.id.starts_with("pc-wallpaper/"))
@@ -522,13 +527,12 @@ fn the_real_checkout_decodes_all_twelve_wallpapers_through_the_typed_accessor() 
             .max();
         assert_eq!(highest, Some(style.tiles() - 1), "{}", style.stem);
     }
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn a_real_wallpaper_renders_like_its_source_with_flips_and_both_palette_banks() {
-    let (path, pack) = real_pack("render");
+    let (_owned, pack) = real_pack("render");
     let source_root = repo_root().join("pokeemerald").join(PC_WALLPAPER_DIRECTORY);
     for (index, style) in STYLES.iter().enumerate() {
         let wallpaper = pack.pc_wallpaper(Style::byte(index)).unwrap();
@@ -549,5 +553,4 @@ fn a_real_wallpaper_renders_like_its_source_with_flips_and_both_palette_banks() 
     assert!(cells.iter().any(|cell| cell.v_flip));
     assert!(cells.iter().any(|cell| cell.palette_bank == 1));
     assert!(cells.iter().any(|cell| cell.palette_bank == 2));
-    std::fs::remove_file(path).unwrap();
 }
