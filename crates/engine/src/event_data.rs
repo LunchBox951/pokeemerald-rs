@@ -9,6 +9,8 @@
 //! unchecked fixed-array offsets for these ids; this safe implementation fails
 //! closed instead of reproducing an out-of-bounds access.
 
+use assets::MapType;
+
 /// First temporary flag id.
 pub const TEMP_FLAGS_START: u16 = 0x0;
 /// Last temporary flag id.
@@ -76,6 +78,23 @@ pub const NUM_SPECIAL_VARS: u16 = SPECIAL_VARS_END - SPECIAL_VARS_START + 1;
 /// Remaining Repel steps (`VAR_REPEL_STEP_COUNT`, `include/constants/vars.h:51`). The
 /// ordinary variable is saved with the rest of `SaveBlock1`; nonzero means a Repel is active.
 pub const VAR_REPEL_STEP_COUNT: u16 = 0x4021;
+/// Set after defeating Wally outside Mauville Gym; arms the first `PokéNav` call
+/// (`FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL`, `include/constants/flags.h:158`).
+pub const FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL: u16 = 0x88;
+/// Steps counted toward Wally's first `PokéNav` call (`VAR_WALLY_CALL_STEP_COUNTER`,
+/// `include/constants/vars.h:262`).
+pub const VAR_WALLY_CALL_STEP_COUNTER: u16 = 0x40F2;
+/// Step count at which Wally's call is due (the literal in `ShouldDoWallyCall`,
+/// `src/field_specials.c:363`).
+pub const WALLY_CALL_STEP_THRESHOLD: u16 = 250;
+/// Local day recorded when the Pacifidlog house gave its weekly TM
+/// (`VAR_PACIFIDLOG_TM_RECEIVED_DAY`, `include/constants/vars.h:214`).
+const VAR_PACIFIDLOG_TM_RECEIVED_DAY: u16 = 0x40C2;
+/// Days that must pass before the Pacifidlog house gives another TM
+/// (the literal `7` in `GetDaysUntilPacifidlogTMAvailable`, `src/field_specials.c:1558-1563`).
+const PACIFIDLOG_TM_COOLDOWN_DAYS: u16 = 7;
+/// Wait reported when the local day count is negative (`src/field_specials.c:1560-1561`).
+const PACIFIDLOG_TM_NEGATIVE_DAY_WAIT: u16 = 8;
 const VAR_ABNORMAL_WEATHER_LOCATION: u16 = 0x4037;
 const VAR_SHOULD_END_ABNORMAL_WEATHER: u16 = 0x4039;
 const ABNORMAL_WEATHER_NONE: u16 = 0;
@@ -257,6 +276,66 @@ impl EventData {
         } else {
             Err(EventDataError::OutOfRange(id))
         }
+    }
+
+    /// Counts one step toward Wally's first `PokéNav` call and reports whether
+    /// the call is due (`ShouldDoWallyCall`, `src/field_specials.c:353-376`).
+    ///
+    /// Nothing counts unless [`FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL`] is set and
+    /// `map_type` is a town, city, route or ocean route. Then
+    /// [`VAR_WALLY_CALL_STEP_COUNTER`] is incremented first, wrapping as a
+    /// `u16`, and the result is whether it has reached
+    /// [`WALLY_CALL_STEP_THRESHOLD`]. Otherwise the result is `false`. The
+    /// caller owns dispatching the call script and clearing the flag.
+    pub fn should_do_wally_call(&mut self, map_type: MapType) -> bool {
+        let flag = usize::from(FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL);
+        if (self.flags[flag / FLAGS_PER_BYTE] >> (flag % FLAGS_PER_BYTE)) & 1 == 0 {
+            return false;
+        }
+        if !matches!(
+            map_type,
+            MapType::Town | MapType::City | MapType::Route | MapType::OceanRoute
+        ) {
+            return false;
+        }
+        let count = &mut self.vars[usize::from(VAR_WALLY_CALL_STEP_COUNTER - VARS_START)];
+        *count = count.wrapping_add(1);
+        *count >= WALLY_CALL_STEP_THRESHOLD
+    }
+
+    /// Days until the Pacifidlog house gives another TM, given the local day
+    /// count `local_days` (`GetDaysUntilPacifidlogTMAvailable`,
+    /// `src/field_specials.c:1555-1564`).
+    ///
+    /// Zero once seven days have passed, eight for a negative `local_days`,
+    /// otherwise the remaining days; the two special cases never overlap. The
+    /// difference is signed, as in C's promoted `int` arithmetic, so a recorded
+    /// day ahead of `local_days` is not clamped: the result exceeds seven, and
+    /// past `u16::MAX` it wraps as the `u16` return does upstream.
+    #[must_use]
+    pub fn days_until_pacifidlog_tm_available(&self, local_days: i16) -> u16 {
+        let received_day = self.vars[usize::from(VAR_PACIFIDLOG_TM_RECEIVED_DAY - VARS_START)];
+        let cooldown_over = i32::from(local_days) - i32::from(received_day)
+            >= i32::from(PACIFIDLOG_TM_COOLDOWN_DAYS);
+        match (cooldown_over, local_days < 0) {
+            (true, _) => 0,
+            (false, true) => PACIFIDLOG_TM_NEGATIVE_DAY_WAIT,
+            (false, false) => PACIFIDLOG_TM_COOLDOWN_DAYS
+                .wrapping_add(received_day)
+                .wrapping_sub(local_days.cast_unsigned()),
+        }
+    }
+
+    /// Records `local_days` as the day the Pacifidlog TM was received and
+    /// returns the stored value (`SetPacifidlogTMReceivedDay`,
+    /// `src/field_specials.c:1566-1570`).
+    ///
+    /// A negative `local_days` is stored as its two's-complement `u16`, as the
+    /// `s16` to `u16` assignment does upstream, and is not normalised.
+    pub fn set_pacifidlog_tm_received_day(&mut self, local_days: i16) -> u16 {
+        let stored = local_days.cast_unsigned();
+        self.vars[usize::from(VAR_PACIFIDLOG_TM_RECEIVED_DAY - VARS_START)] = stored;
+        stored
     }
 
     /// Clears per-map temporary values and related system flags.
@@ -618,6 +697,299 @@ mod tests {
         assert_eq!(restored.var_get(VARS_START), Ok(0xBEEF));
         assert_eq!(restored.flag_get(SPECIAL_FLAGS_START), Ok(false));
         assert_eq!(restored.var_get(SPECIAL_VARS_START), Ok(0));
+    }
+
+    fn wally_data(flag: bool, count: u16) -> EventData {
+        let mut data = EventData::new();
+        if flag {
+            data.flag_set(FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL).unwrap();
+        }
+        data.var_set(VAR_WALLY_CALL_STEP_COUNTER, count).unwrap();
+        data
+    }
+
+    const ALL_MAP_TYPES: [(MapType, bool); 10] = [
+        (MapType::None, false),
+        (MapType::Town, true),
+        (MapType::City, true),
+        (MapType::Route, true),
+        (MapType::Underground, false),
+        (MapType::Underwater, false),
+        (MapType::OceanRoute, true),
+        (MapType::Unknown, false),
+        (MapType::Indoor, false),
+        (MapType::SecretBase, false),
+    ];
+
+    #[test]
+    fn wally_call_constants_match_upstream_headers() {
+        assert_eq!(FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL, 0x88);
+        assert_eq!(VAR_WALLY_CALL_STEP_COUNTER, 0x40F2);
+        assert_eq!(WALLY_CALL_STEP_THRESHOLD, 250);
+    }
+
+    #[test]
+    fn wally_call_counts_only_on_town_city_route_and_ocean_route() {
+        for (map_type, counts) in ALL_MAP_TYPES {
+            let mut data = wally_data(true, 10);
+            assert!(!data.should_do_wally_call(map_type), "{map_type:?}");
+            let expected = if counts { 11 } else { 10 };
+            assert_eq!(
+                data.var_get(VAR_WALLY_CALL_STEP_COUNTER),
+                Ok(expected),
+                "{map_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wally_call_on_a_counting_map_at_249_is_due_for_every_counting_type() {
+        for (map_type, counts) in ALL_MAP_TYPES {
+            let mut data = wally_data(true, 249);
+            assert_eq!(data.should_do_wally_call(map_type), counts, "{map_type:?}");
+            let expected = if counts { 250 } else { 249 };
+            assert_eq!(
+                data.var_get(VAR_WALLY_CALL_STEP_COUNTER),
+                Ok(expected),
+                "{map_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wally_call_with_flag_clear_leaves_the_counter_and_reports_not_due() {
+        for (map_type, _) in ALL_MAP_TYPES {
+            let mut data = wally_data(false, 249);
+            assert!(!data.should_do_wally_call(map_type), "{map_type:?}");
+            assert_eq!(data.var_get(VAR_WALLY_CALL_STEP_COUNTER), Ok(249));
+        }
+        let mut past = wally_data(false, 300);
+        assert!(!past.should_do_wally_call(MapType::Route));
+        assert_eq!(past.var_get(VAR_WALLY_CALL_STEP_COUNTER), Ok(300));
+    }
+
+    #[test]
+    fn wally_call_goes_from_248_to_249_not_due_then_249_to_250_due() {
+        let mut data = wally_data(true, 248);
+        assert!(!data.should_do_wally_call(MapType::Route));
+        assert_eq!(data.var_get(VAR_WALLY_CALL_STEP_COUNTER), Ok(249));
+        assert!(data.should_do_wally_call(MapType::Route));
+        assert_eq!(data.var_get(VAR_WALLY_CALL_STEP_COUNTER), Ok(250));
+    }
+
+    #[test]
+    fn wally_call_with_count_already_past_250_stays_due_and_keeps_counting() {
+        let mut data = wally_data(true, 300);
+        assert!(data.should_do_wally_call(MapType::Town));
+        assert_eq!(data.var_get(VAR_WALLY_CALL_STEP_COUNTER), Ok(301));
+        assert!(data.should_do_wally_call(MapType::OceanRoute));
+        assert_eq!(data.var_get(VAR_WALLY_CALL_STEP_COUNTER), Ok(302));
+    }
+
+    #[test]
+    fn wally_call_wraps_as_u16_and_reads_not_due_after_the_wrap() {
+        let mut data = wally_data(true, 0xFFFF);
+        assert!(!data.should_do_wally_call(MapType::City));
+        assert_eq!(data.var_get(VAR_WALLY_CALL_STEP_COUNTER), Ok(0));
+
+        let mut before_wrap = wally_data(true, 0xFFFE);
+        assert!(before_wrap.should_do_wally_call(MapType::City));
+        assert_eq!(before_wrap.var_get(VAR_WALLY_CALL_STEP_COUNTER), Ok(0xFFFF));
+    }
+
+    #[test]
+    fn wally_call_survives_a_save_round_trip_and_touches_nothing_else() {
+        let mut data = wally_data(true, 248);
+        let other_var = VAR_WALLY_CALL_STEP_COUNTER - 1;
+        data.var_set(other_var, 0x1234).unwrap();
+        data.var_set(VAR_REPEL_STEP_COUNT, 37).unwrap();
+        data.flag_set(FLAG_SYS_SAFARI_MODE).unwrap();
+        data.flag_set(100).unwrap();
+        let before = data.clone();
+
+        assert!(!data.should_do_wally_call(MapType::Route));
+        assert!(data.should_do_wally_call(MapType::Route));
+
+        let restored = EventData::from_saved_state(*data.flag_bytes(), *data.vars_raw());
+        assert_eq!(restored.var_get(VAR_WALLY_CALL_STEP_COUNTER), Ok(250));
+        assert_eq!(restored.flag_bytes(), before.flag_bytes());
+        for index in 0..VARS_COUNT {
+            if index != usize::from(VAR_WALLY_CALL_STEP_COUNTER - VARS_START) {
+                assert_eq!(restored.vars_raw()[index], before.vars_raw()[index]);
+            }
+        }
+        assert_eq!(restored.var_get(other_var), Ok(0x1234));
+        assert_eq!(
+            restored.flag_get(FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL),
+            Ok(true)
+        );
+    }
+
+    const PACIFIDLOG_TM_VAR: u16 = 0x40C2;
+
+    fn pacifidlog_data_received_on(day: u16) -> EventData {
+        let mut data = EventData::new();
+        data.var_set(PACIFIDLOG_TM_VAR, day).unwrap();
+        data
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_counts_down_and_reaches_zero_at_seven_days() {
+        let data = pacifidlog_data_received_on(10);
+        let waits: [(i16, u16); 7] = [
+            (10, 7),
+            (11, 6),
+            (12, 5),
+            (14, 3),
+            (15, 2),
+            (16, 1),
+            (17, 0),
+        ];
+        for (local_days, expected) in waits {
+            assert_eq!(
+                data.days_until_pacifidlog_tm_available(local_days),
+                expected,
+                "local day {local_days}"
+            );
+        }
+        assert_eq!(data.days_until_pacifidlog_tm_available(18), 0);
+        assert_eq!(data.days_until_pacifidlog_tm_available(i16::MAX), 0);
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_on_fresh_data_is_a_full_week_on_day_zero() {
+        let data = EventData::new();
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 7);
+        assert_eq!(data.days_until_pacifidlog_tm_available(6), 1);
+        assert_eq!(data.days_until_pacifidlog_tm_available(7), 0);
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_for_a_recorded_day_ahead_is_not_clamped() {
+        let data = pacifidlog_data_received_on(10);
+        assert_eq!(data.days_until_pacifidlog_tm_available(9), 8);
+        assert_eq!(data.days_until_pacifidlog_tm_available(3), 14);
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 17);
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_wraps_at_the_u16_return_edge() {
+        let data = pacifidlog_data_received_on(u16::MAX);
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 6);
+        assert_eq!(data.days_until_pacifidlog_tm_available(5), 1);
+        assert_eq!(data.days_until_pacifidlog_tm_available(6), 0);
+        assert_eq!(data.days_until_pacifidlog_tm_available(7), 65535);
+
+        let data = pacifidlog_data_received_on(0x7FFF);
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 0x8006);
+        assert_eq!(data.days_until_pacifidlog_tm_available(i16::MAX), 7);
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_for_a_negative_local_day_is_eight() {
+        for received in [0, 1, 0x7FFF, 0x8000, u16::MAX] {
+            let data = pacifidlog_data_received_on(received);
+            assert_eq!(data.days_until_pacifidlog_tm_available(-1), 8, "{received}");
+            assert_eq!(
+                data.days_until_pacifidlog_tm_available(i16::MIN),
+                8,
+                "{received}"
+            );
+        }
+        let data = pacifidlog_data_received_on(0);
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 7);
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_matches_the_closed_form_for_every_local_day() {
+        let data = pacifidlog_data_received_on(100);
+        for local_days in i16::MIN..=i16::MAX {
+            let expected = match local_days {
+                ..0 => 8,
+                0..=106 => u16::try_from(107 - i32::from(local_days)).unwrap(),
+                107.. => 0,
+            };
+            assert_eq!(
+                data.days_until_pacifidlog_tm_available(local_days),
+                expected,
+                "local day {local_days}"
+            );
+        }
+    }
+
+    #[test]
+    fn pacifidlog_tm_received_day_is_stored_and_returned_as_u16() {
+        let cases: [(i16, u16); 6] = [
+            (0, 0),
+            (1, 1),
+            (i16::MAX, 0x7FFF),
+            (-1, 0xFFFF),
+            (-2, 0xFFFE),
+            (i16::MIN, 0x8000),
+        ];
+        for (local_days, expected) in cases {
+            let mut data = EventData::new();
+            assert_eq!(data.set_pacifidlog_tm_received_day(local_days), expected);
+            assert_eq!(
+                data.var_get(PACIFIDLOG_TM_VAR),
+                Ok(expected),
+                "{local_days}"
+            );
+        }
+    }
+
+    #[test]
+    fn pacifidlog_tm_received_day_overwrites_the_previous_day_and_starts_a_new_wait() {
+        let mut data = pacifidlog_data_received_on(10);
+        assert_eq!(data.days_until_pacifidlog_tm_available(20), 0);
+        data.set_pacifidlog_tm_received_day(20);
+        assert_eq!(data.days_until_pacifidlog_tm_available(20), 7);
+        assert_eq!(data.days_until_pacifidlog_tm_available(26), 1);
+        assert_eq!(data.days_until_pacifidlog_tm_available(27), 0);
+    }
+
+    #[test]
+    fn pacifidlog_tm_received_day_after_a_negative_day_reads_as_ahead_of_day_zero() {
+        let mut data = EventData::new();
+        data.set_pacifidlog_tm_received_day(-1);
+        assert_eq!(data.days_until_pacifidlog_tm_available(-1), 8);
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 6);
+    }
+
+    #[test]
+    fn pacifidlog_tm_helpers_touch_only_their_own_variable() {
+        let mut data = EventData::new();
+        data.flag_set(100).unwrap();
+        data.var_set(VARS_START, 0xBEEF).unwrap();
+        data.var_set(PACIFIDLOG_TM_VAR - 1, 0x4321).unwrap();
+        data.var_set(PACIFIDLOG_TM_VAR + 1, 0x1234).unwrap();
+        data.var_set(SPECIAL_VARS_START, 999).unwrap();
+        let mut expected = data.clone();
+        expected.var_set(PACIFIDLOG_TM_VAR, 42).unwrap();
+
+        data.set_pacifidlog_tm_received_day(42);
+        let _ = data.days_until_pacifidlog_tm_available(45);
+
+        assert_eq!(data.flag_bytes(), expected.flag_bytes());
+        assert_eq!(data.vars_raw(), expected.vars_raw());
+        assert_eq!(data.var_get(SPECIAL_VARS_START), Ok(999));
+    }
+
+    #[test]
+    fn pacifidlog_tm_received_day_survives_a_save_block_round_trip() {
+        use crate::save::block::SaveBlock1;
+
+        let mut block = SaveBlock1::default();
+        block.event_data.set_pacifidlog_tm_received_day(-3);
+        let bytes = block.to_bytes(0x1234_5678);
+        let restored = SaveBlock1::from_bytes(&bytes, 0x1234_5678).unwrap();
+
+        assert_eq!(restored.event_data.var_get(PACIFIDLOG_TM_VAR), Ok(0xFFFD));
+        assert_eq!(
+            restored.event_data.days_until_pacifidlog_tm_available(-3),
+            8
+        );
+        assert_eq!(restored.event_data.days_until_pacifidlog_tm_available(0), 4);
     }
 
     #[test]
