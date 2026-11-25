@@ -423,6 +423,24 @@ pub struct FieldMessageRoot {
     pub addr: GbaPtr,
 }
 
+/// One trainer defeat speech and the context it is.
+///
+/// The ROM string is `EOS`-terminated, so no length is recorded: the reader
+/// finds its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerDefeatSpeechRoot {
+    /// The upstream label, which must be the matching entry of
+    /// `assets::TrainerDefeatSpeechContext::ALL`. Recorded so a profile whose
+    /// roots drifted out of inventory order is refused rather than mislabelled.
+    pub symbol: &'static str,
+    /// Where the speech's `EOS`-terminated token stream starts.
+    pub addr: GbaPtr,
+    /// Where the `trainerbattle` command naming the speech sits, for a speech
+    /// whose bytes recur elsewhere in the image so the text alone does not
+    /// identify it. `None` for the rest.
+    pub script: Option<GbaPtr>,
+}
+
 /// One battle-animation program: a label and where its commands start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnimProgramRoot {
@@ -737,6 +755,12 @@ pub struct Roots {
     pub battle_messages: BattleMessageRoots,
     /// The field-message token table.
     pub field_messages: &'static [FieldMessageRoot],
+    /// The trainer defeat-speech table.
+    pub trainer_defeat_speeches: &'static [TrainerDefeatSpeechRoot],
+    /// Where `gTrainerClassNames` starts: 66 fixed-width rows of 13 bytes, each
+    /// a charmap name, `EOS`, and zero padding. `None` when the profile
+    /// records no class-name table.
+    pub trainer_class_names: Option<GbaPtr>,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationRoots,
     /// The ordinary-bag images, palettes, and tilemap.
@@ -806,6 +830,8 @@ impl Roots {
         },
         battle_messages: BattleMessageRoots::NONE,
         field_messages: &[],
+        trainer_defeat_speeches: &[],
+        trainer_class_names: None,
         battle_anims: BattleAnimationRoots::NONE,
         bag: BagRoots::NONE,
         starter_chooser: StarterChooserRoots::NONE,

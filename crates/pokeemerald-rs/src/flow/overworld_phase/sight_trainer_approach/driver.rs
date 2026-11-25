@@ -12,6 +12,19 @@ use super::super::{ActiveBattle, OverworldPhase};
 use super::ApproachStage;
 
 impl OverworldPhase {
+    /// Whether the approaching trainer is in the middle of a step: the lock handoff waits for
+    /// it as for the player, since `Task_FreezeObjectAndPlayer` freezes the trainer only once
+    /// its `singleMovementActive` clears (`event_object_lock.c:130-147`).
+    pub(in crate::flow::overworld_phase) fn approaching_trainer_step_in_flight(&self) -> bool {
+        self.sight_approach
+            .as_ref()
+            .and_then(|approach| {
+                self.object_events
+                    .find(approach.carried_from, approach.local_id)
+            })
+            .is_some_and(|trainer| trainer.state().step().is_some())
+    }
+
     /// One locked frame's worth of the player's own walk animation, plus
     /// the latched-landing bookkeeping that goes with it -- the pair that
     /// runs on **every** frame the approach owns, whether that is the
@@ -129,6 +142,7 @@ impl OverworldPhase {
         let (stage, local_id, carried_from) =
             (approach.stage, approach.local_id, approach.carried_from);
         let player_was_moving = self.player.in_transit();
+        let trainer_was_moving = self.approaching_trainer_step_in_flight();
         self.tick_player_under_approach_lock();
         // A local id names an object only within its own map, so the entry
         // is `(carried_from, local_id)`, never the bare id: the entered map
@@ -146,7 +160,7 @@ impl OverworldPhase {
                     &mut self.sight_approach,
                     self.object_events.find_mut(carried_from, local_id),
                 ) {
-                    approach.advance_lock_handoff(player_was_moving);
+                    approach.advance_lock_handoff(player_was_moving || trainer_was_moving);
                     if matches!(approach.stage, ApproachStage::ExclamationIcon { .. }) {
                         super::SightApproach::exclamation_mark(live.state_mut());
                     }
@@ -316,6 +330,7 @@ impl OverworldPhase {
         self.active_battle = Some(ActiveBattle::SightTrainer {
             battle: approach.battle,
             trainer_id: approach.trainer_id,
+            reserves: approach.reserves,
         });
         // The approach's built battle commits here, once: `take` above leaves no approach for
         // a second call (`DoTrainerBattle`, `pokeemerald/src/battle_setup.c:462-463`).
@@ -393,6 +408,7 @@ impl OverworldPhase {
             "Whoa!",
             battle,
             TrainerId(703),
+            super::super::PartyReserves::default(),
         ));
     }
 }

@@ -13,7 +13,9 @@ use engine::overworld::{Direction, PlayerState};
 use platform::Buttons;
 
 /// The Route 101 boy (`data/maps/Route101/map.json:95-107`) at (2, 13) with
-/// the given hide `flag`.
+/// the given hide `flag`. The map has him wander left and right; these tests
+/// isolate the grass effect from the scheduler's movement, so he stands still
+/// facing west.
 const fn route_101_boy(flag: &'static str) -> assets::ObjectEvent {
     assets::ObjectEvent {
         local_id: 6,
@@ -21,7 +23,7 @@ const fn route_101_boy(flag: &'static str) -> assets::ObjectEvent {
         x: 2,
         y: 13,
         elevation: 3,
-        movement_type: assets::MovementType::WanderLeftAndRight,
+        movement_type: assets::MovementType::FaceLeft,
         movement_range_x: 1,
         movement_range_y: 1,
         trainer_type: assets::TrainerType::None,
@@ -214,8 +216,9 @@ fn the_players_and_an_npcs_effects_coexist_and_each_follows_its_own_owner() {
 
 #[test]
 fn an_npc_whose_step_begins_onto_tall_grass_starts_a_rustling_effect_and_leaves_it_behind() {
-    // The scheduler moves no wanderer yet, so the boy's step is committed to
-    // the live collection by hand, as `walk` does when a movement type steps.
+    // The boy is a fixed-facing type that takes no step of its own, so his step is
+    // committed to the live collection by hand, as `walk` does when a movement
+    // type steps.
     let scene = synthetic_scene_with_tall_grass_sprites_and_events(
         20,
         30,

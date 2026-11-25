@@ -41,10 +41,12 @@ use crate::new_game;
 use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
 use crate::start_menu::StartMenu;
 
+use self::trainer_party::PartyReserves;
 pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
 mod battle_start_stats;
+mod birth_island_rock;
 mod connections;
 mod escalator_arrival;
 mod field_friendship;
@@ -65,6 +67,7 @@ mod sight_trainer_trigger;
 mod start_menu;
 mod step;
 mod take_item_message;
+mod trainer_party;
 mod white_out;
 mod wild_battle;
 
@@ -160,12 +163,14 @@ pub(super) enum ActiveBattle {
     Rival {
         battle: battle::Battle,
         trainer_id: assets::trainers::TrainerId,
+        reserves: PartyReserves,
     },
     /// A Route 103 sight-trainer battle, with the trainer it is fought
     /// against.
     SightTrainer {
         battle: battle::Battle,
         trainer_id: assets::trainers::TrainerId,
+        reserves: PartyReserves,
     },
 }
 
@@ -1022,12 +1027,16 @@ impl OverworldPhase {
         self.active_battle = match active {
             ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle, buttons),
             ActiveBattle::First(battle) => self.advance_first_battle_frame(battle, buttons),
-            ActiveBattle::Rival { battle, trainer_id } => {
-                self.advance_route103_rival_battle_frame(battle, trainer_id)
-            }
-            ActiveBattle::SightTrainer { battle, trainer_id } => {
-                self.advance_sight_trainer_battle_frame(battle, trainer_id)
-            }
+            ActiveBattle::Rival {
+                battle,
+                trainer_id,
+                reserves,
+            } => self.advance_route103_rival_battle_frame(battle, trainer_id, reserves),
+            ActiveBattle::SightTrainer {
+                battle,
+                trainer_id,
+                reserves,
+            } => self.advance_sight_trainer_battle_frame(battle, trainer_id, reserves),
         };
         true
     }
@@ -1084,6 +1093,8 @@ mod animation_tick_tests;
 mod battle_start_stats_tests;
 #[cfg(test)]
 mod bedroom_collision_tests;
+#[cfg(test)]
+mod birth_island_rock_tests;
 #[cfg(test)]
 mod connection_live_objects_tests;
 #[cfg(test)]
@@ -1180,6 +1191,8 @@ mod tall_grass_tests;
 mod test_support;
 #[cfg(test)]
 mod traded_lead_battle_tests;
+#[cfg(test)]
+mod trainer_party_tests;
 #[cfg(test)]
 mod warp_tests;
 #[cfg(test)]
