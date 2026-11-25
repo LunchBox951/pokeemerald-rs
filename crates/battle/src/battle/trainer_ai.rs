@@ -63,6 +63,13 @@ const QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD: u16 = 80;
 const RESISTED_DRAIN_PENALTY_THRESHOLD: u16 = 50;
 const RESISTED_DRAIN_PENALTY: i8 = -3;
 const STAT_DROP_DISCOURAGEMENT_THRESHOLD: u16 = 50;
+/// Cutoffs and rolls of `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:1536`-`:1545`).
+const VITAL_THROW_USER_HP_CEILING: u32 = 60;
+const VITAL_THROW_USER_HP_FLOOR: u32 = 40;
+const VITAL_THROW_GATE_THRESHOLD: u16 = 180;
+const VITAL_THROW_PENALTY_THRESHOLD: u16 = 50;
+/// The tie-break draw is `Random() & 1` (`src/battle_main.c:4745`).
+const SPEED_TIE_DRAW_MASK: u16 = 1;
 const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
 const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
 const DEFENSE_DROP_USER_HP_THRESHOLD: u32 = 70;
@@ -145,12 +152,9 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
 ];
 
 /// Rows whose `AI_CheckViability` branch is not ported
-/// (`data/battle_ai_scripts.s:686,706,708`).
-const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 3] = [
-    MoveEffect::HIGH_CRITICAL,
-    MoveEffect::SPEED_DOWN_HIT,
-    MoveEffect::VITAL_THROW,
-];
+/// (`data/battle_ai_scripts.s:686,706`).
+const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 2] =
+    [MoveEffect::HIGH_CRITICAL, MoveEffect::SPEED_DOWN_HIT];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -1083,6 +1087,9 @@ fn score_viability(
         ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ABSORB) => {
             score_drain_viability(dex, scores, slot, move_id, user, target, rng)?;
         }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::VITAL_THROW) => {
+            score_vital_throw_viability(scores, slot, user, target, rng);
+        }
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
         | ScoreableEffect::FocusEnergy
@@ -1130,6 +1137,52 @@ fn score_always_hit_viability(
     };
     if rolls && random_roll_is_at_least(rng, ALWAYS_HIT_BONUS_THRESHOLD) {
         scores.adjust(slot, SLIGHTLY_ENCOURAGE);
+    }
+}
+
+/// `if_target_faster` (`asm/macros/battle_ai_script.inc:595`-`:597`), i.e.
+/// `GetWhoStrikesFirst(user, target, TRUE) == 1`
+/// (`src/battle_ai_script_commands.c:1268`-`:1273`). `ignoreChosenMoves` zeroes
+/// both moves, so priority never decides (`src/battle_main.c:4743`-`:4753`).
+/// An equal Speed draws once (`Random() & 1`, `:4745`) and neither
+/// result means "target faster": the draw selects between the user going first
+/// and upstream's third, tied outcome, so it is spent and discarded.
+fn target_is_faster(
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> bool {
+    let user_speed = user.speed_for_turn_order();
+    let target_speed = target.speed_for_turn_order();
+    if user_speed == target_speed {
+        let _ = rng.next_u16() & SPEED_TIE_DRAW_MASK;
+    }
+    user_speed < target_speed
+}
+
+/// `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:708`, `:1536`-`:1545`). The
+/// speed query runs first, so a tie's draw is spent before any HP check.
+fn score_vital_throw_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if target_is_faster(user, target, rng) {
+        return;
+    }
+    let user_hp = current_hp_percent(user);
+    if user_hp > VITAL_THROW_USER_HP_CEILING {
+        return;
+    }
+    if user_hp >= VITAL_THROW_USER_HP_FLOOR
+        && !random_roll_is_at_least(rng, VITAL_THROW_GATE_THRESHOLD)
+    {
+        return;
+    }
+    if random_roll_is_at_least(rng, VITAL_THROW_PENALTY_THRESHOLD) {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
     }
 }
 
@@ -2515,3 +2568,5 @@ mod prologue_tests;
 mod quick_attack_tests;
 #[cfg(test)]
 mod stat_stage_tests;
+#[cfg(test)]
+mod vital_throw_viability_tests;
