@@ -93,6 +93,22 @@ fn bounded_catch_up_matches_the_unbounded_replay_bit_for_bit() {
     }
 }
 
+/// Replays `step` until it returns `first`, giving up after `bound` steps.
+///
+/// `Ok` holds the steps taken to return; `Err` holds the state reached when
+/// the bound ran out, so a generator stuck in another cycle or fixed point
+/// fails with its state instead of hanging the test.
+fn steps_until_return(first: u16, bound: u64, mut step: impl FnMut() -> u16) -> Result<u64, u16> {
+    let mut state = first;
+    for steps in 1..=bound {
+        state = step();
+        if state == first {
+            return Ok(steps);
+        }
+    }
+    Err(state)
+}
+
 #[test]
 fn the_lfsr_periods_match_the_catch_up_moduli() {
     for (byte, period) in [
@@ -103,14 +119,41 @@ fn the_lfsr_periods_match_the_catch_up_moduli() {
         noise.period = 1;
         noise.shift_lfsr(1);
         let first = noise.lfsr;
-        let mut shifts = 1;
-        loop {
+        let returned_after = steps_until_return(first, period, || {
             noise.shift_lfsr(1);
-            shifts += 1;
-            if noise.lfsr == first {
-                break;
-            }
-        }
-        assert_eq!(shifts - 1, period);
+            noise.lfsr
+        });
+        assert_eq!(
+            returned_after,
+            Ok(period),
+            "{byte:#04x}: first state {first:#06x} did not return within {period} shifts"
+        );
     }
+}
+
+#[test]
+fn a_generator_that_never_returns_fails_with_its_state_instead_of_hanging() {
+    // A fixed point away from the first state.
+    assert_eq!(steps_until_return(0x1234, 127, || 0x0001), Err(0x0001));
+    // A cycle that never revisits the first state.
+    let mut toggle = 0u16;
+    assert_eq!(
+        steps_until_return(0x1234, 127, || {
+            toggle ^= 1;
+            toggle
+        }),
+        Err(1)
+    );
+    let mut count = 0;
+    assert_eq!(
+        steps_until_return(7, 3, || {
+            count += 1;
+            if count == 3 {
+                7
+            } else {
+                0
+            }
+        }),
+        Ok(3)
+    );
 }
