@@ -757,7 +757,18 @@ fn rom_import_scratch_guard_spares_a_replacement() {
     std::fs::create_dir(&private).expect("the private move directory is free");
     let moved = private.join("moved.pack");
     std::fs::rename(&path, &moved).unwrap();
-    std::fs::write(&path, b"someone else's").unwrap();
+    // `create_new` fails on any existing entry, a planted symlink included,
+    // instead of truncating whatever the shared temp name points at.
+    {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("the vacated scratch name is free for the replacement")
+            .write_all(b"someone else's")
+            .unwrap();
+    }
     drop(guard);
     let survived = std::fs::read(&path).ok();
     let _ = std::fs::remove_file(&path);
