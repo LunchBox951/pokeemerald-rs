@@ -13,6 +13,52 @@ use platform::{ButtonState, Buttons};
 mod music_lifecycle;
 mod subprocess_harness;
 
+/// A headless `App` -- every scripted scenario and e2e lane -- keeps the fixed
+/// seed, so its new games and continues replay exactly; only the real
+/// window's [`WINDOWED_SEEDS`] draws a fresh one.
+#[test]
+fn headless_apps_pin_the_fixed_session_seed() {
+    use crate::new_game::RngSeedSource;
+    assert_eq!(App::new_headless().seeds, RngSeedSource::FIXED);
+}
+
+/// The real window's seed source, which [`App::new`] installs through
+/// [`App::into_real_window`], varies; a boot that kept the fixed seed would
+/// put every adventure back on one trainer ID.
+#[test]
+fn the_real_window_draws_its_session_seed_from_entropy() {
+    use crate::new_game::RngSeedSource;
+    let booted = App::new_headless();
+    assert_eq!(
+        booted.seeds,
+        RngSeedSource::FIXED,
+        "fixture precondition: the boot itself leaves the fixed seed"
+    );
+    assert_eq!(booted.into_real_window().seeds, RngSeedSource::Entropy);
+}
+
+/// `App::step` hands the App's own seed source to the scene dispatch: a
+/// finished intro stepped through the App builds the new game from it.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn app_step_passes_its_seed_source_into_the_new_game() {
+    use crate::flow::AppScene;
+    use crate::new_game::RngSeedSource;
+    const SEED: u32 = 0x1234;
+    let mut app = App::new_headless();
+    app.pack_source = crate::pack_source::PackSource::Repo;
+    app.seeds = RngSeedSource::Fixed(SEED);
+    app.scene = Some(AppScene::Intro(Box::new(
+        crate::intro::synthetic_finished_scene(),
+    )));
+    app.step().expect("headless step");
+    let Some(AppScene::Overworld(phase)) = app.scene.as_ref() else {
+        panic!("a finished intro must hand off to the overworld");
+    };
+    let id = u32::from_le_bytes(phase.save2().player_trainer_id);
+    assert_eq!(id & 0xFFFF, SEED, "trainer ID low half must be App's seed");
+}
+
 /// The animated path's `frame()` contract (I-2): after every step,
 /// `frame()` is the frame that step actually presented — the first
 /// step presents the initial tick-0 composition, the second tick 1's,
