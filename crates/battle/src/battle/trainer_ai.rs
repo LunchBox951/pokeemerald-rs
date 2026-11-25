@@ -78,6 +78,11 @@ const SPEED_UP_BONUS: i8 = 3;
 const SPEED_UP_SLOWER_TARGET_PENALTY: i8 = -3;
 /// The one- and two-stage Speed raises, both routed to `AI_CV_SpeedUp`.
 const SPEED_RAISE_EFFECTS: [MoveEffect; 2] = [MoveEffect::SPEED_UP, MoveEffect::SPEED_UP_2];
+/// Cutoffs and rolls of `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:1536`-`:1545`).
+const VITAL_THROW_USER_HP_CEILING: u32 = 60;
+const VITAL_THROW_USER_HP_FLOOR: u32 = 40;
+const VITAL_THROW_GATE_THRESHOLD: u16 = 180;
+const VITAL_THROW_PENALTY_THRESHOLD: u16 = 50;
 const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
 const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
 const DEFENSE_DROP_USER_HP_THRESHOLD: u32 = 70;
@@ -160,12 +165,9 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
 ];
 
 /// Rows whose `AI_CheckViability` branch is not ported
-/// (`data/battle_ai_scripts.s:686,706,708`).
-const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 3] = [
-    MoveEffect::HIGH_CRITICAL,
-    MoveEffect::SPEED_DOWN_HIT,
-    MoveEffect::VITAL_THROW,
-];
+/// (`data/battle_ai_scripts.s:686,706`).
+const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 2] =
+    [MoveEffect::HIGH_CRITICAL, MoveEffect::SPEED_DOWN_HIT];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -1101,6 +1103,9 @@ fn score_viability(
         ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ABSORB) => {
             score_drain_viability(dex, scores, slot, move_id, user, target, rng)?;
         }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::VITAL_THROW) => {
+            score_vital_throw_viability(scores, slot, user, target, rng);
+        }
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
         | ScoreableEffect::FocusEnergy
@@ -1204,6 +1209,32 @@ fn score_paralyze_viability(
             scores.adjust(slot, PARALYZE_FASTER_BONUS);
         }
     } else if current_hp_percent(user) <= PARALYZE_USER_HP_THRESHOLD {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+    }
+}
+
+/// `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:708`, `:1536`-`:1545`). The
+/// speed query runs first, so a tie's draw is spent before any HP check.
+fn score_vital_throw_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if target_is_faster(user, target, rng) {
+        return;
+    }
+    let user_hp = current_hp_percent(user);
+    if user_hp > VITAL_THROW_USER_HP_CEILING {
+        return;
+    }
+    if user_hp >= VITAL_THROW_USER_HP_FLOOR
+        && !random_roll_is_at_least(rng, VITAL_THROW_GATE_THRESHOLD)
+    {
+        return;
+    }
+    if random_roll_is_at_least(rng, VITAL_THROW_PENALTY_THRESHOLD) {
         scores.adjust(slot, SLIGHTLY_DISCOURAGE);
     }
 }
@@ -2594,3 +2625,5 @@ mod quick_attack_tests;
 mod speed_raise_viability_tests;
 #[cfg(test)]
 mod stat_stage_tests;
+#[cfg(test)]
+mod vital_throw_viability_tests;
