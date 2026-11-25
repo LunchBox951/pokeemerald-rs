@@ -271,22 +271,22 @@ impl EventData {
     /// count `local_days` (`GetDaysUntilPacifidlogTMAvailable`,
     /// `src/field_specials.c:1555-1564`).
     ///
-    /// Upstream's branch order is kept: zero once seven days have passed, then
-    /// eight for a negative `local_days`, otherwise the remaining days. The
+    /// Zero once seven days have passed, eight for a negative `local_days`,
+    /// otherwise the remaining days; the two special cases never overlap. The
     /// difference is signed, as in C's promoted `int` arithmetic, so a recorded
     /// day ahead of `local_days` is not clamped: the result exceeds seven, and
     /// past `u16::MAX` it wraps as the `u16` return does upstream.
     #[must_use]
     pub fn days_until_pacifidlog_tm_available(&self, local_days: i16) -> u16 {
         let received_day = self.vars[usize::from(VAR_PACIFIDLOG_TM_RECEIVED_DAY - VARS_START)];
-        let elapsed = i32::from(local_days) - i32::from(received_day);
-        if elapsed >= i32::from(PACIFIDLOG_TM_COOLDOWN_DAYS) {
-            0
-        } else if local_days < 0 {
-            PACIFIDLOG_TM_NEGATIVE_DAY_WAIT
-        } else {
-            PACIFIDLOG_TM_COOLDOWN_DAYS
-                .wrapping_sub(local_days.cast_unsigned().wrapping_sub(received_day))
+        let cooldown_over = i32::from(local_days) - i32::from(received_day)
+            >= i32::from(PACIFIDLOG_TM_COOLDOWN_DAYS);
+        match (cooldown_over, local_days < 0) {
+            (true, _) => 0,
+            (false, true) => PACIFIDLOG_TM_NEGATIVE_DAY_WAIT,
+            (false, false) => PACIFIDLOG_TM_COOLDOWN_DAYS
+                .wrapping_add(received_day)
+                .wrapping_sub(local_days.cast_unsigned()),
         }
     }
 
@@ -736,6 +736,23 @@ mod tests {
         }
         let data = pacifidlog_data_received_on(0);
         assert_eq!(data.days_until_pacifidlog_tm_available(0), 7);
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_matches_the_closed_form_for_every_local_day() {
+        let data = pacifidlog_data_received_on(100);
+        for local_days in i16::MIN..=i16::MAX {
+            let expected = match local_days {
+                ..0 => 8,
+                0..=106 => u16::try_from(107 - i32::from(local_days)).unwrap(),
+                107.. => 0,
+            };
+            assert_eq!(
+                data.days_until_pacifidlog_tm_available(local_days),
+                expected,
+                "local day {local_days}"
+            );
+        }
     }
 
     #[test]
