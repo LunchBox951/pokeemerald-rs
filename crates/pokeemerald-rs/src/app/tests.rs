@@ -22,12 +22,19 @@ fn headless_apps_pin_the_fixed_session_seed() {
     assert_eq!(App::new_headless().seeds, RngSeedSource::FIXED);
 }
 
-/// The real window's seed source, which [`App::new`] installs, varies; a
-/// change to a fixed seed would put every adventure back on one trainer ID.
+/// The real window's seed source, which [`App::new`] installs through
+/// [`App::into_real_window`], varies; a boot that kept the fixed seed would
+/// put every adventure back on one trainer ID.
 #[test]
 fn the_real_window_draws_its_session_seed_from_entropy() {
     use crate::new_game::RngSeedSource;
-    assert_eq!(super::WINDOWED_SEEDS, RngSeedSource::Entropy);
+    let booted = App::new_headless();
+    assert_eq!(
+        booted.seeds,
+        RngSeedSource::FIXED,
+        "fixture precondition: the boot itself leaves the fixed seed"
+    );
+    assert_eq!(booted.into_real_window().seeds, RngSeedSource::Entropy);
 }
 
 /// `App::step` hands the App's own seed source to the scene dispatch: a

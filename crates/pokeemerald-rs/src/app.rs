@@ -480,17 +480,25 @@ impl App {
     /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        let mut app = Self::boot(
+        let app = Self::boot(
             title::load_default,
             || Platform::new(title),
             || Ok(SaveSlot::default_location()),
             crate::pack_source::PackSource::Runtime,
         )?;
+        Ok(app.into_real_window())
+    }
+
+    /// What [`Self::new`] changes on a booted `App` because it owns a real
+    /// window: the audio device for the title BGM and a fresh seed per new
+    /// game and continue. Split from [`Self::new`] so a headless test can
+    /// observe it without opening a window.
+    fn into_real_window(mut self) -> Self {
         // `mus_title` starts on the initializer's state-4 frame
         // ([`Self::restart_title_music`]), not at construction.
-        app.title_audio = TitleAudio::Device;
-        app.seeds = WINDOWED_SEEDS;
-        Ok(app)
+        self.title_audio = TitleAudio::Device;
+        self.seeds = WINDOWED_SEEDS;
+        self
     }
 
     /// Load the real title screen and game-flow state through [`App::boot`]
