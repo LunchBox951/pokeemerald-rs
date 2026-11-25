@@ -57,6 +57,11 @@ pub enum TrainerDefeatSpeechError {
         /// Offending ID.
         id: u16,
     },
+    /// A record is not at its ID position in the wire order.
+    OutOfOrder {
+        /// The first ID found away from its own position.
+        id: u16,
+    },
     /// An inventory context has no record.
     MissingId {
         /// First absent ID.
@@ -83,6 +88,7 @@ impl fmt::Display for TrainerDefeatSpeechError {
             Self::TrailingBytes => write!(f, "bytes follow the last record"),
             Self::IdOutOfRange { id } => write!(f, "id {id} is out of range"),
             Self::DuplicateId { id } => write!(f, "id {id} is duplicated"),
+            Self::OutOfOrder { id } => write!(f, "id {id} is out of ID order"),
             Self::MissingId { id } => write!(f, "id {id} is missing"),
             Self::MalformedString { id, detail } => write!(f, "id {id}: {detail}"),
         }
@@ -126,7 +132,9 @@ impl<'a> TrainerDefeatSpeechTable<'a> {
     ///
     /// # Errors
     ///
-    /// Any [`TrainerDefeatSpeechError`]; nothing is repaired.
+    /// Any [`TrainerDefeatSpeechError`]; nothing is repaired. Records that are all
+    /// present but not in ID order give [`TrainerDefeatSpeechError::OutOfOrder`]; an
+    /// out-of-range, duplicate, or malformed record keeps its own error.
     pub fn decode(bytes: &'a [u8]) -> Result<Self, TrainerDefeatSpeechError> {
         let mut reader = Reader { bytes, pos: 0 };
         if reader.take(MAGIC.len())? != MAGIC {
@@ -150,7 +158,18 @@ impl<'a> TrainerDefeatSpeechTable<'a> {
         if reader.pos != bytes.len() {
             return Err(TrainerDefeatSpeechError::TrailingBytes);
         }
-        Self::from_entries(records)
+        // Validate the IDs first so a duplicate or out-of-range ID keeps its
+        // own error; only then is the wire order checked against the position.
+        let ids: Vec<u16> = records.iter().map(|&(id, _)| id).collect();
+        let table = Self::from_entries(records)?;
+        if let Some(&id) = ids
+            .iter()
+            .zip(0u16..)
+            .find_map(|(id, at)| (*id != at).then_some(id))
+        {
+            return Err(TrainerDefeatSpeechError::OutOfOrder { id });
+        }
+        Ok(table)
     }
 
     /// The canonical encoding, independent of construction order.
@@ -185,7 +204,7 @@ impl AssetPack {
     ///
     /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
     /// non-raw entry; [`PackError::TrainerDefeatSpeechDecode`] when the payload is
-    /// truncated, malformed, sparse, duplicated, out of range, or has an
+    /// truncated, malformed, sparse, duplicated, out of order, out of range, or has an
     /// unterminated string.
     pub fn trainer_defeat_speeches(&self) -> Result<TrainerDefeatSpeechTable<'_>, PackError> {
         let bytes = self.raw(TABLE_PACK_ID)?;

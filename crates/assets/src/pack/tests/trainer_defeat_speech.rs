@@ -305,3 +305,26 @@ fn a_pack_from_the_format_without_defeat_speeches_is_refused_on_load() {
     );
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn decode_refuses_records_out_of_id_order() {
+    let streams = streams();
+    // Every record is 8 bytes here, so rotating a pair swaps both whole.
+    let swapped = |first: usize| {
+        let mut bytes = canonical(&streams);
+        let at = 8 + first * 8;
+        bytes[at..at + 16].rotate_left(8);
+        bytes
+    };
+    let bad = swapped(0);
+    assert_eq!(bad[8..10], [1, 0]);
+    assert_eq!(
+        TrainerDefeatSpeechTable::decode(&bad),
+        Err(TrainerDefeatSpeechError::OutOfOrder { id: 1 })
+    );
+    let bad = swapped(12);
+    assert_eq!(
+        TrainerDefeatSpeechTable::decode(&bad),
+        Err(TrainerDefeatSpeechError::OutOfOrder { id: 13 })
+    );
+}
