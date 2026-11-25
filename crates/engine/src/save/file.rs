@@ -16,7 +16,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use self::lock::{HeldDirectory, LockedDirectory};
-use self::open::UnusableEntry;
+use self::open::{open_directory_for_sync, UnusableEntry};
 #[cfg(not(windows))]
 use self::open::{
     open_refused_a_symlink, refuse_an_unusable_entry, refuse_an_unusable_open,
@@ -561,7 +561,7 @@ impl SaveFile {
     }
 
     fn sync_directory_best_effort(path: &Path) {
-        drop(std::fs::File::open(path).and_then(|directory| directory.sync_all()));
+        drop(open_directory_for_sync(path).and_then(|directory| directory.sync_all()));
     }
 
     /// Creates the save file's parent directory and any missing ancestors;
