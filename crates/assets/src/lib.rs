@@ -32,7 +32,8 @@
 //! Events word group (see [`easy_chat_events`]), the facility-class portrait
 //! and trainer-class lookups (see [`facility_classes`]), the four NPC trade
 //! offers with their mail messages (see [`ingame_trades`]), and the Lilycove
-//! Lady quiz, favor, and contest data (see [`lilycove_lady`]); more data
+//! Lady quiz, favor, and contest data (see [`lilycove_lady`]), and the Frontier
+//! Brain appearance thresholds (see [`frontier_brain_thresholds`]); more data
 //! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -78,6 +79,7 @@ pub mod evolution;
 pub mod experience;
 pub mod facility_classes;
 pub mod fonts;
+pub mod frontier_brain_thresholds;
 pub mod frontier_exchange_corner;
 pub mod hidden_item_flags;
 pub mod ingame_trades;
@@ -162,6 +164,10 @@ pub use fonts::{
     FontGlyphSheet, FontId, FontImageRef, Glyph, GlyphSource, GlyphSources, OwnedFontGlyphSheet,
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
     SHEET_HEIGHT, SHEET_WIDTH,
+};
+pub use frontier_brain_thresholds::{
+    frontier_brain_thresholds, FrontierBrainThresholds, FrontierBrainThresholdsError,
+    FRONTIER_FACILITY_COUNT,
 };
 pub use ingame_trades::{
     InGameTrade, InGameTradeError, InGameTradeId, InGameTradeMail, InGameTradeTable, TradeOtGender,
