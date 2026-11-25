@@ -55,8 +55,8 @@ fn a_trainer_battle_opens_with_the_challenge_and_the_trainers_send_out() {
             narrator.initial_send_out(Side::Opponent).unwrap()
         ]),
         [
-            "YOUNGSTER BEN\nwould like to battle!{CLEAR}",
-            "YOUNGSTER BEN sent\nout RATTATA!"
+            "ZQVX BEN\nwould like to battle!{CLEAR}",
+            "ZQVX BEN sent\nout RATTATA!"
         ]
     );
 }
@@ -606,7 +606,7 @@ fn a_replacement_is_named_after_the_faint_that_precedes_it() {
         lines(&requests),
         [
             "Foe RATTATA\nfainted!{CLEAR}",
-            "YOUNGSTER BEN sent\nout ZIGZAGOON!",
+            "ZQVX BEN sent\nout ZIGZAGOON!",
             "Foe ZIGZAGOON's\nattack missed!"
         ]
     );
@@ -681,7 +681,7 @@ fn a_trainer_victory_prints_the_defeat_the_trainers_words_then_the_prize() {
     assert_eq!(
         lines(&narrate(&mut narrator, &events)),
         [
-            "Player defeated\nYOUNGSTER BEN!{CLEAR}",
+            "Player defeated\nZQVX BEN!{CLEAR}",
             "Good battle!{CTRL:0x09}",
             "BRENDAN got ¥120\nfor winning!{CLEAR}"
         ]

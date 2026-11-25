@@ -213,10 +213,10 @@ fn class_and_name(class: Vec<Token>) -> Vec<Token> {
 
 #[test]
 fn an_ordinary_trainer_class_expands_to_the_same_text_as_before() {
-    let tokens = class_and_name(text_tokens("YOUNGSTER"));
+    let tokens = class_and_name(text_tokens("ZQVX"));
 
-    assert_eq!(render(&tokens), "YOUNGSTER BEN!");
-    assert_eq!(tokens[0], Token::Char('Y'));
+    assert_eq!(render(&tokens), "ZQVX BEN!");
+    assert_eq!(tokens[0], Token::Char('Z'));
     assert!(!tokens.iter().any(|t| matches!(t, Token::Symbol(_))));
 }
 
