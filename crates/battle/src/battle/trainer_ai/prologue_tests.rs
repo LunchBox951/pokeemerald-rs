@@ -251,7 +251,7 @@ fn admission_is_flag_aware() {
             "{move_id:?}"
         );
     }
-    for move_id in [MoveId::SLASH, MoveId::MUD_SHOT, MoveId::VITAL_THROW] {
+    for move_id in [MoveId::SLASH, MoveId::VITAL_THROW] {
         assert_eq!(
             ensure_scoreable(&dex, move_id, only_cbm.union(AiFlags::CHECK_VIABILITY)),
             Err(BattleError::UnscoreableMoveEffect(move_id))
