@@ -21385,6 +21385,14 @@
       "status": "pending"
     },
     "include/constants/battle_pyramid.h": {
+      "artifacts": {
+        "OBJ_POSITIONS": {
+          "reason": "include/constants/battle_pyramid.h:27-31 OBJ_POSITIONS_UNIFORM, OBJ_POSITIONS_IN_AND_NEAR_ENTRANCE, OBJ_POSITIONS_IN_AND_NEAR_EXIT, OBJ_POSITIONS_NEAR_ENTRANCE and OBJ_POSITIONS_NEAR_EXIT (0 to 4), modelled as the ObjectPositions enum whose value() returns the upstream number, used for the item and trainer position policies of the floor templates. Pinned by a unit test, and the ignored test that re-parses src/battle_pyramid.c also reads these values from this header. NOT modelled: the placement each policy asks for, and the rest of the header (the round and Pickup counts at :4-5, the hint ids, MAX_PYRAMID_TRAINERS, the floor-square grid sizes, OBJ_TRAINERS/OBJ_ITEMS, the BATTLE_PYRAMID_FUNC_* and PYRAMID_DATA_* ids and the remaining constants), which stay with this file's pending row.",
+          "rust_target": "crates/assets/src/battle_pyramid_floors.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
