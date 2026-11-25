@@ -76,6 +76,14 @@ pub const NUM_SPECIAL_VARS: u16 = SPECIAL_VARS_END - SPECIAL_VARS_START + 1;
 /// Remaining Repel steps (`VAR_REPEL_STEP_COUNT`, `include/constants/vars.h:51`). The
 /// ordinary variable is saved with the rest of `SaveBlock1`; nonzero means a Repel is active.
 pub const VAR_REPEL_STEP_COUNT: u16 = 0x4021;
+/// Local day recorded when the Pacifidlog house gave its weekly TM
+/// (`VAR_PACIFIDLOG_TM_RECEIVED_DAY`, `include/constants/vars.h:214`).
+const VAR_PACIFIDLOG_TM_RECEIVED_DAY: u16 = 0x40C2;
+/// Days that must pass before the Pacifidlog house gives another TM
+/// (the literal `7` in `GetDaysUntilPacifidlogTMAvailable`, `src/field_specials.c:1558-1563`).
+const PACIFIDLOG_TM_COOLDOWN_DAYS: u16 = 7;
+/// Wait reported when the local day count is negative (`src/field_specials.c:1560-1561`).
+const PACIFIDLOG_TM_NEGATIVE_DAY_WAIT: u16 = 8;
 const VAR_ABNORMAL_WEATHER_LOCATION: u16 = 0x4037;
 const VAR_SHOULD_END_ABNORMAL_WEATHER: u16 = 0x4039;
 const ABNORMAL_WEATHER_NONE: u16 = 0;
@@ -257,6 +265,41 @@ impl EventData {
         } else {
             Err(EventDataError::OutOfRange(id))
         }
+    }
+
+    /// Days until the Pacifidlog house gives another TM, given the local day
+    /// count `local_days` (`GetDaysUntilPacifidlogTMAvailable`,
+    /// `src/field_specials.c:1555-1564`).
+    ///
+    /// Upstream's branch order is kept: zero once seven days have passed, then
+    /// eight for a negative `local_days`, otherwise the remaining days. The
+    /// difference is signed, as in C's promoted `int` arithmetic, so a recorded
+    /// day ahead of `local_days` is not clamped: the result exceeds seven, and
+    /// past `u16::MAX` it wraps as the `u16` return does upstream.
+    #[must_use]
+    pub fn days_until_pacifidlog_tm_available(&self, local_days: i16) -> u16 {
+        let received_day = self.vars[usize::from(VAR_PACIFIDLOG_TM_RECEIVED_DAY - VARS_START)];
+        let elapsed = i32::from(local_days) - i32::from(received_day);
+        if elapsed >= i32::from(PACIFIDLOG_TM_COOLDOWN_DAYS) {
+            0
+        } else if local_days < 0 {
+            PACIFIDLOG_TM_NEGATIVE_DAY_WAIT
+        } else {
+            PACIFIDLOG_TM_COOLDOWN_DAYS
+                .wrapping_sub(local_days.cast_unsigned().wrapping_sub(received_day))
+        }
+    }
+
+    /// Records `local_days` as the day the Pacifidlog TM was received and
+    /// returns the stored value (`SetPacifidlogTMReceivedDay`,
+    /// `src/field_specials.c:1566-1570`).
+    ///
+    /// A negative `local_days` is stored as its two's-complement `u16`, as the
+    /// `s16` to `u16` assignment does upstream, and is not normalised.
+    pub fn set_pacifidlog_tm_received_day(&mut self, local_days: i16) -> u16 {
+        let stored = local_days.cast_unsigned();
+        self.vars[usize::from(VAR_PACIFIDLOG_TM_RECEIVED_DAY - VARS_START)] = stored;
+        stored
     }
 
     /// Clears per-map temporary values and related system flags.
@@ -618,6 +661,156 @@ mod tests {
         assert_eq!(restored.var_get(VARS_START), Ok(0xBEEF));
         assert_eq!(restored.flag_get(SPECIAL_FLAGS_START), Ok(false));
         assert_eq!(restored.var_get(SPECIAL_VARS_START), Ok(0));
+    }
+
+    const PACIFIDLOG_TM_VAR: u16 = 0x40C2;
+
+    fn pacifidlog_data_received_on(day: u16) -> EventData {
+        let mut data = EventData::new();
+        data.var_set(PACIFIDLOG_TM_VAR, day).unwrap();
+        data
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_counts_down_and_reaches_zero_at_seven_days() {
+        let data = pacifidlog_data_received_on(10);
+        let waits: [(i16, u16); 7] = [
+            (10, 7),
+            (11, 6),
+            (12, 5),
+            (14, 3),
+            (15, 2),
+            (16, 1),
+            (17, 0),
+        ];
+        for (local_days, expected) in waits {
+            assert_eq!(
+                data.days_until_pacifidlog_tm_available(local_days),
+                expected,
+                "local day {local_days}"
+            );
+        }
+        assert_eq!(data.days_until_pacifidlog_tm_available(18), 0);
+        assert_eq!(data.days_until_pacifidlog_tm_available(i16::MAX), 0);
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_on_fresh_data_is_a_full_week_on_day_zero() {
+        let data = EventData::new();
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 7);
+        assert_eq!(data.days_until_pacifidlog_tm_available(6), 1);
+        assert_eq!(data.days_until_pacifidlog_tm_available(7), 0);
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_for_a_recorded_day_ahead_is_not_clamped() {
+        let data = pacifidlog_data_received_on(10);
+        assert_eq!(data.days_until_pacifidlog_tm_available(9), 8);
+        assert_eq!(data.days_until_pacifidlog_tm_available(3), 14);
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 17);
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_wraps_at_the_u16_return_edge() {
+        let data = pacifidlog_data_received_on(u16::MAX);
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 6);
+        assert_eq!(data.days_until_pacifidlog_tm_available(5), 1);
+        assert_eq!(data.days_until_pacifidlog_tm_available(6), 0);
+        assert_eq!(data.days_until_pacifidlog_tm_available(7), 65535);
+
+        let data = pacifidlog_data_received_on(0x7FFF);
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 0x8006);
+        assert_eq!(data.days_until_pacifidlog_tm_available(i16::MAX), 7);
+    }
+
+    #[test]
+    fn pacifidlog_tm_wait_for_a_negative_local_day_is_eight() {
+        for received in [0, 1, 0x7FFF, 0x8000, u16::MAX] {
+            let data = pacifidlog_data_received_on(received);
+            assert_eq!(data.days_until_pacifidlog_tm_available(-1), 8, "{received}");
+            assert_eq!(
+                data.days_until_pacifidlog_tm_available(i16::MIN),
+                8,
+                "{received}"
+            );
+        }
+        let data = pacifidlog_data_received_on(0);
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 7);
+    }
+
+    #[test]
+    fn pacifidlog_tm_received_day_is_stored_and_returned_as_u16() {
+        let cases: [(i16, u16); 6] = [
+            (0, 0),
+            (1, 1),
+            (i16::MAX, 0x7FFF),
+            (-1, 0xFFFF),
+            (-2, 0xFFFE),
+            (i16::MIN, 0x8000),
+        ];
+        for (local_days, expected) in cases {
+            let mut data = EventData::new();
+            assert_eq!(data.set_pacifidlog_tm_received_day(local_days), expected);
+            assert_eq!(
+                data.var_get(PACIFIDLOG_TM_VAR),
+                Ok(expected),
+                "{local_days}"
+            );
+        }
+    }
+
+    #[test]
+    fn pacifidlog_tm_received_day_overwrites_the_previous_day_and_starts_a_new_wait() {
+        let mut data = pacifidlog_data_received_on(10);
+        assert_eq!(data.days_until_pacifidlog_tm_available(20), 0);
+        data.set_pacifidlog_tm_received_day(20);
+        assert_eq!(data.days_until_pacifidlog_tm_available(20), 7);
+        assert_eq!(data.days_until_pacifidlog_tm_available(26), 1);
+        assert_eq!(data.days_until_pacifidlog_tm_available(27), 0);
+    }
+
+    #[test]
+    fn pacifidlog_tm_received_day_after_a_negative_day_reads_as_ahead_of_day_zero() {
+        let mut data = EventData::new();
+        data.set_pacifidlog_tm_received_day(-1);
+        assert_eq!(data.days_until_pacifidlog_tm_available(-1), 8);
+        assert_eq!(data.days_until_pacifidlog_tm_available(0), 6);
+    }
+
+    #[test]
+    fn pacifidlog_tm_helpers_touch_only_their_own_variable() {
+        let mut data = EventData::new();
+        data.flag_set(100).unwrap();
+        data.var_set(VARS_START, 0xBEEF).unwrap();
+        data.var_set(PACIFIDLOG_TM_VAR - 1, 0x4321).unwrap();
+        data.var_set(PACIFIDLOG_TM_VAR + 1, 0x1234).unwrap();
+        data.var_set(SPECIAL_VARS_START, 999).unwrap();
+        let mut expected = data.clone();
+        expected.var_set(PACIFIDLOG_TM_VAR, 42).unwrap();
+
+        data.set_pacifidlog_tm_received_day(42);
+        let _ = data.days_until_pacifidlog_tm_available(45);
+
+        assert_eq!(data.flag_bytes(), expected.flag_bytes());
+        assert_eq!(data.vars_raw(), expected.vars_raw());
+        assert_eq!(data.var_get(SPECIAL_VARS_START), Ok(999));
+    }
+
+    #[test]
+    fn pacifidlog_tm_received_day_survives_a_save_block_round_trip() {
+        use crate::save::block::SaveBlock1;
+
+        let mut block = SaveBlock1::default();
+        block.event_data.set_pacifidlog_tm_received_day(-3);
+        let bytes = block.to_bytes(0x1234_5678);
+        let restored = SaveBlock1::from_bytes(&bytes, 0x1234_5678).unwrap();
+
+        assert_eq!(restored.event_data.var_get(PACIFIDLOG_TM_VAR), Ok(0xFFFD));
+        assert_eq!(
+            restored.event_data.days_until_pacifidlog_tm_available(-3),
+            8
+        );
+        assert_eq!(restored.event_data.days_until_pacifidlog_tm_available(0), 4);
     }
 
     #[test]

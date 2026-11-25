@@ -21775,6 +21775,12 @@
     },
     "include/constants/vars.h": {
       "artifacts": {
+        "VAR_PACIFIDLOG_TM_RECEIVED_DAY": {
+          "reason": "vars.h:214, the id 0x40C2 as event_data's private VAR_PACIFIDLOG_TM_RECEIVED_DAY, an ordinary saved variable inside VARS_START..=VARS_END. It is read and written only by EventData::days_until_pacifidlog_tm_available and set_pacifidlog_tm_received_day (src/field_specials.c:1555-1570). Not modelled: any other vars.h id the engine has no code for.",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "ported"
+        },
         "var_id_space": {
           "reason": "VARS_START/END, VARS_COUNT, TEMP_VARS_START/END, and SPECIAL_VARS_START/END transcribed as typed constants; the individual VAR_* name registry remains pending for a later assets slice",
           "rust_target": "crates/engine/src/event_data.rs",
@@ -32627,9 +32633,21 @@
     },
     "src/field_specials.c": {
       "artifacts": {
+        "GetDaysUntilPacifidlogTMAvailable": {
+          "reason": "field_specials.c:1555-1564, read by data/maps/PacifidlogTown_House2/scripts.inc:20-23. EventData::days_until_pacifidlog_tm_available reads VAR_PACIFIDLOG_TM_RECEIVED_DAY (vars.h:214) as a u16 and keeps upstream's branch order on the signed difference (the s16 gLocalTime.days minus the u16 day, as C's promoted int): zero once seven days passed, then 8 for a negative local day, otherwise 7 minus the difference truncated to the u16 return. A recorded day ahead of the local day is not clamped (9 after recording 10 gives 8, 3 gives 14) and a recorded day of 0xFFFF wraps (day 0 gives 6, day 6 gives 0), as does a negative day already stored as its u16 image. The local day count is a caller-supplied i16 and makes no RNG draw. Not modelled: where gLocalTime.days comes from (the real-time clock policy, issue #2396), the GetDaysUntilPacifidlogTMAvailable special's dispatch (crate::script::specials lists it by name only), and the PacifidlogTown_House2 script's VAR_RESULT branch that clears FLAG_RECEIVED_FANCLUB_TM_THIS_WEEK.",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "IncrementBirthIslandRockStepCount": {
           "reason": "field_specials.c:3377-3387, called from ProcessPlayerFieldInput on tookStep right after IncrementGameStat(GAME_STAT_STEPS) and before TryStartStepBasedScript (field_control_avatar.c:155-160). OverworldPhase::increment_birth_island_rock_step_count, run from count_took_step, advances VAR_DEOXYS_ROCK_STEP_COUNT (vars.h:72, a saved event var) on MAP_BIRTH_ISLAND_EXTERIOR only, as a u16 wrapping increment that stores zero once the result passes 99, so a loaded value of 99 or more resets rather than climbing and 0xFFFF wraps to zero with no panic and no RNG draw. A landing a coord event or door-shaped warp then claims is still counted; the forced landing, the escalator arrival's held walk-off and an unfinished crossing are not (take_stepped_onto), as for GAME_STAT_STEPS. Not modelled: the rock movement and palette (SetDeoxysRockPalette, the Deoxys triangle scripts), the puzzle outcome, the Deoxys encounter and the trip to the island.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/birth_island_rock.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "SetPacifidlogTMReceivedDay": {
+          "reason": "field_specials.c:1566-1570. EventData::set_pacifidlog_tm_received_day stores the caller-supplied s16 local day in VAR_PACIFIDLOG_TM_RECEIVED_DAY (vars.h:214) and returns the stored value, both as the u16 two's-complement image upstream's s16-to-u16 VarSet and return conversions produce (-1 gives 0xFFFF, i16::MIN gives 0x8000), unnormalised. The variable is an ordinary saved var, so it round-trips through SaveBlock1 and no RNG draw is made. Not modelled: where gLocalTime.days comes from (the real-time clock policy, issue #2396), the SetPacifidlogTMReceivedDay special's dispatch (crate::script::specials lists it by name only), and the TM gift choice, text and map wiring in PacifidlogTown_House2's scripts.",
+          "rust_target": "crates/engine/src/event_data.rs",
           "spec": "S-5",
           "status": "rewritten"
         }
