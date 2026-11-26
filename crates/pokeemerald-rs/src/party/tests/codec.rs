@@ -954,3 +954,45 @@ fn assert_status_word_fails_closed(dex: &Dex, word: u32) {
         "no battler exists to re-save over it, so the record is untouched: word {word:#x}"
     );
 }
+
+/// A saved single-ability species with `abilityNum == 1` decodes to
+/// `ABILITY_NONE` and none of the primary ability's effects, as upstream's
+/// `GetAbilityBySpecies` (`pokeemerald/src/pokemon.c:4546-4553`) selects
+/// `abilities[1]` verbatim and battle init assigns it unchanged
+/// (`pokeemerald/src/battle_main.c:3418-3420`).
+#[test]
+fn a_saved_second_slot_on_a_single_ability_species_decodes_to_no_ability() {
+    const BULBASAUR: assets::SpeciesId = assets::SpeciesId(1);
+
+    let dex = Dex::new();
+    let build = |slot: u8| {
+        BattlePokemon::new(&dex, BULBASAUR, 20, Ivs::default(), 0, vec![TACKLE])
+            .expect("Bulbasaur is in the dex")
+            .with_ability_slot(slot)
+    };
+    let decode = |mon: &BattlePokemon| {
+        from_save_pokemon(&dex, &to_save_pokemon(&dex, mon)).expect("what we just wrote decodes")
+    };
+
+    let primary = decode(&build(0));
+    assert_eq!(primary.ability(), battle::OVERGROW, "fixture sanity");
+    assert!(battle::pinch_boosts_power(
+        primary.ability(),
+        assets::Type::Grass,
+        1,
+        primary.stats().max_hp
+    ));
+
+    let restored = decode(&build(1));
+    assert_eq!(restored.ability_slot(), 1);
+    assert_eq!(restored.ability(), assets::AbilityId::NONE);
+    assert!(
+        !battle::pinch_boosts_power(
+            restored.ability(),
+            assets::Type::Grass,
+            1,
+            restored.stats().max_hp
+        ),
+        "Overgrow must not activate for a battler whose slot-1 ability is empty"
+    );
+}

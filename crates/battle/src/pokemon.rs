@@ -716,11 +716,15 @@ impl BattlePokemon {
     /// Ability selected by [`BattlePokemon::ability_slot`], which a copy by
     /// Trace never changes.
     ///
-    /// Species without a secondary ability always use their primary ability.
+    /// The slot is read verbatim, as upstream's `GetAbilityBySpecies` does
+    /// (`pokemon.c:4546-4554`): a saved slot 1 on a single-ability species
+    /// yields [`AbilityId`]`(0)` (`ABILITY_NONE`), not the primary. Construction
+    /// never picks such a slot ([`initial_ability_slot`]); only a restored save
+    /// ([`BattlePokemon::with_ability_slot`]) can.
     #[must_use]
     pub const fn native_ability(&self) -> AbilityId {
         let [first, second] = self.base_stats.abilities;
-        if second.0 == 0 || self.ability_slot == 0 {
+        if self.ability_slot == 0 {
             first
         } else {
             second

@@ -939,3 +939,25 @@ fn a_toxic_counter_beyond_four_bits_is_refused() {
     let mut mon = sample_mon(&Dex::new());
     mon.set_status1(Status1::BadPoisoned { counter: 16 });
 }
+
+/// Upstream `GetAbilityBySpecies` (`pokeemerald/src/pokemon.c:4546-4553`)
+/// reads `abilities[1]` verbatim for `abilityNum == 1`, so a slot-1
+/// single-ability Bulbasaur has `ABILITY_NONE`, not Overgrow.
+#[test]
+fn slot_one_single_ability_species_has_no_ability() {
+    let dex = Dex::new();
+    let mon = sample_mon(&dex).with_ability_slot(1);
+    assert_eq!(mon.ability_slot(), 1);
+    assert_eq!(mon.ability(), assets::AbilityId(0));
+    assert_eq!(mon.native_ability(), assets::AbilityId(0));
+}
+
+/// The construction-time rule still generates slot 0 for a single-ability
+/// species whatever the personality parity (`pokemon.c:2296-2300`).
+#[test]
+fn construction_keeps_a_single_ability_species_on_slot_zero() {
+    let dex = Dex::new();
+    let odd = BattlePokemon::new(&dex, BULBASAUR, 5, Ivs::default(), 1, vec![TACKLE]).unwrap();
+    assert_eq!(odd.ability_slot(), 0);
+    assert_eq!(odd.ability(), crate::ability::OVERGROW);
+}
