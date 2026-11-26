@@ -37,7 +37,7 @@ use super::quarantine::unguessable_quarantine_name;
 use super::report::{
     level_location, located_beside, standing, warn_if_moved_away, warn_left_standing, Standing,
 };
-use super::restore::{holds_this_level, is_this_level, rename_without_replacing};
+use super::restore::{holds_this_level, is_this_level, rename_without_replacing, restored_name};
 use super::{CaptureStage, Outcome};
 
 /// Where [`put_back_aside`] left a level moved aside.
@@ -219,14 +219,14 @@ fn move_aside(parent: &OwnedFd, dir: &CreatedDirectory, aside: &OsString) -> Opt
 }
 
 /// Moves what sits at `aside` in `parent` back under `dir`'s name, or under
-/// the first free `<name>.restored-<n>`; every move is no-replace.
+/// the first free `<name>.restored-<n>` (cut short to fit the component
+/// limit, as [`restored_name`] does); every move is no-replace.
 fn put_back_aside(parent: &OwnedFd, dir: &CreatedDirectory, aside: &OsString) -> PutBack {
     if rename_without_replacing(parent, aside, parent, &dir.name).is_ok() {
         return PutBack::InPlace;
     }
     for n in 0..16 {
-        let mut restored = dir.name.clone();
-        restored.push(format!(".restored-{n}"));
+        let restored = restored_name(&dir.name, n);
         if rename_without_replacing(parent, aside, parent, &restored).is_ok() {
             return PutBack::Aside(restored);
         }

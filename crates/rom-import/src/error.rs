@@ -410,6 +410,32 @@ pub enum ImportError {
         /// What the schema objected to.
         source: assets::pack::FieldMessageError,
     },
+    /// The trainer defeat-speech schema refused what the ROM holds: a stream
+    /// with no well-formed terminator, or roots the inventory cannot be filled
+    /// from.
+    TrainerDefeatSpeech {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::pack::TrainerDefeatSpeechError,
+    },
+    /// The sight-trainer intro-speech schema refused what the ROM holds: a
+    /// stream with no well-formed terminator, or roots the inventory cannot be
+    /// filled from.
+    SightTrainerIntroSpeech {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::pack::SightTrainerIntroSpeechError,
+    },
+    /// The trainer class-name schema refused what the ROM holds: a fixed-width
+    /// row with no well-formed terminator, or a nonzero byte after a name.
+    TrainerClassName {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::pack::TrainerClassNameError,
+    },
     /// The battle-animation schema refused what the ROM holds: a program
     /// whose shape or operands the catalog cannot carry, or roots it cannot
     /// be assembled from.
@@ -605,6 +631,9 @@ impl fmt::Display for ImportError {
             Self::Audio { id, source } => write!(f, "`{id}`: {source}"),
             Self::BattleMessage { id, source } => write!(f, "`{id}`: {source}"),
             Self::FieldMessage { id, source } => write!(f, "`{id}`: {source}"),
+            Self::TrainerDefeatSpeech { id, source } => write!(f, "`{id}`: {source}"),
+            Self::SightTrainerIntroSpeech { id, source } => write!(f, "`{id}`: {source}"),
+            Self::TrainerClassName { id, source } => write!(f, "`{id}`: {source}"),
             Self::BattleAnimation { id, source } => write!(f, "`{id}`: {}", OneLineText(source)),
             Self::AnimationOpcode { at, opcode } => write!(
                 f,
@@ -670,6 +699,9 @@ impl std::error::Error for ImportError {
             Self::Audio { source, .. } => Some(source),
             Self::BattleMessage { source, .. } => Some(source),
             Self::FieldMessage { source, .. } => Some(source),
+            Self::TrainerDefeatSpeech { source, .. } => Some(source),
+            Self::SightTrainerIntroSpeech { source, .. } => Some(source),
+            Self::TrainerClassName { source, .. } => Some(source),
             Self::BattleAnimation { source, .. } => Some(source),
             _ => None,
         }
@@ -817,6 +849,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one flat list of a case per ImportError variant; splitting it scatters the single-line claim"
+    )]
     #[test]
     fn messages_are_single_line() {
         let cases = [
@@ -886,6 +922,18 @@ mod tests {
             ImportError::FieldMessage {
                 id: "field-message/table",
                 source: assets::pack::FieldMessageError::Truncated,
+            },
+            ImportError::TrainerDefeatSpeech {
+                id: "trainer-defeat-speech/table",
+                source: assets::pack::TrainerDefeatSpeechError::Truncated,
+            },
+            ImportError::SightTrainerIntroSpeech {
+                id: "sight-trainer-intro-speech/table",
+                source: assets::pack::SightTrainerIntroSpeechError::Truncated,
+            },
+            ImportError::TrainerClassName {
+                id: "trainer-class-name/table",
+                source: assets::pack::TrainerClassNameError::Truncated,
             },
             ImportError::BattleAnimation {
                 id: "battle-anim/catalog",

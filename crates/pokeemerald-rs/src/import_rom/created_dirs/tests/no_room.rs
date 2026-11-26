@@ -70,14 +70,17 @@ fn a_full_filesystem_still_takes_back_every_created_level() {
 #[cfg(unix)]
 #[test]
 fn a_full_filesystem_leaves_a_level_holding_something_and_the_levels_above() {
-    // `b` holds a file: `c` is taken back, `b` is moved aside, found not
-    // empty, and put back under its name, and `a` above it is left too.
+    // `b` holds a file before rollback lists it: `c` is taken back, `b` is
+    // not moved at all (no random name ever stands beside it), and `a`
+    // above it is left too.
     if !in_rollback_stderr_child() {
         let stderr = rerun_alone_for_stderr(
             "import_rom::created_dirs::tests::no_room::a_full_filesystem_leaves_a_level_holding_something_and_the_levels_above",
         );
         assert!(
-            stderr.contains("/a/b is left in place: it could not be removed: "),
+            stderr.contains(
+                "/a/b is left in place: it holds entries, so rollback did not move it into a cleanup directory"
+            ),
             "stderr:\n{stderr}"
         );
         assert!(!stderr.contains("/a is left in place"), "stderr:\n{stderr}");
@@ -86,13 +89,58 @@ fn a_full_filesystem_leaves_a_level_holding_something_and_the_levels_above() {
     let dir = TempDir::new("no-room-holding");
     let created = super::create_directories(&dir.join("a").join("b").join("c")).unwrap();
     fs::write(dir.join("a").join("b").join("data"), b"theirs").unwrap();
+    let a = dir.join("a");
+    let mut stages_at_b = 0;
     undo_failing(
         &created,
         rustix::io::Errno::NOSPC,
         &mut || {},
-        &mut |_, _| {},
+        &mut |_, _| {
+            // Only `c`, which is empty, reaches a capture stage; `b` must
+            // never be under a random name.
+            if !a.join("b").is_dir() {
+                stages_at_b += 1;
+            }
+        },
     );
+    assert_eq!(stages_at_b, 0, "b was moved aside though it holds entries");
+    assert_eq!(entry_names(&dir.path), ["a"]);
+    assert_eq!(entry_names(&a), ["b"], "no random name is left beside b");
+    assert_eq!(entry_names(&a.join("b")), ["data"]);
+    assert_eq!(fs::read(a.join("b").join("data")).unwrap(), b"theirs");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_full_filesystem_puts_back_a_level_filled_while_it_is_aside() {
+    // `b` lists empty, so it is moved aside; a writer fills it there before
+    // the check. It is found not empty, put back under its name, and `a`
+    // above it is left too.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::no_room::a_full_filesystem_puts_back_a_level_filled_while_it_is_aside",
+        );
+        assert!(
+            stderr.contains("/a/b is left in place: it could not be removed: "),
+            "stderr:\n{stderr}"
+        );
+        assert!(!stderr.contains("/a is left in place"), "stderr:\n{stderr}");
+        return;
+    }
+    let dir = TempDir::new("no-room-filled-aside");
+    let created = super::create_directories(&dir.join("a").join("b").join("c")).unwrap();
     let a = dir.join("a");
+    undo_failing(
+        &created,
+        rustix::io::Errno::NOSPC,
+        &mut || {},
+        &mut |stage, _| {
+            // `c` is gone once `b` is the level aside.
+            if stage == CaptureStage::BeforeCheck && !a.join("b").exists() {
+                fs::write(the_aside_name(&a).join("data"), b"theirs").unwrap();
+            }
+        },
+    );
     assert_eq!(entry_names(&dir.path), ["a"]);
     assert_eq!(entry_names(&a), ["b"], "no random name is left beside b");
     assert_eq!(entry_names(&a.join("b")), ["data"]);
@@ -213,7 +261,8 @@ fn a_full_filesystem_keeps_a_non_empty_directory_swapped_in_after_the_check() {
 #[cfg(unix)]
 #[test]
 fn a_full_filesystem_puts_a_level_back_beside_a_name_taken_meanwhile() {
-    // The level holds a file, so it cannot be removed; its name is taken
+    // The level is filled once it is aside (one that holds entries when it
+    // is listed is never moved), so it cannot be removed; its name is taken
     // while it is aside, so it is put back as `new.restored-0`.
     if !in_rollback_stderr_child() {
         let stderr = rerun_alone_for_stderr(
@@ -229,12 +278,14 @@ fn a_full_filesystem_puts_a_level_back_beside_a_name_taken_meanwhile() {
     let dir = TempDir::new("no-room-restored");
     let level = dir.join("new");
     let created = super::create_directories(&level).unwrap();
-    fs::write(level.join("data"), b"theirs").unwrap();
     undo_failing(
         &created,
         rustix::io::Errno::NOSPC,
         &mut || {},
         &mut |stage, _| {
+            if stage == CaptureStage::BeforeCheck {
+                fs::write(the_aside_name(&dir.path).join("data"), b"theirs").unwrap();
+            }
             if stage == CaptureStage::BeforeRestore {
                 fs::create_dir(dir.join("new")).unwrap();
             }
@@ -249,9 +300,42 @@ fn a_full_filesystem_puts_a_level_back_beside_a_name_taken_meanwhile() {
 
 #[cfg(unix)]
 #[test]
+fn a_full_filesystem_cuts_a_long_name_short_for_its_recovery_name() {
+    // A 255-byte name has no room for `.restored-0`: the recovery name is
+    // cut short to fit, as it is for a level put back from a quarantine,
+    // rather than every candidate failing with ENAMETOOLONG and the level
+    // being stranded under its random name.
+    let dir = TempDir::new("no-room-long");
+    let long = "n".repeat(255);
+    let created = super::create_directories(&dir.join(&long)).unwrap();
+    undo_failing(
+        &created,
+        rustix::io::Errno::NOSPC,
+        &mut || {},
+        &mut |stage, _| {
+            if stage == CaptureStage::BeforeCheck {
+                fs::write(the_aside_name(&dir.path).join("data"), b"theirs").unwrap();
+            }
+            if stage == CaptureStage::BeforeRestore {
+                fs::create_dir(dir.join(&long)).unwrap();
+            }
+        },
+    );
+    let restored = format!("{}.restored-0", "n".repeat(255 - ".restored-0".len()));
+    assert_eq!(restored.len(), 255);
+    assert_eq!(entry_names(&dir.path), [restored.clone(), long]);
+    assert_eq!(
+        fs::read(dir.join(&restored).join("data")).unwrap(),
+        b"theirs"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_full_filesystem_names_where_a_level_stays_when_nothing_takes_it_back() {
-    // Its name and every `.restored-<n>` are taken while it is aside, so it
-    // stays under the random name, and the warning says where.
+    // It is filled once aside, and its name and every `.restored-<n>` are
+    // taken while it is there, so it stays under the random name, and the
+    // warning says where.
     if !in_rollback_stderr_child() {
         let stderr = rerun_alone_for_stderr(
             "import_rom::created_dirs::tests::no_room::a_full_filesystem_names_where_a_level_stays_when_nothing_takes_it_back",
@@ -265,12 +349,14 @@ fn a_full_filesystem_names_where_a_level_stays_when_nothing_takes_it_back() {
     let dir = TempDir::new("no-room-stranded");
     let level = dir.join("new");
     let created = super::create_directories(&level).unwrap();
-    fs::write(level.join("data"), b"theirs").unwrap();
     undo_failing(
         &created,
         rustix::io::Errno::NOSPC,
         &mut || {},
         &mut |stage, _| {
+            if stage == CaptureStage::BeforeCheck {
+                fs::write(the_aside_name(&dir.path).join("data"), b"theirs").unwrap();
+            }
             if stage == CaptureStage::BeforeRestore {
                 fs::create_dir(dir.join("new")).unwrap();
                 for n in 0..16 {

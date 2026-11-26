@@ -2,10 +2,11 @@
 //! removes a created level without trusting its mutable name.
 //!
 //! A level whose name still resolves to the identity captured at creation
-//! is renamed (no-replace) into a quarantine, unless it lacks the owner's
-//! write bit, which moving a directory to another parent needs: such a level
-//! is unlinked by name in its pinned parent after the same identity check
-//! (see [`restore`]). The quarantine is one private directory per
+//! and that holds no entries is renamed (no-replace) into a quarantine, unless
+//! it lacks the owner's write bit, which moving a directory to another parent
+//! needs: such a level is unlinked by name in its pinned parent after the same
+//! identity check (see [`restore`]), as is one whose owner cannot list it nor
+//! be granted the bits to (see [`occupied`]). The quarantine is one private directory per
 //! rollback, made beside the outermost level rollback may take back, so it
 //! is never inside a level it empties. A level on another filesystem than
 //! that quarantine (`EXDEV`, as behind a `..` into a mount) gets a
@@ -14,15 +15,18 @@
 //! further out claims a fresh one. In a
 //! quarantine the level is re-checked by identity and unlinked through the
 //! held quarantine, or put back (no-replace) under its name, or beside it
-//! as `<name>.restored-<n>`, if it is not ours or holds something. Every
-//! step that leaves a level standing says so on stderr. Where the
-//! quarantine's `mkdirat` fails for want of space, quota or inodes, a level
-//! is moved (no-replace) to a random name beside it instead, which makes no
-//! directory, and is re-checked and unlinked there (see [`aside`]).
+//! as `<name>.restored-<n>`, if it is not ours or holds something. A name
+//! too long for that suffix is cut short first, so the recovery name fits
+//! the 255-byte component limit. Every step that leaves a level standing
+//! says so on stderr. Where the quarantine's `mkdirat` fails for want of
+//! space, quota or inodes, a level is moved (no-replace) to a random name
+//! beside it instead, which makes no directory, and is re-checked and
+//! unlinked there (see [`aside`]).
 //!
 //! This module walks the levels; the steps live in its children:
 //!
 //! - [`quarantine`] makes, vouches for and removes the quarantine.
+//! - [`occupied`] lists a held level, so one that holds entries is not moved.
 //! - [`restore`] captures a level into it, re-checks the capture, and unlinks
 //!   or puts it back.
 //! - [`aside`] takes a level back with no quarantine, where the filesystem
@@ -39,11 +43,16 @@
 //! the import owns. The residuals of each step are documented with it, in
 //! [`restore`], [`quarantine`] and [`aside`].
 //!
-//! Rollback is also not crash-safe: a process killed after a level was
-//! renamed into its quarantine and before it was removed or put back leaves
-//! it at `.undo-<hex>/level` with no warning, and no later run looks for
-//! it. That level holds data only if another writer filled it, or swapped
-//! in its own directory, during the import.
+//! Rollback is also not crash-safe. A level that holds entries when
+//! [`occupied`] lists it is left where it is, never moved; but a process
+//! killed after a level was renamed into its quarantine and before it was
+//! removed or put back leaves it at `.undo-<hex>/level` (or, taken back
+//! without a quarantine, at its random `.undo-<hex>` name beside where it
+//! stood) with no warning, and no later run looks for it. That capture holds data only if another writer
+//! acted from the listing until that kill: filling the level before the
+//! rename, filling it after the rename through a descriptor or working
+//! directory it already held inside it, or swapping its own directory in
+//! under the name, which the rename then captures in the level's place.
 
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
@@ -55,6 +64,7 @@ use super::{same_directory_identity, CreatedDirectory};
 mod aside;
 #[cfg(test)]
 mod hooks;
+mod occupied;
 mod quarantine;
 mod report;
 mod restore;
@@ -65,18 +75,24 @@ pub(super) use hooks::{
     take_back_level_capture_check_failing, take_back_level_held_stat_failing,
     take_back_level_looking_up, take_back_level_revalidation_failing, take_back_level_via,
     take_back_level_vouched_by, take_back_level_with_hooks, warn_if_moved_away_held_stat_failing,
+    warn_mode_left_held_stat_failing, warn_mode_left_unlocated,
 };
+#[cfg(all(test, target_os = "linux"))]
+pub(super) use occupied::SetHeldMode;
+use occupied::{list_level, ModeLeft};
 use quarantine::{
     claim_in, claim_quarantine, make_private_directory, remove_quarantine, Claim, MakeDirectory,
 };
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
+use report::{level_location, standing, warn_if_moved_away, warn_left_standing, Standing};
 #[cfg(test)]
-pub(super) use report::located_beside;
-use report::{warn_if_moved_away, warn_left_standing};
+pub(super) use report::{located_beside, verified_location};
 #[cfg(test)]
 pub(super) use restore::restore_capture;
-use restore::{is_this_level, take_back_into, take_back_unwritable_in_place};
+use restore::{
+    holds_this_level, is_this_level, take_back_into, take_back_unwritable_in_place, unlink_in_place,
+};
 
 /// [`super::undo_created_directories`] with `before_take` run once per
 /// level, after the name has been validated and before the level is taken
@@ -108,10 +124,27 @@ pub(super) fn undo_created_directories_with_capture_hooks(
     before_take: &mut dyn FnMut(),
     in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
 ) {
-    undo_created_directories_making_with(
+    undo_created_directories_through(
         created,
         before_take,
         in_quarantine,
+        &super::super::dest::set_held_directory_mode,
+        &mut make_private_directory,
+    );
+}
+
+/// [`super::undo_created_directories`] with each held level's mode set
+/// through `set_mode`, so a test can make putting a mode back fail.
+#[cfg(all(test, target_os = "linux"))]
+pub(super) fn undo_created_directories_setting_modes_with(
+    created: &[CreatedDirectory],
+    set_mode: &SetHeldMode<'_>,
+) {
+    undo_created_directories_through(
+        created,
+        &mut || {},
+        &mut |_, _| {},
+        set_mode,
         &mut make_private_directory,
     );
 }
@@ -121,10 +154,29 @@ pub(super) fn undo_created_directories_with_capture_hooks(
 /// taken back without a quarantine (see [`aside`]) reports its capture
 /// stages with the directory holding it, and its random name beside the
 /// level.
+#[cfg(test)]
 pub(super) fn undo_created_directories_making_with(
     created: &[CreatedDirectory],
     before_take: &mut dyn FnMut(),
     in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+    mkdir: &mut MakeDirectory<'_>,
+) {
+    undo_created_directories_through(
+        created,
+        before_take,
+        in_quarantine,
+        &super::super::dest::set_held_directory_mode,
+        mkdir,
+    );
+}
+
+/// [`undo_created_directories_with_capture_hooks`] with each held level's
+/// mode set through `set_mode` and each quarantine made by `mkdir`.
+fn undo_created_directories_through(
+    created: &[CreatedDirectory],
+    before_take: &mut dyn FnMut(),
+    in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+    set_mode: &occupied::SetHeldMode<'_>,
     mkdir: &mut MakeDirectory<'_>,
 ) {
     let mut quarantine = None;
@@ -170,37 +222,28 @@ pub(super) fn undo_created_directories_making_with(
                     Some(_) => continue,
                     None => {}
                 }
-                if quarantine.is_none() {
-                    match claim_quarantine(created, dir, mkdir) {
-                        Claim::Held(held) => quarantine = Some(held),
-                        // No room for a quarantine: this level goes aside
-                        // instead. The next one asks again, since room may
-                        // have come back.
-                        Claim::NoRoom => match take_back_aside(parent, dir, in_quarantine) {
-                            Outcome::Taken => continue,
-                            Outcome::Stopped | Outcome::CrossDevice => break,
-                        },
-                        Claim::Refused => break,
-                    }
-                }
-                let Some(held) = quarantine.as_ref() else {
+                // A level that holds entries is not moved at all: once in a
+                // quarantine, a crash would leave them hidden there. The
+                // in-place unlink above moves nothing and removes only an
+                // empty level, so it needs no listing first.
+                // A mode the listing could not put back is reported once
+                // the level's take-back is done, if it still stands.
+                let listing = list_level(dir, set_mode);
+                let went_on =
+                    match take_back_unless_listed_empty(parent, dir, listing.holds_entries) {
+                        Some(outcome) => outcome != Outcome::Stopped,
+                        None => take_back_through_quarantine(
+                            &mut quarantine,
+                            created,
+                            parent,
+                            dir,
+                            in_quarantine,
+                            mkdir,
+                        ),
+                    };
+                warn_mode_left(parent, dir, listing.mode_left, went_on);
+                if !went_on {
                     break;
-                };
-                match take_back_into(held, parent, dir, in_quarantine) {
-                    Outcome::Taken => {}
-                    Outcome::Stopped => break,
-                    Outcome::CrossDevice => {
-                        // The shared quarantine's descriptor is released
-                        // first, so the fallback can open what it needs even
-                        // when that descriptor took the last free slot; a
-                        // level further out claims a fresh one.
-                        if let Some(shared) = quarantine.take() {
-                            remove_quarantine(&shared, &mut || {});
-                        }
-                        if !take_back_beside(parent, dir, mkdir, in_quarantine) {
-                            break;
-                        }
-                    }
                 }
             }
             // Gone already -- nothing to remove here, and the level above is
@@ -246,6 +289,183 @@ pub(super) fn undo_created_directories_making_with(
     }
     if let Some(held) = quarantine {
         remove_quarantine(&held, &mut || {});
+    }
+}
+
+/// Takes the empty, listed `dir` back through the shared `quarantine`,
+/// claiming it first if there is none yet, or through one of its own beside
+/// it when it is on another filesystem. Where `mkdir` finds no room for a
+/// quarantine, `dir` goes aside instead (see [`aside`]), and the next level
+/// asks again, since room may have come back. Whether the walk goes on.
+fn take_back_through_quarantine<'a>(
+    quarantine: &mut Option<quarantine::Quarantine<'a>>,
+    created: &'a [CreatedDirectory],
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+    mkdir: &mut MakeDirectory<'_>,
+) -> bool {
+    if quarantine.is_none() {
+        match claim_quarantine(created, dir, mkdir) {
+            Claim::Held(held) => *quarantine = Some(held),
+            Claim::NoRoom => {
+                return take_back_aside(parent, dir, in_quarantine) == Outcome::Taken;
+            }
+            Claim::Refused => return false,
+        }
+    }
+    let Some(held) = quarantine.as_ref() else {
+        return false;
+    };
+    match take_back_into(held, parent, dir, in_quarantine) {
+        Outcome::Taken => true,
+        Outcome::Stopped => false,
+        Outcome::CrossDevice => {
+            // The shared quarantine's descriptor is released first, so the
+            // fallback can open what it needs even when that descriptor took
+            // the last free slot; a level further out claims a fresh one.
+            if let Some(shared) = quarantine.take() {
+                remove_quarantine(&shared, &mut || {});
+            }
+            take_back_beside(parent, dir, mkdir, in_quarantine)
+        }
+    }
+}
+
+/// Reports that `dir`'s mode, changed so its owner could list it, could not
+/// be put back, unless the level is gone. `taken_back` is whether rollback
+/// took the level back; see [`report_mode_left`].
+fn warn_mode_left(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    mode_left: Option<ModeLeft>,
+    taken_back: bool,
+) {
+    report_mode_left(parent, dir, mode_left, taken_back, standing(dir));
+}
+
+/// [`warn_mode_left`] with `standing` as what the held original's
+/// examination said, so a test can say what `/proc` or an `fstat` could
+/// not. Only [`Standing::Gone`] proves removal, so only it is silent, but
+/// for a level rollback took back where the platform cannot tell a removed
+/// directory from a moved one ([`Standing::Unknown`]), as its in-place
+/// unlink also treats it. The level is named where it stands now when that
+/// is known, else under its name while that name still holds it; a name it
+/// no longer holds is worded as [`report_moved_away`] words it, the level
+/// certainly elsewhere when it is still linked and possibly so otherwise.
+fn report_mode_left(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    mode_left: Option<ModeLeft>,
+    taken_back: bool,
+    standing: Standing,
+) {
+    let Some(ModeLeft { found, error }) = mode_left else {
+        return;
+    };
+    let keeps = format!(
+        "keeps the owner read and search bits rollback granted to list it; its mode could not be put back to 0o{:03o}: {error}",
+        found.bits()
+    );
+    let level = level_location(dir);
+    let at_name = holds_this_level(parent.as_fd(), &dir.name, dir);
+    match (standing, at_name) {
+        (Standing::Gone, _) => {}
+        (Standing::Linked(Some(now)), _) => {
+            eprintln!("warning: {} {keeps}", OneLinePath(&now));
+        }
+        (_, Ok(true)) => eprintln!("warning: {} {keeps}", OneLinePath(&level)),
+        (Standing::Unknown, Ok(false)) if taken_back => {}
+        (Standing::Linked(None), Ok(false)) => eprintln!(
+            "warning: {} was moved away before rollback could take it back; the directory rollback made is left elsewhere and {keeps}",
+            OneLinePath(&level)
+        ),
+        (Standing::Unknown, Ok(false)) => eprintln!(
+            "warning: {} is no longer under its name; if it was moved rather than removed, the directory rollback made is left elsewhere and {keeps}",
+            OneLinePath(&level)
+        ),
+        (Standing::Unexamined(err), Ok(false)) => eprintln!(
+            "warning: {} is no longer under its name, and the directory rollback made for it could not be examined: {}; if it was moved rather than removed, it is left elsewhere and {keeps}",
+            OneLinePath(&level),
+            std::io::Error::from(err)
+        ),
+        (_, Err(err)) => eprintln!(
+            "warning: {} could not be examined under its name: {}; the directory rollback made for it, wherever it stands, {keeps}",
+            OneLinePath(&level),
+            std::io::Error::from(err)
+        ),
+    }
+}
+
+/// `None` when `dir` lists empty, so it goes through the quarantine.
+/// Otherwise it is not moved: one that holds entries, or whose listing
+/// fails, is reported and left where it stands, except that one its owner is
+/// refused listing (`EACCES`, with the read and search bits not grantable
+/// through the held descriptor) is unlinked in place, which moves nothing
+/// and removes only an empty level. That keeps the take-back of an empty
+/// level whose owner-access restore failed, as before the listing.
+fn take_back_unless_listed_empty(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    holds_entries: rustix::io::Result<bool>,
+) -> Option<Outcome> {
+    match holds_entries {
+        Ok(false) => None,
+        Ok(true) => {
+            leave_unmoved(
+                parent,
+                dir,
+                "it holds entries",
+                "it holds entries, so rollback did not move it into a cleanup directory",
+            );
+            Some(Outcome::Stopped)
+        }
+        Err(err) if err == rustix::io::Errno::ACCESS => Some(unlink_in_place(parent, dir)),
+        Err(err) => {
+            let unlisted = format!("it could not be listed: {}", std::io::Error::from(err));
+            leave_unmoved(parent, dir, &unlisted, &unlisted);
+            Some(Outcome::Stopped)
+        }
+    }
+}
+
+/// Reports that `dir` is not moved because of `state` (it holds entries, or
+/// could not be listed). The check read the held original, so if another
+/// writer moved it since the name was validated, it is reported where it
+/// stands now, not under its old name, and a name left vacant is said to be
+/// vacant rather than taken. `in_place` is the reason given when the
+/// original is still at its name.
+fn leave_unmoved(parent: &OwnedFd, dir: &CreatedDirectory, state: &str, in_place: &str) {
+    let looked_up = rustix::fs::statat(parent, &dir.name, AtFlags::SYMLINK_NOFOLLOW)
+        .and_then(|stat| is_this_level(dir, &stat));
+    match looked_up {
+        Ok(true) => warn_left_standing(
+            dir,
+            format_args!("{in_place}; the levels above it are left too"),
+        ),
+        Err(err) if err == rustix::io::Errno::NOENT => {
+            eprintln!(
+                "warning: {} is no longer under its name, and the directory rollback made for it was not taken back ({state}); the levels above it are left too",
+                OneLinePath(&level_location(dir))
+            );
+            warn_if_moved_away(dir);
+        }
+        Ok(false) => {
+            warn_left_standing(
+                dir,
+                format_args!(
+                    "{state} and another entry has taken its name; the levels above it are left too"
+                ),
+            );
+            warn_if_moved_away(dir);
+        }
+        Err(err) => warn_left_standing(
+            dir,
+            format_args!(
+                "{state} and could not be examined under its name: {}; the levels above it are left too",
+                std::io::Error::from(err)
+            ),
+        ),
     }
 }
 

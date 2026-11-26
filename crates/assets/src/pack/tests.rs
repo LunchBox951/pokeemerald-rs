@@ -16,13 +16,17 @@ mod layout;
 mod naming_screen;
 mod opening_scene;
 mod party_menu;
+mod pc_wallpaper;
 mod poke_ball;
 mod pokedex;
 mod pokedex_graphics;
 mod real_pack;
+mod sight_trainer_intro_speech;
 mod starter_chooser;
 mod text_printer;
 mod trainer_battler;
+mod trainer_class_names;
+mod trainer_defeat_speech;
 mod trainer_pic;
 
 mod battle_interface_frames;

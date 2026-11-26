@@ -240,33 +240,82 @@ fn a_volume_write_to_zero_keeps_the_nonzero_latch() {
     }
 }
 
+/// One sample rendered at `envelope_tick` offsets, so the sample sees any step
+/// the offsets name.
+fn sample_with_envelope_events(voice: &mut CgbVoice, envelope_ticks: &[usize]) -> i32 {
+    let mut acc = [(0i32, 0i32); 1];
+    voice.render_clocked(&mut acc, &[], &[], envelope_ticks);
+    acc[0].0
+}
+
+const DECAYING_EVERY_EVENT: CgbAdsr = CgbAdsr {
+    attack: 0,
+    decay: 1,
+    sustain: 4,
+    release: 0,
+};
+
 /// `gb/audio.c:730-732`.
 #[test]
-fn an_envelope_step_follows_a_raised_latch_and_ignores_a_low_one() {
-    let decaying = CgbAdsr {
-        attack: 0,
-        decay: 1,
-        sustain: 4,
-        release: 0,
-    };
-    let mut voice = noise_voice_latched(decaying, SLOW_NOISE_KEY, WIDE_NOISE);
-    let mut acc = [(0i32, 0i32); 1];
-    let mut previous = voice.hardware_volume();
-    for _ in 0..40 {
-        voice.begin_frame(false);
-        let volume = voice.hardware_volume();
-        if volume != previous {
-            assert_eq!(
-                voice.noise_output_latch(),
-                Some(volume),
-                "a raised latch follows the stepped volume"
-            );
-            return;
-        }
-        previous = volume;
-        voice.render(&mut acc, &[]);
+fn an_envelope_event_re_resolves_a_raised_latch_at_the_new_volume() {
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        let mut voice = noise_voice_latched(DECAYING_EVERY_EVENT, SLOW_NOISE_KEY, width);
+        let lfsr = voice.noise_lfsr();
+        assert_eq!(voice.hardware_volume(), 15, "width {width}");
+        assert_eq!(voice.noise_output_latch(), Some(15), "width {width}");
+
+        assert_eq!(
+            sample_with_envelope_events(&mut voice, &[]),
+            expected_contribution(15, 15),
+            "width {width}: before the event"
+        );
+        assert_eq!(
+            sample_with_envelope_events(&mut voice, &[0]),
+            expected_contribution(14, 14),
+            "width {width}: the event's own sample follows the stepped volume"
+        );
+        assert_eq!(voice.hardware_volume(), 14, "width {width}");
+        assert_eq!(voice.noise_output_latch(), Some(14), "width {width}");
+        assert_eq!(voice.noise_lfsr(), lfsr, "width {width}: no LFSR clock ran");
     }
-    panic!("the envelope never stepped");
+}
+
+/// `gb/audio.c:730-732`.
+#[test]
+fn an_envelope_event_recentres_a_low_latch_without_raising_it() {
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        let mut voice = noise_voice_at(DECAYING_EVERY_EVENT, SLOW_NOISE_KEY, width);
+        voice.begin_frame(false);
+        assert_eq!(voice.noise_output_latch(), Some(0), "width {width}");
+
+        assert_eq!(
+            sample_with_envelope_events(&mut voice, &[0]),
+            expected_contribution(0, 14),
+            "width {width}: a low latch stays low against the new centre"
+        );
+        assert_eq!(voice.noise_output_latch(), Some(0), "width {width}");
+    }
+}
+
+#[test]
+fn a_noise_envelope_saturates_at_zero_and_never_wraps() {
+    let mut voice = noise_voice_latched(DECAYING_EVERY_EVENT, SLOW_NOISE_KEY, WIDE_NOISE);
+    for _ in 0..40 {
+        sample_with_envelope_events(&mut voice, &[0]);
+    }
+    assert_eq!(voice.hardware_volume(), 0);
+    assert_eq!(voice.noise_output_latch(), Some(0));
+}
+
+#[test]
+fn a_period_zero_noise_envelope_holds_its_volume_through_every_event() {
+    let mut voice = noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, WIDE_NOISE);
+    let held = voice.hardware_volume();
+    for _ in 0..40 {
+        sample_with_envelope_events(&mut voice, &[0]);
+    }
+    assert_eq!(voice.hardware_volume(), held);
+    assert_eq!(voice.noise_output_latch(), Some(held));
 }
 
 /// `CgbOscOff` writes `NR42 = 8; NR44 = 0x80` (`m4a.c:873-874`), which leaves

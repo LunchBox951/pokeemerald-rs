@@ -1,0 +1,627 @@
+//! Per-glyph colors, window clears, and scroll fills composed through the
+//! window palette.
+
+use super::tests::opaque_glyph_at;
+use super::*;
+use assets::{Glyph, GLYPH_PIXELS};
+
+/// A window palette whose every entry is distinct, so a wrong index shows.
+fn distinct_palette() -> Vec<Rgb888> {
+    (0..16u8)
+        .map(|i| Rgb888 {
+            r: 10 + i,
+            g: 100 + i,
+            b: 200 + i,
+        })
+        .collect()
+}
+
+/// A 6-wide glyph: foreground at (0,0), shadow at (1,0), a value-3 cell
+/// background at (3,0), background pixels at (2,0) inside its footprint, (10,0) beyond its advance width,
+/// and (2,15), the first row below the raster height.
+fn mixed_glyph(colors: TextColors) -> RevealedGlyph {
+    let mut pixels = [0u8; GLYPH_PIXELS];
+    pixels[0] = 1;
+    pixels[1] = 2;
+    pixels[3] = 3;
+    let mut glyph = opaque_glyph_at(0, 0);
+    glyph.glyph = Glyph {
+        advance_width: 6,
+        pixels,
+    };
+    glyph.colors = colors;
+    glyph
+}
+
+fn colors(foreground: u8, background: u8, shadow: u8) -> TextColors {
+    TextColors {
+        foreground,
+        background,
+        shadow,
+    }
+}
+
+fn marker_fb() -> Framebuffer {
+    let mut fb = Framebuffer::new();
+    fb.fill(Rgb888 { r: 1, g: 2, b: 3 });
+    fb
+}
+
+fn glyph_ops(glyphs: Vec<RevealedGlyph>) -> Vec<WindowOp> {
+    glyphs
+        .into_iter()
+        .map(|g| WindowOp::Glyph(Box::new(g)))
+        .collect()
+}
+
+#[test]
+fn a_color_blue_glyph_paints_palette_index_8_where_the_plain_one_paints_2() {
+    let palette = distinct_palette();
+    let marker = marker_fb();
+    let paint = |c: TextColors| {
+        let mut fb = marker.clone();
+        compose_window_ops(
+            &mut fb,
+            &glyph_ops(vec![mixed_glyph(c)]),
+            (0, 0),
+            (200, 32),
+            &super::test_keypad_icons(&[]),
+            &palette,
+            WindowBackdrop::message_box(None, None),
+        );
+        fb
+    };
+    let plain = paint(TextColors::default());
+    let blue = paint(colors(8, 1, 3));
+    assert_eq!(plain.pixel(0, 0), Some(palette[2]));
+    assert_eq!(blue.pixel(0, 0), Some(palette[8]));
+    // The shadow and the background are unaffected by COLOR.
+    assert_eq!(plain.pixel(1, 0), Some(palette[3]));
+    assert_eq!(blue.pixel(1, 0), Some(palette[3]));
+    assert_eq!(blue.pixel(2, 0), Some(palette[1]));
+    // Value 3 is the cell background, so it paints `bgColor` too.
+    assert_eq!(blue.pixel(3, 0), Some(palette[1]));
+    // Past the glyph's advance width nothing paints.
+    assert_eq!(blue.pixel(6, 0), marker.pixel(6, 0));
+    let shadowed = paint(colors(2, 1, 9));
+    assert_eq!(shadowed.pixel(0, 0), Some(palette[2]));
+    assert_eq!(shadowed.pixel(1, 0), Some(palette[9]));
+}
+
+#[test]
+fn colors_apply_per_glyph_not_to_the_whole_page() {
+    let palette = distinct_palette();
+    let mut first = mixed_glyph(TextColors::default());
+    let mut second = mixed_glyph(colors(8, 1, 3));
+    first.x = 0;
+    second.x = 20;
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![first, second]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    assert_eq!(fb.pixel(0, 0), Some(palette[2]));
+    assert_eq!(fb.pixel(20, 0), Some(palette[8]));
+}
+
+#[test]
+fn default_colors_through_the_palette_match_the_fixed_role_slots_byte_for_byte() {
+    let frame = FrameAssets {
+        pixels: Vec::new(),
+        width: 0,
+        height: 0,
+        palette: distinct_palette(),
+    };
+    let mut pixels = [0u8; GLYPH_PIXELS];
+    for (i, pixel) in pixels.iter_mut().enumerate() {
+        *pixel = u8::try_from(i % 4).unwrap();
+    }
+    let mut glyph = mixed_glyph(TextColors::default());
+    glyph.glyph.pixels = pixels;
+
+    // The default background now paints palette[1] over the window interior
+    // (`text.c:583-591`); the role slots leave it alone, so both start from an
+    // interior that already is palette[1].
+    let interior = || {
+        let mut fb = Framebuffer::new();
+        fb.fill(frame.palette[1]);
+        fb
+    };
+    let mut roles = interior();
+    blit_glyphs_colored(
+        &mut roles,
+        std::slice::from_ref(&glyph),
+        (0, 0),
+        (200, 32),
+        &frame.glyph_colors(),
+    );
+    let mut via_palette = interior();
+    compose_window_ops(
+        &mut via_palette,
+        &glyph_ops(vec![glyph]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &frame.palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    assert_eq!(roles.pixels(), via_palette.pixels());
+}
+
+#[test]
+fn a_highlight_paints_only_the_glyphs_actual_footprint() {
+    let palette = distinct_palette();
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![mixed_glyph(colors(2, 4, 3))]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    assert_eq!(fb.pixel(2, 0), Some(palette[4]), "inside the footprint");
+    assert_eq!(
+        fb.pixel(10, 0),
+        marker_fb().pixel(10, 0),
+        "past the advance"
+    );
+    assert_eq!(
+        fb.pixel(2, 15),
+        marker_fb().pixel(2, 15),
+        "below the raster"
+    );
+    assert_eq!(fb.pixel(2, 14), Some(palette[4]), "last raster row");
+}
+
+#[test]
+fn an_explicit_highlight_of_the_default_background_repaints_it() {
+    let palette = distinct_palette();
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![mixed_glyph(colors(2, 1, 3))]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    assert_eq!(fb.pixel(2, 0), Some(palette[1]));
+}
+
+#[test]
+fn transparent_and_missing_palette_entries_skip_safely() {
+    let palette = distinct_palette();
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![mixed_glyph(colors(0, 0, 200))]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    assert_eq!(fb.pixels(), marker_fb().pixels());
+}
+
+fn span_with(background: u8) -> WindowOp {
+    WindowOp::ClearSpan(ClearedSpan {
+        x: 0,
+        y: 0,
+        width: 4,
+        height: 2,
+        colors: colors(2, background, 3),
+    })
+}
+
+#[test]
+fn a_clear_erases_with_its_own_background() {
+    let palette = distinct_palette();
+    let marker = marker_fb();
+    let compose = |background: u8| {
+        let mut fb = marker.clone();
+        let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default())]);
+        ops.push(span_with(background));
+        compose_window_ops(
+            &mut fb,
+            &ops,
+            (0, 0),
+            (200, 32),
+            &super::test_keypad_icons(&[]),
+            &palette,
+            WindowBackdrop::message_box(None, None),
+        );
+        fb
+    };
+    // Index 1 restores the window interior, covering the glyph.
+    let white = compose(1);
+    assert_eq!(white.pixel(0, 0), marker.pixel(0, 0));
+    // Another index fills with that palette entry.
+    let red = compose(4);
+    assert_eq!(red.pixel(0, 0), Some(palette[4]));
+    assert_eq!(red.pixel(3, 1), Some(palette[4]));
+    // The glyph's own background still paints beyond the cleared span.
+    assert_eq!(red.pixel(4, 0), Some(palette[1]));
+    assert_eq!(red.pixel(6, 0), marker.pixel(6, 0));
+    // Transparent erases nothing.
+    let transparent = compose(0);
+    assert_eq!(transparent.pixel(0, 0), Some(palette[2]));
+    // Even with the scene supplied, a transparent `CLEAR` span erases nothing
+    // (`ClearTextSpan`, `pokeemerald/src/text.c:649-674`).
+    let mut scene = Framebuffer::new();
+    scene.fill(Rgb888 { r: 9, g: 9, b: 9 });
+    let mut fb = marker.clone();
+    let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default())]);
+    ops.push(span_with(0));
+    assert!(!needs_scene(&ops, None));
+    compose_window_ops(
+        &mut fb,
+        &ops,
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, Some(&scene)),
+    );
+    assert_eq!(fb.pixel(0, 0), Some(palette[2]));
+}
+
+#[test]
+fn a_transparent_scroll_fill_shows_the_scene() {
+    let palette = distinct_palette();
+    let marker = marker_fb();
+    let mut scene = Framebuffer::new();
+    scene.fill(Rgb888 { r: 9, g: 9, b: 9 });
+    let mut fb = marker.clone();
+    let mut ops = glyph_ops(vec![mixed_glyph(TextColors::default())]);
+    let WindowOp::ClearSpan(span) = span_with(0) else {
+        unreachable!("span_with builds a ClearSpan")
+    };
+    ops.push(WindowOp::ScrollFill(span));
+    assert!(needs_scene(&ops, None));
+    compose_window_ops(
+        &mut fb,
+        &ops,
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, Some(&scene)),
+    );
+    assert_eq!(fb.pixel(0, 0), scene.pixel(0, 0));
+    assert_eq!(fb.pixel(3, 1), scene.pixel(3, 1));
+    // The glyph's own background still paints beyond the filled span.
+    assert_eq!(fb.pixel(4, 0), Some(palette[1]));
+    assert_eq!(fb.pixel(6, 0), marker.pixel(6, 0));
+    assert!(!needs_scene(&glyph_ops(vec![]), None));
+}
+
+#[test]
+fn a_window_fill_covers_the_content_with_its_background() {
+    let palette = distinct_palette();
+    let marker = marker_fb();
+    let scene = {
+        let mut scene = Framebuffer::new();
+        scene.fill(Rgb888 { r: 9, g: 9, b: 9 });
+        scene
+    };
+    let compose = |background: u8| {
+        let mut fb = marker.clone();
+        compose_window_ops(
+            &mut fb,
+            &[],
+            (8, 8),
+            (16, 16),
+            &super::test_keypad_icons(&[]),
+            &palette,
+            WindowBackdrop::message_box(Some(colors(2, background, 3)), Some(&scene)),
+        );
+        fb
+    };
+    let filled = compose(4);
+    assert_eq!(filled.pixel(8, 8), Some(palette[4]));
+    assert_eq!(filled.pixel(23, 23), Some(palette[4]));
+    assert_eq!(
+        filled.pixel(24, 24),
+        marker.pixel(24, 24),
+        "border untouched"
+    );
+    assert_eq!(compose(1).pixels(), marker.pixels());
+    let transparent = compose(0);
+    assert_eq!(transparent.pixel(8, 8), scene.pixel(8, 8));
+    assert_eq!(transparent.pixel(7, 7), marker.pixel(7, 7));
+}
+
+#[test]
+fn a_highlight_paints_the_cell_background_value_the_real_fonts_use() {
+    // Glyph value 3 maps to `bgColor` like value 0 does
+    // (`pokeemerald/src/text.c:363-420`).
+    let palette = distinct_palette();
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![mixed_glyph(colors(2, 4, 3))]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    // `mixed_glyph` puts a value-3 pixel at (3, 0), inside the footprint.
+    assert_eq!(fb.pixel(3, 0), Some(palette[4]));
+    // Without a highlight the default background paints it all the same
+    // (`text.c:378-381`, `:583-591`).
+    let mut plain = marker_fb();
+    compose_window_ops(
+        &mut plain,
+        &glyph_ops(vec![mixed_glyph(TextColors::default())]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    assert_eq!(plain.pixel(3, 0), Some(palette[1]));
+}
+
+/// Every non-foreground, non-shadow pixel in the real Normal `A` cell paints
+/// the highlight, including the value-3 pixels the font uses for background.
+#[test]
+#[ignore = "needs a local pack extracted by `cargo xtask extract`"]
+fn a_highlight_paints_the_real_fonts_cell_background() {
+    let pack = assets::AssetPack::load_repo().expect("the checkout pack loads");
+    let sheet =
+        assets::OwnedFontGlyphSheet::new(pack.font(assets::FontId::Normal).unwrap()).unwrap();
+    // pokeemerald charmap: 'A' = 0xBB.
+    let glyph = sheet.glyph(0xBB).expect("glyph A");
+    let mut revealed = mixed_glyph(colors(2, 4, 3));
+    revealed.glyph = glyph;
+    let palette = distinct_palette();
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![revealed]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    let width = usize::from(glyph.advance_width);
+    let mut unpainted = 0;
+    for y in 0..15usize {
+        for x in 0..width {
+            let v = glyph.pixels[y * 16 + x];
+            if v != 1 && v != 2 && fb.pixel(x, y) != Some(palette[4]) {
+                unpainted += 1;
+            }
+        }
+    }
+    assert_eq!(unpainted, 0, "background pixels left unpainted");
+}
+
+/// Upstream maps glyph value 0 to `bgColor` (1 by default) and `GLYPH_COPY`
+/// writes every nonzero mapped pixel (`text.c:378-381`, `:583-591`), so a
+/// default-coloured glyph drawn over earlier foreground (e.g. after `SKIP`
+/// back) repaints it with palette[1], whether or not a `HIGHLIGHT` ran.
+#[test]
+fn a_default_glyph_drawn_over_earlier_foreground_repaints_its_background() {
+    let palette = distinct_palette();
+    let first = mixed_glyph(TextColors::default());
+    let mut second = mixed_glyph(TextColors::default());
+    second.glyph.pixels[0] = 0;
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![first, second]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    // The second glyph has background where the first has foreground.
+    assert_eq!(fb.pixel(0, 0), Some(palette[1]));
+}
+
+/// A space decodes to all-background pixels; drawn over earlier text (after a
+/// `SKIP` back) it blanks exactly its advance width by the raster height, and
+/// leaves everything past that footprint alone.
+#[test]
+fn a_default_space_over_earlier_text_blanks_only_its_footprint() {
+    let palette = distinct_palette();
+    let text = mixed_glyph(TextColors::default());
+    let mut space = mixed_glyph(TextColors::default());
+    space.glyph.pixels = [0; GLYPH_PIXELS];
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![text, space]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    // The text's foreground (0,0) and shadow (1,0) pixels are overwritten.
+    assert_eq!(fb.pixel(0, 0), Some(palette[1]));
+    assert_eq!(fb.pixel(1, 0), Some(palette[1]));
+    assert_eq!(fb.pixel(5, 14), Some(palette[1]), "last footprint pixel");
+    assert_eq!(fb.pixel(6, 0), marker_fb().pixel(6, 0), "past the advance");
+    assert_eq!(
+        fb.pixel(0, 15),
+        marker_fb().pixel(0, 15),
+        "below the raster"
+    );
+}
+
+/// Background index 0 stays transparent: a default-coloured glyph whose
+/// background is palette index 0 leaves earlier pixels alone.
+#[test]
+fn a_background_of_palette_index_0_still_leaves_earlier_pixels_alone() {
+    let palette = distinct_palette();
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![mixed_glyph(colors(2, 0, 3))]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    assert_eq!(fb.pixel(2, 0), marker_fb().pixel(2, 0));
+}
+
+/// A short font's glyph is a `Glyph::clipped_to_height` cell: rows at or past
+/// the font's height are zeroed, and zero now paints the default background.
+/// `CopyGlyphToWindow` copies only `gCurGlyph.width` by `gCurGlyph.height`
+/// (`text.c:608-612`), so a space drawn over earlier pixels must blank exactly
+/// that rectangle and leave the rows below the font's height alone.
+#[test]
+fn a_short_fonts_default_background_stops_at_the_fonts_height() {
+    let palette = distinct_palette();
+    let font = assets::FontId::SmallNarrow;
+    let height = usize::from(font.glyph_height());
+    assert_eq!(height, 12);
+    let width = 6;
+    let earlier = {
+        let mut earlier = mixed_glyph(TextColors::default());
+        // Foreground over the whole cell, so every row 0-15 holds pixels.
+        earlier.glyph = Glyph {
+            advance_width: 16,
+            pixels: [1; GLYPH_PIXELS],
+        };
+        earlier
+    };
+    let space = {
+        let mut space = mixed_glyph(TextColors::default());
+        space.glyph = Glyph {
+            advance_width: u8::try_from(width).unwrap(),
+            pixels: [0; GLYPH_PIXELS],
+        }
+        .clipped_to_height(font.glyph_height());
+        space.raster_height = i32::from(font.glyph_height());
+        space
+    };
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &glyph_ops(vec![earlier, space]),
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        &palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    for y in 0..16usize {
+        for x in 0..16usize {
+            let expected = if x < width && y < height {
+                palette[1]
+            } else {
+                palette[2]
+            };
+            assert_eq!(fb.pixel(x, y), Some(expected), "({x}, {y})");
+        }
+    }
+}
+
+/// A Normal-font sheet for decoded streams: `A` (0xBB) is solid foreground,
+/// `B` (0xBC) is background except a foreground last column, and the space
+/// (0x00) is all background; each is 6 wide.
+struct OverlapSheet;
+
+impl assets::fonts::GlyphSource for OverlapSheet {
+    fn font(&self) -> assets::FontId {
+        assets::FontId::Normal
+    }
+
+    fn glyph(&self, glyph_id: u16) -> Option<Glyph> {
+        let mut pixels = [0u8; GLYPH_PIXELS];
+        match glyph_id {
+            0x00 => {}
+            0xBB => pixels.fill(1),
+            0xBC => {
+                for row in pixels.chunks_exact_mut(16) {
+                    row[5] = 1;
+                }
+            }
+            _ => return None,
+        }
+        Some(Glyph {
+            advance_width: 6,
+            pixels,
+        })
+    }
+}
+
+/// Decodes `bytes`, prints them through [`engine::text::render::Printer`],
+/// and composes every revealed glyph over a marker framebuffer.
+fn compose_decoded(bytes: &[u8], palette: &[Rgb888]) -> Framebuffer {
+    use engine::text::render::{Printer, PrinterInput, TextSpeed};
+    let tokens = engine::text::decode(bytes).expect("the stream decodes");
+    let mut printer = Printer::new(tokens, OverlapSheet, TextSpeed::Instant, (0, 0));
+    let mut ops = Vec::new();
+    for _ in 0..64 {
+        match printer.tick(PrinterInput::none()) {
+            TickEvent::Glyph(glyph) => ops.push(WindowOp::Glyph(glyph)),
+            TickEvent::Finished => break,
+            _ => {}
+        }
+    }
+    let mut fb = marker_fb();
+    compose_window_ops(
+        &mut fb,
+        &ops,
+        (0, 0),
+        (200, 32),
+        &super::test_keypad_icons(&[]),
+        palette,
+        WindowBackdrop::message_box(None, None),
+    );
+    fb
+}
+
+/// A decoded `SKIP` back draws a glyph and a space over earlier text. Upstream
+/// paints a default glyph's background with `bgColor` (`text.c:378-381`,
+/// `:583-591`), so the stale foreground goes, and `{HIGHLIGHT 1}`, the same
+/// background chosen explicitly, gives the identical window.
+#[test]
+fn a_decoded_skip_back_overlap_paints_the_same_with_or_without_highlight_1() {
+    const EOS: u8 = 0xFF;
+    const HIGHLIGHT_1: [u8; 3] = [0xFC, 0x02, 0x01];
+    const SKIP_0: [u8; 3] = [0xFC, 0x12, 0x00];
+    let palette = distinct_palette();
+    // "A{SKIP 0}B" and "A{SKIP 0} ": the second glyph lands on the first.
+    for (second, label) in [(0xBC, "glyph"), (0x00, "space")] {
+        let plain = [&[0xBB][..], &SKIP_0, &[second, EOS]].concat();
+        let highlighted = [&HIGHLIGHT_1[..], &plain].concat();
+        let plain_fb = compose_decoded(&plain, &palette);
+        let highlighted_fb = compose_decoded(&highlighted, &palette);
+        for y in 0..16usize {
+            for x in 0..16usize {
+                let expected = if x >= 6 || y >= 15 {
+                    marker_fb().pixel(x, y)
+                } else if second == 0xBC && x == 5 {
+                    Some(palette[2])
+                } else {
+                    Some(palette[1])
+                };
+                assert_eq!(plain_fb.pixel(x, y), expected, "{label} ({x}, {y})");
+                assert_eq!(
+                    highlighted_fb.pixel(x, y),
+                    plain_fb.pixel(x, y),
+                    "{label} ({x}, {y}): HIGHLIGHT 1 changed the pixel"
+                );
+            }
+        }
+    }
+}
