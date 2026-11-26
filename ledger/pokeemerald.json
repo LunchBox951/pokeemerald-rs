@@ -32710,6 +32710,12 @@
           "rust_target": "crates/engine/src/event_data.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "TryUpdateRusturfTunnelState": {
+          "reason": "field_specials.c:1398-1416. overworld::rusturf_tunnel::try_update_rusturf_tunnel_state takes the current assets::MapId and &mut EventData. Nothing happens unless FLAG_RUSTURF_TUNNEL_OPENED (flags.h:221, 0xC7) is clear and the map is MAP_RUSTURF_TUNNEL (group 24, num 4); the group and number are matched as one id, so a map sharing only one of them is rejected. Then FLAG_HIDE_RUSTURF_TUNNEL_ROCK_1 (flags.h:982, 0x3A3) writes 4 to VAR_RUSTURF_TUNNEL_STATE (vars.h:174, 0x409A) and returns true; failing that FLAG_HIDE_RUSTURF_TUNNEL_ROCK_2 (flags.h:983, 0x3A4) writes 5 and returns true, so the first rock takes precedence when both are set. Any other case returns false and writes nothing. It makes no RNG draw. Not modelled: dispatching the special (crate::script::specials lists it by name only), the RusturfTunnel map scripts that call it, and Rock Smash, tunnel opening and the map objects the state drives.",
+          "rust_target": "crates/engine/src/overworld/rusturf_tunnel.rs",
+          "spec": "S-5",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
