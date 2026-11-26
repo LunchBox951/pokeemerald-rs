@@ -46,18 +46,21 @@ const HALF_GAIN_256: u32 = FULL_GAIN_256 / 2;
 const QUARTER_GAIN_256: u32 = FULL_GAIN_256 / 4;
 const SILENT_GAIN_256: u32 = 0;
 
+/// Levels whose NR32 byte the port models: `gCgb3Vol` (16) plus `gClockTable` (49).
+const NR32_MODELED_LEVELS: usize = 16 + 49;
+
 const NR32_THREE_QUARTER_BIT: u8 = 0x80;
 const NR32_VOLUME_SHIFT: u32 = 5;
 const NR32_VOLUME_MASK: u8 = 0b11;
 
 // The NR32 byte `CgbSound` writes for each wave envelope level (`m4a.c:1211`).
-// Levels 0-15 are `gCgb3Vol` (`m4a_tables.c:168-174`). Upstream indexes it
-// unchecked and centred goals reach 31 (`CgbModVol`), so levels 16-31 read the
-// bytes after it in `m4a_tables.o` `.rodata`: `gClockTable` (`m4a_tables.c:177`),
-// whose first sixteen bytes are `0x00..=0x0F`. The built ROM confirms the layout:
-// `00 00 60 60 60 60 40 40 40 40 80 80 80 80 20 20 | 00 01 02 .. 0F 10 11`.
+// Upstream indexes `gCgb3Vol` unchecked, and a level is any byte: the sustain
+// goal is the low byte of `(goal * sustain + 15) >> 4` (`m4a.c:921`) and an
+// `xSUST` override can be any byte. Levels 0-15 are `gCgb3Vol`
+// (`m4a_tables.c:168-174`); levels 16-64 read the 49 bytes of `gClockTable`
+// that follow it in `m4a_tables.o` `.rodata` (`m4a_tables.c:177-228`).
 #[rustfmt::skip]
-const NR32_BY_LEVEL: [u8; 32] = [
+const NR32_BY_LEVEL: [u8; NR32_MODELED_LEVELS] = [
     0x00, 0x00,
     0x60, 0x60, 0x60, 0x60,
     0x40, 0x40, 0x40, 0x40,
@@ -65,6 +68,11 @@ const NR32_BY_LEVEL: [u8; 32] = [
     0x20, 0x20,
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
     0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x1C, 0x1E, 0x20, 0x24, 0x28, 0x2A, 0x2C,
+    0x30, 0x34, 0x36, 0x38, 0x3C, 0x40, 0x42, 0x44,
+    0x48, 0x4C, 0x4E, 0x50, 0x54, 0x58, 0x5A, 0x5C,
+    0x60,
 ];
 
 /// Wave gain an NR32 byte selects: bit 7 forces three-quarter volume, else
@@ -81,10 +89,17 @@ fn nr32_wave_gain_256(nr32: u8) -> u32 {
     }
 }
 
-// Envelope levels top out at 31 (`cgb_envelope_goal`), the last table entry.
+/// Wave gain for an envelope level, which spans the whole byte, 0-255.
+///
+/// Levels below `NR32_MODELED_LEVELS` map to the byte upstream reads from
+/// `gCgb3Vol` and `gClockTable`. Past them upstream keeps reading into
+/// build-specific `.rodata` (a song template and code pointers) that the port
+/// does not model; those levels return `SILENT_GAIN_256`, a stated choice and
+/// not a clamp to any table entry.
 fn cgb3_wave_gain_256(envelope_volume: u8) -> u32 {
-    let index = usize::from(envelope_volume).min(NR32_BY_LEVEL.len() - 1);
-    nr32_wave_gain_256(NR32_BY_LEVEL[index])
+    NR32_BY_LEVEL
+        .get(usize::from(envelope_volume))
+        .map_or(SILENT_GAIN_256, |&nr32| nr32_wave_gain_256(nr32))
 }
 
 /// A fixed CGB hardware channel owned by at most one live voice.
@@ -753,6 +768,11 @@ impl CgbVoice {
         let mut stopped_write_latch = None;
         if let Some((note_key, fine_pitch)) = self.pending_pitch.take() {
             if self.envelope.is_active() {
+                // The first pass writes only this frequency, so the inherited
+                // clock goes from the predecessor's to this one in one step.
+                if initial_trigger {
+                    self.oscillator.rewind_inherited_clock();
+                }
                 let latched = self
                     .oscillator
                     .retune(note_key, fine_pitch, self.dac_correction);

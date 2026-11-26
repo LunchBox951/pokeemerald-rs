@@ -100,6 +100,14 @@ fn each_fonts_glyph_keeps_exactly_its_width_by_height_rectangle() {
         let revealed = first_glyph(font, &pixels, super::tests::ENCODED_A);
         let width = usize::from(font.glyph_width(glyph_id).unwrap());
         assert!(width > 0 && width < SIDE);
+        // The compositor paints the default background inside `advance_width`
+        // by `raster_height`, so the latter must be the font's own height.
+        assert_eq!(
+            revealed.raster_height,
+            i32::from(font.glyph_height()),
+            "{font:?}"
+        );
+        assert_eq!(usize::from(revealed.glyph.advance_width), width);
 
         for row in 0..SIDE {
             for column in 0..SIDE {

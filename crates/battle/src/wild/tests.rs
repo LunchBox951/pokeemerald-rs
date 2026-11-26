@@ -310,6 +310,23 @@ fn the_any_slot_ability_screen_admits_every_effect_spore_species() {
 }
 
 #[test]
+fn the_any_slot_ability_screen_admits_every_flame_body_species() {
+    let dex = Dex::new();
+    for species in [
+        SpeciesId::MAGMAR,
+        SpeciesId::SLUGMA,
+        SpeciesId::MAGCARGO,
+        SpeciesId::MAGBY,
+    ] {
+        assert_eq!(
+            crate::battle::admission::ensure_every_ability_slot_admissible(&dex, species),
+            Ok(()),
+            "{species:?}"
+        );
+    }
+}
+
+#[test]
 fn the_any_slot_ability_screen_admits_both_truant_species() {
     let dex = Dex::new();
     for species in [SpeciesId::SLAKOTH, SpeciesId::SLAKING] {

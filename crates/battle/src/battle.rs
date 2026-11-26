@@ -11,7 +11,7 @@
 //! selection. These positions preserve the shared upstream RNG sequence
 //! (`src/battle_main.c:3140`, `:3852`-`:3861`, `:3923`, `:4013`).
 
-use assets::trainers::TrainerId;
+use assets::trainers::{AiFlags, TrainerId};
 use assets::{AbilityId, MoveEffect, MoveId, MoveTarget};
 
 use crate::badge_boosts::BadgeBoosts;
@@ -155,6 +155,12 @@ pub struct Battle {
     /// The player's identity and badge limit; `None` skips the obedience
     /// gate (every Pokémon obeys).
     player_obedience: Option<crate::obedience::PlayerObedience>,
+    /// Whether the active enemy's faint has already run its reward step.
+    /// Upstream's `Cmd_getexp` runs once per faint; a forced replacement
+    /// refused by [`trace::ensure_trace_reentry_admissible`] leaves the
+    /// fainted member active, so a later faint pass must not pay it again.
+    /// Cleared when another enemy enters.
+    enemy_reward_settled: bool,
 }
 
 /// How `Cmd_attackcanceler`'s tail left one action.
@@ -339,7 +345,6 @@ impl Battle {
     /// lost a member before the battle. A non-fainted participant that is
     /// Paralysed with Limber, Poisoned or badly poisoned with Immunity, Burned with Water Veil, asleep with Insomnia or
     /// Vital Spirit, confused with Own Tempo, or holds Intimidate,
-    /// Flame Body,
     /// Drizzle, Drought or Sand Stream fails with
     /// [`BattleError::UnportedAbilityInteraction`]; so does a Trace holder
     /// that could copy an ability whose interaction with it, or with the
@@ -438,6 +443,7 @@ impl Battle {
             acted_this_turn: [false; 2],
             pending_entry_events: Vec::new(),
             end_turn_cleanup_pending: false,
+            enemy_reward_settled: false,
             player_obedience: None,
         };
         battle.settle_battle_start_trace();
@@ -558,11 +564,7 @@ impl Battle {
         let party_can_score = party
             .iter()
             .any(|mon| !mon.is_fainted() && !all_known_moves_are_spent(mon));
-        if party_can_score
-            && data
-                .ai_flags
-                .contains(assets::trainers::AiFlags::CHECK_BAD_MOVE)
-        {
+        if party_can_score && data.ai_flags.contains(AiFlags::CHECK_BAD_MOVE) {
             for target in std::iter::once(&player).chain(
                 player_reserves
                     .iter()
@@ -598,6 +600,7 @@ impl Battle {
             acted_this_turn: [false; 2],
             pending_entry_events: Vec::new(),
             end_turn_cleanup_pending: false,
+            enemy_reward_settled: false,
             player_obedience: None,
         };
         battle.settle_battle_start_trace();
@@ -893,17 +896,20 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        if let (ValidatedPlayerAction::UseMove { move_id, .. }, EnemyAction::Switch(slot)) =
-            (player_action, enemy_action)
-        {
-            // The player's move was admitted against the outgoing defender.
+        if let EnemyAction::Switch(slot) = enemy_action {
             let incoming = match &self.kind {
                 BattleKind::Trainer(context) => context.switch_target(slot)?,
                 BattleKind::Wild | BattleKind::FirstBattle => {
                     return Err(BattleError::InvalidTrainerSwitch(slot));
                 }
             };
-            secondary::ensure_admissible(&self.dex, move_id, &self.player, incoming)?;
+            if let ValidatedPlayerAction::UseMove { move_id, .. } = player_action {
+                // The player's move was admitted against the outgoing defender.
+                secondary::ensure_admissible(&self.dex, move_id, &self.player, incoming)?;
+            }
+            // A switch precedes every player move, so the entrant copies the
+            // ability the player holds now.
+            trace::ensure_trace_reentry_admissible(incoming, &self.player)?;
         }
         let chosen = ChosenMoves {
             player: match player_action {
@@ -1658,6 +1664,9 @@ impl Battle {
     }
 
     fn settle_enemy_reward(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
+        if std::mem::replace(&mut self.enemy_reward_settled, true) {
+            return Ok(());
+        }
         // `Cmd_getexp` case 2 zeroes the award and jumps past both the string
         // and `MonGainEVs` for a recipient already at the cap
         // (`src/battle_script_commands.c:3351`-`:3356`), and does the same
@@ -1742,8 +1751,10 @@ impl Battle {
     /// # Errors
     ///
     /// Returns [`BattleError::InvalidTrainerSwitch`] when this is not a
-    /// trainer battle or `slot` is not a healthy non-active member; nothing
-    /// changes then.
+    /// trainer battle or `slot` is not a healthy non-active member, and
+    /// [`BattleError::UnportedAbilityInteraction`] when the member is a Trace
+    /// holder whose status the player's ability forbids it to copy
+    /// ([`trace::ensure_trace_reentry_admissible`]); nothing changes then.
     fn switch_enemy_to(
         &mut self,
         slot: usize,
@@ -1752,7 +1763,7 @@ impl Battle {
         let BattleKind::Trainer(context) = &mut self.kind else {
             return Err(BattleError::InvalidTrainerSwitch(slot));
         };
-        context.switch_target(slot)?;
+        trace::ensure_trace_reentry_admissible(context.switch_target(slot)?, &self.player)?;
         // `Cmd_switchoutabilities` cures the leaving member before it returns
         // to its party record (`battle_script_commands.c:9590`-`:9603`). A
         // fainted member leaving for a forced replacement is already healthy.
@@ -1762,6 +1773,7 @@ impl Battle {
         self.enemy.clear_battle_scratch();
         context.switch_active(&mut self.enemy, slot)?;
         self.enemy.clear_battle_scratch();
+        self.enemy_reward_settled = false;
         // The departing member's own copy went with its scratch; the player's
         // battler is the only other holder, and `context` still borrows
         // `self.kind`.
@@ -2425,6 +2437,7 @@ mod tests {
             acted_this_turn: [false; 2],
             pending_entry_events: Vec::new(),
             end_turn_cleanup_pending: false,
+            enemy_reward_settled: false,
             player_obedience: None,
         };
         (battle, player_max_hp, player_move_max_pp)
