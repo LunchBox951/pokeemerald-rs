@@ -32710,6 +32710,12 @@
           "rust_target": "crates/engine/src/event_data.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "UsedPokemonCenterWarp": {
+          "reason": "Rewritten as used_pokemon_center_warp (field_specials.c:2008-2043): a pure predicate over the last-used warp's map id against upstream's 18-member Pokemon Center, Pokemon League and Union Room set; the list terminator is not a member. The caller must supply the map of gLastUsedWarp; this slice records no warp, heals nothing and reads no save state.",
+          "rust_target": "crates/engine/src/overworld/last_warp.rs",
+          "spec": "S-5",
+          "status": "rewritten"
         }
       },
       "category": "code.source",

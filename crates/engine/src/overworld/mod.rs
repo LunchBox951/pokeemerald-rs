@@ -4,6 +4,7 @@ pub mod background_event;
 pub mod collision;
 pub mod direction;
 pub mod interaction;
+pub mod last_warp;
 pub mod map_runtime;
 pub mod metatile_behavior;
 pub mod metatile_interaction;
