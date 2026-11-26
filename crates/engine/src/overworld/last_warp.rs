@@ -28,6 +28,10 @@ const POKEMON_CENTER_MAPS: [MapId; 18] = [
 ///
 /// `last_used_warp_map` is the map of the last-used warp, not the current map
 /// or the saved heal destination.
+///
+/// Returns `true` when that map is in upstream's fixed set: the 1F map of each
+/// Pokémon Center, the Ever Grande Pokémon League 1F and the Union Room. Any
+/// other map, including Pokémon Center 2F maps, returns `false`.
 #[must_use]
 pub fn used_pokemon_center_warp(last_used_warp_map: MapId) -> bool {
     POKEMON_CENTER_MAPS.contains(&last_used_warp_map)
