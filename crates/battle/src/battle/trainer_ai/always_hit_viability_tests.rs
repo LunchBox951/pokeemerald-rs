@@ -268,13 +268,11 @@ fn check_viability_admits_the_effect_and_keeps_other_refusals() {
     let dex = Dex::new();
     let viability = AiFlags::CHECK_BAD_MOVE.union(AiFlags::CHECK_VIABILITY);
     assert_eq!(ensure_scoreable(&dex, MoveId::SWIFT, viability), Ok(()));
-    for move_id in [MoveId::SLASH, MoveId::VITAL_THROW] {
-        assert_eq!(
-            ensure_scoreable(&dex, move_id, viability),
-            Err(BattleError::UnscoreableMoveEffect(move_id)),
-            "{move_id:?}"
-        );
-    }
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::SLASH, viability),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::SLASH)),
+        "still-unported HIGH_CRITICAL"
+    );
 }
 
 #[test]

@@ -220,8 +220,8 @@ fn admission_widens_for_speed_down_hit_only() {
             "{move_id:?}"
         );
     }
-    // The other two unported CHECK_VIABILITY rows stay refused.
-    for move_id in [MoveId::SLASH, MoveId::KARATE_CHOP, MoveId::VITAL_THROW] {
+    // The one remaining unported CHECK_VIABILITY row (HIGH_CRITICAL) stays refused.
+    for move_id in [MoveId::SLASH, MoveId::KARATE_CHOP] {
         assert_eq!(
             ensure_scoreable(&dex, move_id, flags),
             Err(BattleError::UnscoreableMoveEffect(move_id)),
