@@ -394,10 +394,8 @@ impl EventData {
         )
     }
 
-    /// Shared body of the scripted-call step predicates: nothing counts unless
-    /// `flag` is set and `map_type` is a town, city, route or ocean route; then
-    /// the `u16` counter `var` is incremented first (wrapping) and the result is
-    /// whether it has reached `threshold`. The flag is never cleared.
+    /// Shared body of `ShouldDoWallyCall` and the four predicates after it
+    /// (`src/field_specials.c:353-476`).
     fn step_call_due(&mut self, flag: u16, var: u16, threshold: u16, map_type: MapType) -> bool {
         let flag = usize::from(flag);
         if (self.flags[flag / FLAGS_PER_BYTE] >> (flag % FLAGS_PER_BYTE)) & 1 == 0 {
