@@ -136,7 +136,8 @@ fn supported_forced_tiles_use_their_own_exact_crossing_cadence() {
 
 /// A held direction opposite the tile's own never steers the crossing:
 /// `DoForcedMovement` moves in the mover's own direction independent of
-/// the keypad (`field_player_avatar.c:407-470`) `(behavioral-fidelity)`.
+/// the keypad (`field_player_avatar.c:342-347, 407-470`)
+/// `(behavioral-fidelity)`.
 #[test]
 fn supported_forced_tiles_ignore_a_held_opposing_direction() {
     for &(behavior, direction, _frames) in &FORCED_MOVERS {
@@ -164,6 +165,12 @@ fn supported_forced_tiles_ignore_a_held_opposing_direction() {
             direction,
             "behavior {behavior:#04x}: facing follows the forced direction, \
              not the caller's held opposite"
+        );
+        assert_eq!(
+            player.position(),
+            destination,
+            "behavior {behavior:#04x}: the dispatch lands on the tile's own \
+             forced neighbour, never the caller's held side"
         );
     }
 }
@@ -195,6 +202,12 @@ fn supported_forced_tiles_blocked_route_falls_through_to_held_keypad() {
             "behavior {behavior:#04x}: the forced route is blocked, so the \
              held opposite direction must move the player back off the tile \
              immediately rather than turning first"
+        );
+        assert_eq!(
+            player.position(),
+            entry,
+            "behavior {behavior:#04x}: the keypad step lands back on the entry \
+             tile, off the blocked forced tile"
         );
         assert!(
             !player.forced_movement_armed(),
@@ -243,6 +256,11 @@ fn blocked_forced_route_after_idle_turns_before_stepping() {
              blocked and never touched the movement streak the idle poll \
              ended, so this poll turns in place like any other direction \
              change from standstill"
+        );
+        assert_eq!(
+            player.position(),
+            (2, 2),
+            "behavior {behavior:#04x}: a turn in place never leaves the forced tile"
         );
     }
 }
@@ -710,104 +728,6 @@ fn placement_onto_an_undispatched_tile_stays_disarmed() {
     }
 }
 
-/// Upstream dispatches forced movement from the metatile the player is
-/// already standing on before it ever reads the keypad, and
-/// `DoForcedMovement` moves in that tile's own direction on a clear
-/// route regardless of the caller's held direction
-/// (`field_player_avatar.c:342-347`, `:407-470`) `(behavioral-fidelity)`.
-#[test]
-fn a_forced_movement_tile_does_not_honour_the_callers_direction() {
-    let runtime = slide_east_runtime();
-
-    let mut player = PlayerState::new((1, 2), 3, Direction::East);
-    assert_eq!(
-        player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
-        StepOutcome::Advanced {
-            from: (1, 2),
-            to: (2, 2),
-        },
-        "fixture precondition: the slide tile is entered like ordinary ground"
-    );
-    for _ in 0..WALK_FRAMES_PER_TILE {
-        player.tick();
-    }
-
-    assert_eq!(
-        player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
-        StepOutcome::Advanced {
-            from: (2, 2),
-            to: (3, 2),
-        },
-        "the slide tile dispatches its own eastward direction, never the \
-         caller's held westward one"
-    );
-    assert_eq!(
-        player.facing(),
-        Direction::East,
-        "the tile's own direction is what actually moved the player, not \
-         the caller's West poll"
-    );
-    assert_eq!(player.position(), (3, 2));
-}
-
-/// A blocked forced route falls through to the keypad on the very poll
-/// that found it blocked -- `DoForcedMovement`'s collision branch never
-/// denies the poll outright, it just skips `moveFunc` and lets
-/// `MovePlayerAvatarUsingKeypadInput` run (`field_player_avatar.c:344-349`,
-/// `:443-462`) -- but the guard itself stays armed, since
-/// `GetForcedMovementByMetatileBehavior` re-reads the standing tile
-/// fresh every poll rather than latching a one-time verdict (`:409-426`):
-/// only leaving the tile or a successful dispatch consumes it, so a
-/// later poll retries the same dispatch. A blocked dispatch attempt
-/// leaves `runningState` (this port's movement streak) untouched, same
-/// as `DoForcedMovement`'s collision branch (`:443-462`), so the retry
-/// still turns in place first rather than stepping immediately
-/// `(behavioral-fidelity)`.
-#[test]
-fn a_blocked_forced_movement_tile_stays_armed_and_still_turns_after_an_idle_poll() {
-    let runtime = blocked_slide_east_runtime();
-
-    let mut player = PlayerState::new((1, 2), 3, Direction::East);
-    assert_eq!(
-        player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
-        StepOutcome::Advanced {
-            from: (1, 2),
-            to: (2, 2),
-        },
-        "fixture precondition: the slide tile is entered like ordinary ground, \
-         which is what arms the guard"
-    );
-    for _ in 0..WALK_FRAMES_PER_TILE {
-        player.tick();
-    }
-    assert!(
-        player.forced_movement_armed(),
-        "fixture precondition: the slide tile arms the guard on landing"
-    );
-
-    assert_eq!(
-        player.step(None, &runtime, &no_connections, &NO_FLAGS),
-        StepOutcome::Idle,
-        "the forced eastward route is blocked at (3, 2), so the no-input \
-         dispatch attempt fails and idles rather than moving"
-    );
-    assert!(
-        player.forced_movement_armed(),
-        "a blocked forced route must not clear the guard while the player \
-         still stands on the same tile, so a later poll can retry once \
-         whatever blocked it no longer does"
-    );
-
-    assert_eq!(
-        player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
-        StepOutcome::Turned(Direction::West),
-        "the retried dispatch is still blocked and never touched the \
-         movement streak the idle poll ended, so this poll turns in \
-         place like any other direction change from standstill"
-    );
-    assert_eq!(player.position(), (2, 2));
-}
-
 /// A dispatched forced tile's own direction sets the avatar's facing --
 /// not the direction it happened to be entered from, and not the
 /// caller's held poll -- `ForcedMovement_WalkEast` never sets
@@ -951,39 +871,6 @@ fn a_finished_slide_holds_its_pose_until_the_next_movement() {
     let mut faced = player;
     faced.face(Direction::West);
     assert!(!faced.slide_pose_held(), "a scripted facing restarts it");
-}
-
-/// A collision-blocked forced step falls through to the keypad
-/// (`field_player_avatar.c:344-348`, `:443-462`), so a slide-east tile
-/// with an impassable neighbour stays steerable `(behavioral-fidelity)`.
-#[test]
-fn a_collision_blocked_forced_direction_still_honours_manual_input() {
-    let runtime = blocked_slide_east_runtime();
-    let mut player = PlayerState::new((1, 2), 3, Direction::East);
-    assert_eq!(
-        player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
-        StepOutcome::Advanced {
-            from: (1, 2),
-            to: (2, 2),
-        },
-        "fixture precondition: the slide tile is entered like ordinary ground, \
-         which is what arms the guard (issue #926's placement/resume finding)"
-    );
-    for _ in 0..WALK_FRAMES_PER_TILE {
-        player.tick();
-    }
-
-    assert_eq!(
-        player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
-        StepOutcome::Advanced {
-            from: (2, 2),
-            to: (1, 2),
-        },
-        "the forced eastward step is blocked by the impassable tile at (3, 2), \
-         so upstream falls through to the keypad and the westward poll moves \
-         the player off the slide tile"
-    );
-    assert_eq!(player.position(), (1, 2));
 }
 
 /// Slip tiles (ice and the Trick House floor) paired with the frame count of
