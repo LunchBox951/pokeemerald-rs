@@ -64,7 +64,7 @@ impl CyclingRoadRecord {
         if frames == 0 {
             return Ok(None);
         }
-        let collisions = data.var_get(VAR_CYCLING_ROAD_RECORD_COLLISIONS)? as u8;
+        let collisions = (data.var_get(VAR_CYCLING_ROAD_RECORD_COLLISIONS)? & 0x00FF) as u8;
         Ok(Some(Self { frames, collisions }))
     }
 
@@ -88,7 +88,7 @@ impl CyclingRoadRecord {
     ) -> Result<bool, EventDataError> {
         let faster = Self::read(data)?.is_none_or(|record| record.frames > frames);
         if faster {
-            data.var_set(VAR_CYCLING_ROAD_RECORD_TIME_L, frames as u16)?;
+            data.var_set(VAR_CYCLING_ROAD_RECORD_TIME_L, (frames & 0xFFFF) as u16)?;
             data.var_set(VAR_CYCLING_ROAD_RECORD_TIME_H, (frames >> 16) as u16)?;
             data.var_set(VAR_CYCLING_ROAD_RECORD_COLLISIONS, u16::from(collisions))?;
         }
@@ -240,7 +240,7 @@ mod tests {
         for (offset, id) in neighbours.into_iter().enumerate() {
             block
                 .event_data
-                .var_set(id, 0x1111 + offset as u16)
+                .var_set(id, 0x1111 + u16::try_from(offset).unwrap())
                 .unwrap();
         }
         let before = block.event_data.clone();
@@ -271,7 +271,7 @@ mod tests {
             .zip(before.vars_raw())
             .enumerate()
         {
-            let id = 0x4000 + index as u16;
+            let id = 0x4000 + u16::try_from(index).unwrap();
             let touched = [
                 VAR_CYCLING_ROAD_RECORD_COLLISIONS,
                 VAR_CYCLING_ROAD_RECORD_TIME_L,
