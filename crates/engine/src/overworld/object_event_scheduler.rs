@@ -318,8 +318,12 @@ impl ObjectEventCollection {
 }
 
 impl LiveObjectEvent {
+    /// A carried entry is never admitted from its departed map's template: the spawn scan reads
+    /// only the loaded map's templates (`TrySpawnObjectEvents`, `:1664-1673`), so a carried object
+    /// retired by `remove_by_local_id` has nothing left to respawn from.
     fn should_spawn(&self, player_position: TilePos, event_data: &EventData) -> bool {
-        !self.lifecycle.is_active()
+        self.carried_from.is_none()
+            && !self.lifecycle.is_active()
             && tile_is_in_view(self.state.template_position(), player_position)
             && object_event_is_visible(self.template, event_data)
     }

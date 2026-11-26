@@ -1039,6 +1039,28 @@ mod tests {
         }
 
         #[test]
+        fn an_explicitly_removed_carried_entry_is_not_respawned_from_its_departed_template() {
+            // Upstream's reloaded template array no longer holds the departed map's templates
+            // (`TrySpawnObjectEvents`, `event_object_movement.c:1664-1673`), so once
+            // `removeobject` retires a carried object nothing can spawn it again.
+            let mut rig = Rig::new(vec![fixed(1, 5, 6)], (5, 5));
+            rig.tick(1);
+            let mut carried = cross(&rig.collection, vec![]);
+            assert!(carried.remove_by_local_id(1));
+
+            // The translated template tile (5, 26) stays in view across both camera moves.
+            for player in [(5, 26), (5, 27)] {
+                frame(&mut carried, player);
+                assert!(
+                    carried.find(Some(DEPARTED), 1).is_none(),
+                    "removed carried entry came back at {player:?}: {:?}",
+                    carried.find(Some(DEPARTED), 1).map(|entry| entry.lifecycle)
+                );
+            }
+            assert_eq!(carried.iter().count(), 0);
+        }
+
+        #[test]
         fn an_entrys_id_survives_the_removal_of_an_earlier_entry_and_a_crossing() {
             let mut rig = Rig::new(vec![fixed(1, 5, 9), fixed(2, 5, 4)], (5, 5));
             rig.tick(1);
