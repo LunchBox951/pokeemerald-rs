@@ -32681,6 +32681,12 @@
     },
     "src/field_specials.c": {
       "artifacts": {
+        "DetermineCyclingRoadResults": {
+          "reason": "field_specials.c:203-225: overworld::cycling_road::cycling_road_grade computes the numeric grade (collision score 5/4/3/2/1/0 at 0, <4, <10, <20, <100, else; whole-second score 5/4/3/2/1/0 at <=10, <=15, <=20, <=40, <60, else) and is the only part modelled. Not ported: the result strings in gStringVar1 and gStringVar2 (the collision count with its times suffix or 99-plus text, and the seconds with two fractional digits or the one-minute-plus text, :179-201) and the write to gSpecialVar_Result.",
+          "rust_target": "crates/engine/src/overworld/cycling_road.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "GetDaysUntilPacifidlogTMAvailable": {
           "reason": "field_specials.c:1555-1564, read by data/maps/PacifidlogTown_House2/scripts.inc:20-23. EventData::days_until_pacifidlog_tm_available reads VAR_PACIFIDLOG_TM_RECEIVED_DAY (vars.h:214) as a u16 and keeps upstream's branch order on the signed difference (the s16 gLocalTime.days minus the u16 day, as C's promoted int): zero once seven days passed, then 8 for a negative local day, otherwise 7 minus the difference truncated to the u16 return. A recorded day ahead of the local day is not clamped (9 after recording 10 gives 8, 3 gives 14) and a recorded day of 0xFFFF wraps (day 0 gives 6, day 6 gives 0), as does a negative day already stored as its u16 image. The local day count is a caller-supplied i16 and makes no RNG draw. Not modelled: where gLocalTime.days comes from (the real-time clock policy, issue #2396), the GetDaysUntilPacifidlogTMAvailable special's dispatch (crate::script::specials lists it by name only), and the PacifidlogTown_House2 script's VAR_RESULT branch that clears FLAG_RECEIVED_FANCLUB_TM_THIS_WEEK.",
           "rust_target": "crates/engine/src/event_data.rs",
@@ -32693,9 +32699,21 @@
           "spec": "S-5",
           "status": "stubbed"
         },
+        "GetRecordedCyclingRoadResults": {
+          "reason": "field_specials.c:251-262: overworld::cycling_road::CyclingRoadRecord::read rebuilds the frame count from the two saved words and returns None while it is zero (upstream FALSE); otherwise it returns the frames and the collision word's low byte, as upstream passes the u16 var to a u8 parameter. CyclingRoadRecord::grade supplies the grade DetermineCyclingRoadResults would write. Not modelled: setting gSpecialVar_Result, the TRUE return as a script value, and the result strings.",
+          "rust_target": "crates/engine/src/overworld/cycling_road.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "IncrementBirthIslandRockStepCount": {
           "reason": "field_specials.c:3377-3387, called from ProcessPlayerFieldInput on tookStep right after IncrementGameStat(GAME_STAT_STEPS) and before TryStartStepBasedScript (field_control_avatar.c:155-160). OverworldPhase::increment_birth_island_rock_step_count, run from count_took_step, advances VAR_DEOXYS_ROCK_STEP_COUNT (vars.h:72, a saved event var) on MAP_BIRTH_ISLAND_EXTERIOR only, as a u16 wrapping increment that stores zero once the result passes 99, so a loaded value of 99 or more resets rather than climbing and 0xFFFF wraps to zero with no panic and no RNG draw. A landing a coord event or door-shaped warp then claims is still counted; the forced landing, the escalator arrival's held walk-off and an unfinished crossing are not (take_stepped_onto), as for GAME_STAT_STEPS. Not modelled: the rock movement and palette (SetDeoxysRockPalette, the Deoxys triangle scripts), the puzzle outcome, the Deoxys encounter and the trip to the island.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/birth_island_rock.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "RecordCyclingRoadResults": {
+          "reason": "field_specials.c:237-249: overworld::cycling_road::CyclingRoadRecord::record_if_faster stores the frame count's low and high 16 bits in VAR_CYCLING_ROAD_RECORD_TIME_L/_H and the collision count in VAR_CYCLING_ROAD_RECORD_COLLISIONS (vars.h:57-59) when no record exists (both words zero) or the new count is strictly smaller; an equal or slower run leaves all three variables alone whatever its collisions. Not modelled: the challenge timer and gBikeCollisions that feed it (FinishCyclingRoadChallenge, :229-235).",
+          "rust_target": "crates/engine/src/overworld/cycling_road.rs",
           "spec": "S-5",
           "status": "rewritten"
         },

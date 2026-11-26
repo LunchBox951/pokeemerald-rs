@@ -2,6 +2,7 @@
 
 pub mod background_event;
 pub mod collision;
+pub mod cycling_road;
 pub mod direction;
 pub mod interaction;
 pub mod map_runtime;
