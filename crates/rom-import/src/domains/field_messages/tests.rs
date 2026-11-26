@@ -158,9 +158,9 @@ fn an_address_off_the_image_or_an_unterminated_tail_is_refused() {
 }
 
 #[test]
-fn a_stream_cut_inside_a_control_sequence_is_a_schema_error() {
-    // `{PAUSE}` takes an argument byte; here `EOS` ends the stream first.
-    let rom = rom_of(fixture().write(STRING, &[0xFC, 0x08, 0xFF]));
+fn a_stream_with_an_unassigned_control_is_a_schema_error() {
+    // `0xFC 0x7F` is no extended control the charmap assigns.
+    let rom = rom_of(fixture().write(STRING, &[0xFC, 0x7F, 0xFF]));
     let err = written(&rom, roots()).unwrap_err();
     assert!(
         matches!(
@@ -172,4 +172,46 @@ fn a_stream_cut_inside_a_control_sequence_is_a_schema_error() {
         ),
         "{err}"
     );
+}
+
+#[test]
+fn a_control_operand_of_ff_is_read_through_to_the_real_eos() {
+    // `{PAUSE 255}` then `EOS`, and the same around text; the filler after
+    // each is also `0xFF`.
+    for planted in [
+        &[0xFC, 0x08, 0xFF, 0xFF][..],
+        &[0x01, 0xFC, 0x08, 0xFF, 0x02, 0xFF][..],
+        &[0x01, 0xFD, 0xFF, 0x02, 0xFF][..],
+    ] {
+        let rom = rom_of(fixture().write(STRING, planted));
+        let entries = written(&rom, roots()).expect("a valid stream with an FF operand");
+        let table = FieldMessageTable::decode(&entries[0].2).expect("canonical bytes");
+        assert_eq!(
+            table.string(FieldMessage::ALL[0]),
+            planted,
+            "{planted:02X?}"
+        );
+    }
+}
+
+#[test]
+fn a_control_sequence_cut_by_the_end_of_the_image_is_refused() {
+    for cut in [
+        &[0xFC][..],
+        &[0xFC, 0x08][..],
+        &[0xFC, 0x04, 0xFF, 0xFF][..],
+        &[0xFD][..],
+    ] {
+        let at_end = ROM_SIZE - cut.len();
+        let rom = rom_of(fixture().write(at_end, cut));
+        let tail: &'static [FieldMessageRoot] = Box::leak(Box::new([FieldMessageRoot {
+            addr: at(at_end),
+            ..roots()[0]
+        }]));
+        let err = written(&rom, tail).unwrap_err();
+        assert!(
+            matches!(err, ImportError::Truncated { at, .. } if at == at_end),
+            "{cut:02X?}: {err}"
+        );
+    }
 }
