@@ -97,7 +97,7 @@ impl OverworldPhase {
             // The menu stays up, drawn, while the field fades out under it.
             StartMenuOutcome::Bag => {
                 self.start_menu = Some(menu);
-                self.begin_bag_trip();
+                self.begin_bag_trip(buttons);
             }
         }
         self.advance_field_sprites();

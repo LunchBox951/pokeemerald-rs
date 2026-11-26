@@ -260,7 +260,8 @@ pub(crate) struct BagScreen {
     /// and Down read, in the list and while swapping, and the TOSS count
     /// reads for all four directions. It opens at the boot delay of 40:
     /// upstream's session-global `gKeyRepeatStartDelay` is not
-    /// modelled, so a naming screen's 16 does not carry over.
+    /// modelled, so a naming screen's 16 does not carry over. A host that
+    /// counts for the screen ([`BagScreen::tick_repeated`]) bypasses it.
     repeat: KeyRepeat,
     done: Option<BagScreenResult>,
     /// Whether the choice that closed the screen was confirmed in a context
@@ -286,18 +287,32 @@ impl BagScreen {
     /// press is heard meanwhile and restarts it, unless the request has a
     /// link; every other input is dropped, not queued (`item_menu.c:1356-1370`).
     pub(crate) fn tick(&mut self, buttons: ButtonState) -> BagScreenTick {
+        let repeated = self.repeat.advance(buttons);
+        self.tick_repeated(buttons, repeated)
+    }
+
+    /// [`Self::tick`] for a host that counts the held-button repeat itself:
+    /// `repeated` is this frame's `gMain.newAndRepeatedKeys`, and the
+    /// screen's own counter is left alone. `ReadKeys` counts on every frame
+    /// of the session, the ones before the bag exists and the ones it does
+    /// not listen on included (`main.c:133,251-275`), so a host whose bag
+    /// opens with a button already held has to carry the count in.
+    pub(crate) fn tick_repeated(
+        &mut self,
+        buttons: ButtonState,
+        repeated: Buttons,
+    ) -> BagScreenTick {
         let pairs_before = self.arrow_pairs();
-        let outcome = self.handle_buttons(buttons);
+        let outcome = self.handle_buttons(buttons, repeated);
         self.age_arrows(pairs_before, self.arrow_pairs());
         self.shake.update();
         outcome
     }
 
-    fn handle_buttons(&mut self, buttons: ButtonState) -> BagScreenTick {
+    fn handle_buttons(&mut self, buttons: ButtonState, repeated: Buttons) -> BagScreenTick {
         if let Some(result) = self.done {
             return BagScreenTick::Closed(result);
         }
-        let repeated = self.repeat.advance(buttons);
         if let Some(switch) = self.switch {
             self.advance_switch(switch, buttons);
             return BagScreenTick::Open;

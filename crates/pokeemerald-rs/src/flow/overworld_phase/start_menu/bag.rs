@@ -42,12 +42,25 @@
 //! tile copy it queued (`src/item_menu.c:806-817`, `src/menu.c:1760-1778`,
 //! `src/main.c:340-358`), which the port counts as the one frame the
 //! callback is.
+//!
+//! `ReadKeys` runs at the top of every one of those frames, whichever
+//! callback owns it (`src/main.c:133,251-275`), so the held-button repeat
+//! the bag's list reads (`JOY_REPEAT`, `src/list_menu.c:406-413`) counts
+//! through the fades and the black frames while `Task_BagMenu_HandleInput`
+//! ignores the keys (`!gPaletteFade.active`, `src/item_menu.c:1217`). A
+//! direction pressed on frame F of the trip and held repeats on frame
+//! F + 40 and every 5 frames after; the fresh press and the repeats that
+//! fall on frames the bag does not read are lost, and the first that falls
+//! on one it reads moves the list. [`FieldBag::repeat`] is that counter for
+//! the trip. The start menu reads only fresh presses
+//! (`src/start_menu.c:595-629`), so nothing carries the count past the trip.
 
-use platform::{ButtonState, Frame};
+use platform::{ButtonState, Buttons, Frame};
 use rendering::{Framebuffer, NormalPaletteFade, PaletteFadeTarget, PaletteStage};
 
 use super::OverworldPhase;
 use crate::bag_menu::{self, BagScreen, BagScreenMode, BagScreenRequest, BagScreenTick};
+use crate::key_repeat::{self, KeyRepeat};
 use engine::bag_menu::BagPositions;
 use engine::save::{ButtonMode, PlayerGender};
 
@@ -106,12 +119,25 @@ fn field_return_black_frames(menu_items: usize) -> u8 {
 
 /// The bag state a session keeps: the positions retained between visits and
 /// the trip in progress, if any.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(in crate::flow) struct FieldBag {
     /// `gBagPosition` (`src/item_menu.c`): kept for the session, not per
     /// menu.
     positions: BagPositions,
     trip: Option<BagTrip>,
+    /// `gMain.keyRepeatCounter` for the trip in progress, advanced with the
+    /// real buttons on every frame of it, the choosing frame included.
+    repeat: KeyRepeat,
+}
+
+impl Default for FieldBag {
+    fn default() -> Self {
+        Self {
+            positions: BagPositions::default(),
+            trip: None,
+            repeat: KeyRepeat::new(key_repeat::START_DELAY),
+        }
+    }
 }
 
 /// Which stage of the trip owns the frame.
@@ -166,8 +192,25 @@ impl OverworldPhase {
     }
 
     /// `StartMenuBagCallback` (`src/start_menu.c:670-682`): starts the
-    /// field's fade to black on the frame BAG was selected.
-    pub(super) fn begin_bag_trip(&mut self) {
+    /// field's fade to black on the frame BAG was selected. `buttons` are
+    /// that frame's, which open the trip's repeat count.
+    ///
+    /// The count opens at rest behind the held set of the frame before. The
+    /// choice is a fresh A, so this frame's raw input differs from the
+    /// frame before's and upstream's counter restarts here -- unless L=A
+    /// had remapped a held `L` to the `A` now pressed, when the raw input
+    /// equals the remembered set and the counter steps instead
+    /// (`src/main.c:257-261,279-288`). It stepped from rest: on the frame
+    /// before, a raw `L` without `A` could not equal a remapped set.
+    pub(super) fn begin_bag_trip(&mut self, buttons: ButtonState) {
+        let mut held_before = buttons.raw_held() & !buttons.raw_newly_pressed();
+        if self.save2.options_button_mode == ButtonMode::LEqualsA
+            && held_before.intersects(Buttons::L)
+        {
+            held_before |= Buttons::A;
+        }
+        self.field_bag.repeat = KeyRepeat::resting_after(key_repeat::START_DELAY, held_before);
+        self.field_bag.repeat.advance(buttons);
         self.field_bag.trip = Some(BagTrip::FieldOut(black_fade_out()));
     }
 
@@ -178,6 +221,8 @@ impl OverworldPhase {
         let Some(trip) = self.field_bag.trip.take() else {
             return false;
         };
+        // `ReadKeys` counts before any callback runs, on every frame.
+        let repeated = self.field_bag.repeat.advance(buttons);
         let next = match trip {
             BagTrip::FieldOut(mut fade) => {
                 self.advance_locked_field_frame();
@@ -198,15 +243,16 @@ impl OverworldPhase {
                 mut fade,
             } => {
                 if fade.is_done() {
-                    Some(self.browse(screen, buttons))
+                    Some(self.browse(screen, buttons, repeated))
                 } else {
-                    // The bag animates under the fade but hears no input.
-                    screen.tick(ButtonState::default());
+                    // The bag animates under the fade but hears no input:
+                    // neither the fresh presses nor a repeat that falls due.
+                    screen.tick_repeated(ButtonState::default(), Buttons::NONE);
                     fade.update();
                     Some(BagTrip::BagIn { screen, fade })
                 }
             }
-            BagTrip::Browsing(screen) => Some(self.browse(screen, buttons)),
+            BagTrip::Browsing(screen) => Some(self.browse(screen, buttons, repeated)),
             BagTrip::Closing(screen) => Some(BagTrip::BagOut {
                 screen,
                 fade: black_fade_out(),
@@ -290,9 +336,15 @@ impl OverworldPhase {
 
     /// One frame of the bag with input. The bag's edits reach the live save
     /// as the screen reports them, so a reorder or a toss is kept even if
-    /// nothing is saved to disk afterwards.
-    fn browse(&mut self, mut screen: Box<BagScreen>, buttons: ButtonState) -> BagTrip {
-        match screen.tick(buttons) {
+    /// nothing is saved to disk afterwards. `repeated` is the trip's
+    /// `gMain.newAndRepeatedKeys` for the frame.
+    fn browse(
+        &mut self,
+        mut screen: Box<BagScreen>,
+        buttons: ButtonState,
+        repeated: Buttons,
+    ) -> BagTrip {
+        match screen.tick_repeated(buttons, repeated) {
             // Item actions (USE, GIVE, registration) are not routed yet; the
             // screen stays open and nothing changes.
             BagScreenTick::Open | BagScreenTick::Action { .. } => BagTrip::Browsing(screen),

@@ -454,3 +454,166 @@ fn the_return_black_grows_with_the_menu_it_rebuilds() {
     assert_eq!(frames(5), frames(4) + 1);
     assert_eq!(frames(8), frames(4) + 2);
 }
+
+/// Four stacks, so the bag's list has rows for a held DOWN to move through.
+fn four_stacks() -> engine::save::bag::Bag {
+    let mut bag = engine::save::bag::Bag::default();
+    for (slot, quantity) in bag.items.iter_mut().zip([10u16, 20, 30, 40]) {
+        *slot = engine::save::bag::ItemSlot {
+            item_id: assets::items::ItemId::POTION.0,
+            quantity,
+        };
+    }
+    bag
+}
+
+/// The bag list's cursor row in the pocket the trip shows, while the bag
+/// screen exists.
+fn list_cursor(s: &Session) -> Option<u16> {
+    match s.phase().field_bag.trip.as_ref()? {
+        super::BagTrip::BagSetup(screen)
+        | super::BagTrip::BagIn { screen, .. }
+        | super::BagTrip::Browsing(screen) => {
+            let positions = screen.positions();
+            Some(positions.cursor[0] + positions.scroll[0])
+        }
+        _ => None,
+    }
+}
+
+/// Runs the trip from the frame after the choice to `last`, holding `held`
+/// with `extra` added on the frames it names, and returns the frames on
+/// which the bag list's cursor moved.
+fn frames_the_list_moved(
+    s: &mut Session,
+    held: Buttons,
+    extra: impl Fn(usize) -> Buttons,
+    last: usize,
+) -> Vec<usize> {
+    let mut moved = Vec::new();
+    let mut row = None;
+    for frame in 1..=last {
+        s.frame(held | extra(frame));
+        assert_eq!(s.clock, frame + 1);
+        let now = list_cursor(s);
+        if row.is_some() && now != row {
+            moved.push(frame);
+        }
+        row = now.or(row);
+    }
+    moved
+}
+
+fn bag_session(label: &str) -> Session {
+    let mut s = session(label);
+    s.phase_mut().save1.bag = four_stacks();
+    s.open_start_menu();
+    s
+}
+
+/// `ReadKeys` counts a held button on every frame, the fades' included
+/// (`src/main.c:133,251-275`), and the bag's list reads the repeat
+/// (`src/list_menu.c:411`). DOWN pressed on frame 25 is a fresh press nobody
+/// reads (`src/item_menu.c:1217`); held, it first repeats 40 frames later,
+/// not 40 frames after the bag starts listening.
+#[test]
+fn a_direction_held_through_the_bags_fade_in_repeats_forty_frames_after_its_press() {
+    let mut s = bag_session("bag-held-fade-in");
+    s.choose_bag();
+    let down_from = |from: usize| {
+        move |frame: usize| {
+            if frame >= from {
+                Buttons::DOWN
+            } else {
+                Buttons::NONE
+            }
+        }
+    };
+    let moved = frames_the_list_moved(&mut s, Buttons::NONE, down_from(25), 76);
+    assert_eq!(moved, [65, 70, 75]);
+}
+
+/// The count runs from the field's side of the trip too. DOWN pressed on
+/// frame 5 repeats on frame 45, which the fading bag does not read, and
+/// moves the list on the next repeat; pressed on the last locked frame, it
+/// is not a fresh press on the first open one.
+#[test]
+fn a_repeat_that_falls_due_under_a_fade_is_lost_not_deferred() {
+    for (pressed, moves) in [(5, [50, 55, 60]), (BAG_INPUT - 1, [86, 91, 96])] {
+        let mut s = bag_session("bag-held-field-out");
+        s.choose_bag();
+        let moved = frames_the_list_moved(
+            &mut s,
+            Buttons::NONE,
+            |frame| {
+                if frame >= pressed {
+                    Buttons::DOWN
+                } else {
+                    Buttons::NONE
+                }
+            },
+            moves[2],
+        );
+        assert_eq!(moved, moves, "DOWN from frame {pressed}");
+    }
+}
+
+/// A direction pressed while the bag does not listen and released before it
+/// does never reaches the list, however long it was held.
+#[test]
+fn a_direction_released_before_the_bag_listens_does_nothing() {
+    for (pressed, released) in [(1, BAG_INPUT), (25, 40), (3, 45)] {
+        let mut s = bag_session("bag-held-released");
+        s.choose_bag();
+        let moved = frames_the_list_moved(
+            &mut s,
+            Buttons::NONE,
+            |frame| {
+                if (pressed..released).contains(&frame) {
+                    Buttons::DOWN
+                } else {
+                    Buttons::NONE
+                }
+            },
+            BAG_INPUT + 50,
+        );
+        assert_eq!(moved, [], "DOWN on frames {pressed}..{released}");
+        assert!(s.browsing(), "the bag is open and untouched");
+    }
+}
+
+/// Under L=A a held `L` is remembered as `L|A`, so the A that chooses BAG
+/// leaves the raw input equal to the remembered set and the counter steps
+/// on the choosing frame instead of restarting (`src/main.c:257-261,
+/// 279-288`): a DOWN held with them repeats from frame 39, a frame early.
+#[test]
+fn a_held_l_under_l_equals_a_counts_the_choosing_frame() {
+    let mut s = session("bag-held-l-equals-a");
+    s.phase_mut().save1.bag = four_stacks();
+    s.phase_mut().save2.options_button_mode = engine::save::ButtonMode::LEqualsA;
+    // L goes down on the field, where its A finds nothing to talk to, and
+    // stays down; four fresh DOWNs then walk the menu's cursor round to
+    // BAG, and the last stays down.
+    s.frame(Buttons::L);
+    s.frame(Buttons::L | Buttons::START);
+    s.frame(Buttons::L);
+    assert!(s.phase().start_menu().is_some() && !s.phase().bag_trip_active());
+    for _ in 0..3 {
+        s.frame(Buttons::L | Buttons::DOWN);
+        s.frame(Buttons::L);
+    }
+    s.frame(Buttons::L | Buttons::DOWN);
+    assert_eq!(
+        s.phase()
+            .start_menu()
+            .map(crate::start_menu::StartMenu::selected),
+        Some(StartMenuItem::Bag)
+    );
+    assert!(!s.phase().bag_trip_active());
+    let held = Buttons::L | Buttons::DOWN | Buttons::A;
+    s.mark();
+    s.frame(held);
+    assert!(s.phase().bag_trip_active(), "A on BAG starts the trip");
+    let moved = frames_the_list_moved(&mut s, held, |_| Buttons::NONE, 60);
+    assert_eq!(moved, [49, 54, 59]);
+}
