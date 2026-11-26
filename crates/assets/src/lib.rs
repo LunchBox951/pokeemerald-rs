@@ -31,7 +31,8 @@
 //! grid (see [`region_map_layout`]), the Battle Palace per-nature
 //! move-group, target and flavor tables (see [`battle_palace`]), the Easy Chat
 //! Events word group (see [`easy_chat_events`]), the facility-class portrait
-//! and trainer-class lookups (see [`facility_classes`]), the four NPC trade
+//! and trainer-class lookups (see [`facility_classes`]), the Frontier opponent
+//! trainer-index ranges (see [`frontier_trainer_ranges`]), the four NPC trade
 //! offers with their mail messages (see [`ingame_trades`]), and the Lilycove
 //! Lady quiz, favor, and contest data (see [`lilycove_lady`]), and the Frontier
 //! Brain appearance thresholds (see [`frontier_brain_thresholds`]); more data
@@ -83,6 +84,7 @@ pub mod facility_classes;
 pub mod fonts;
 pub mod frontier_brain_thresholds;
 pub mod frontier_exchange_corner;
+pub mod frontier_trainer_ranges;
 pub mod hidden_item_flags;
 pub mod ingame_trades;
 pub mod items;
@@ -174,6 +176,10 @@ pub use fonts::{
 pub use frontier_brain_thresholds::{
     frontier_brain_thresholds, FrontierBrainThresholds, FrontierBrainThresholdsError,
     FRONTIER_FACILITY_COUNT,
+};
+pub use frontier_trainer_ranges::{
+    trainer_range, FrontierTrainerId, FrontierTrainerRange, FrontierTrainerRangeError,
+    FrontierTrainerTable, FRONTIER_TRAINER_RANGE_ROWS,
 };
 pub use ingame_trades::{
     InGameTrade, InGameTradeError, InGameTradeId, InGameTradeMail, InGameTradeTable, TradeOtGender,
