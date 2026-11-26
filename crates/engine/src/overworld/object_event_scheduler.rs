@@ -424,12 +424,15 @@ impl LiveObjectEvent {
         }
     }
 
-    /// `MovementType_FaceDirection_Step0` to `_Step2` (`:3033-3057`). The first two steps queue
-    /// and run the face action for the *current* facing, so a facing a script set persists, then
-    /// the third idles every later frame.
+    /// `MovementType_FaceDirection_Step0` to `_Step2` (`:3033-3057`). The first step drops any
+    /// running action (`ClearObjectEventMovement`, `:4486-4493`), so a walk begun under the
+    /// previous movement type does not outlive it. The first two steps queue and run the face
+    /// action for the *current* facing, so a facing a script set persists, then the third idles
+    /// every later frame.
     fn face_direction_step(&mut self) -> bool {
         match self.type_func_id() {
             0 => {
+                self.state.clear_step();
                 self.set_type_func_id(1);
                 true
             }

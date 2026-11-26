@@ -597,6 +597,91 @@ fn a_changed_movement_type_restarts_the_patrol_and_its_direction_index() {
     assert_eq!(sequence_index(&rig, 1), 0);
 }
 
+/// Starts a `WalkUpAndDown` patrol (walking, or walking in place against a wall), runs three
+/// frames so its action is mid-flight, then retargets it to `next` and runs the frame that
+/// restarts the callback table.
+fn switch_from_a_patrol(blocked: bool, next: MovementType) -> Rig {
+    let mut rig = rig_of(
+        MovementType::WalkUpAndDown,
+        (2, 2),
+        &[0, 0, 0, 0, 0, 0, 0, 0],
+    );
+    if blocked {
+        rig.terrain.set_wall((20, 19));
+    }
+    rig.tick(3);
+    let kind = if blocked {
+        StepKind::WalkInPlace
+    } else {
+        StepKind::Walk
+    };
+    assert_eq!(step(&rig, 1), Some((kind, 3)), "the patrol is mid-action");
+    rig.collection
+        .get_mut(1)
+        .unwrap()
+        .state_mut()
+        .set_movement_type(next);
+    rig.tick(1);
+    rig
+}
+
+#[test]
+fn a_type_change_to_a_facing_type_drops_the_in_flight_walk() {
+    // `MovementType_FaceDirection_Step0` and `_LookAround_Step0` call
+    // `ClearObjectEventMovement` (`event_object_movement.c:3033-3038,4486-4493`).
+    for blocked in [false, true] {
+        for next in [
+            MovementType::FaceUp,
+            MovementType::FaceDown,
+            MovementType::FaceLeft,
+            MovementType::FaceRight,
+            MovementType::LookAround,
+            MovementType::FaceDownAndRight,
+        ] {
+            let mut rig = switch_from_a_patrol(blocked, next);
+            assert_eq!(step(&rig, 1), None, "{next:?} blocked={blocked}");
+            rig.tick(60);
+            assert_eq!(step(&rig, 1), None, "{next:?} blocked={blocked}");
+        }
+    }
+}
+
+#[test]
+fn a_fixed_facing_type_keeps_the_facing_and_draws_nothing_after_dropping_the_walk() {
+    for blocked in [false, true] {
+        let mut rig = switch_from_a_patrol(blocked, MovementType::FaceLeft);
+        let (at, face) = (position(&rig, 1), facing(&rig, 1));
+        assert_eq!(face, Direction::North);
+        assert_eq!(step(&rig, 1), None, "blocked={blocked}");
+        rig.tick(60);
+        assert_eq!(step(&rig, 1), None, "blocked={blocked}");
+        assert_eq!((position(&rig, 1), facing(&rig, 1)), (at, face));
+        assert_eq!(previous(&rig, 1), at, "the turn settles the previous tile");
+        assert_eq!(phase(&rig, 1), 2);
+        assert_eq!(rig.rng.draws(), 0, "blocked={blocked}");
+    }
+}
+
+#[test]
+fn a_type_change_to_a_random_facing_type_draws_on_the_same_cadence_as_a_fresh_start() {
+    // The switch frame runs steps 0 to 2 and draws the delay (index 0 -> 32 frames, waited from
+    // the next frame); the direction is drawn 32 frames later, followed by the next delay.
+    for blocked in [false, true] {
+        for next in [MovementType::LookAround, MovementType::FaceDownAndRight] {
+            let mut rig = switch_from_a_patrol(blocked, next);
+            assert_eq!(rig.rng.draws(), 1, "{next:?} blocked={blocked}");
+            assert_eq!(facing(&rig, 1), Direction::North);
+            rig.tick(31);
+            assert_eq!(rig.rng.draws(), 1, "{next:?}: the direction waits");
+            assert_eq!(facing(&rig, 1), Direction::North);
+            rig.tick(1);
+            assert_eq!(rig.rng.draws(), 3, "{next:?}: direction then delay");
+            assert_eq!(facing(&rig, 1), Direction::South, "{next:?}");
+            assert_eq!(step(&rig, 1), None, "{next:?}");
+        }
+    }
+}
+
 fn real_template(map: &'static str, local_id: u8) -> ObjectEvent {
     let events = assets::MapEventsTable::new()
         .resolve(MapId(map))
