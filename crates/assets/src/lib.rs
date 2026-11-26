@@ -10,7 +10,8 @@
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
 //! egg-move lists (see [`egg_moves`]), the enemy battler elevation table (see
 //! [`enemy_elevation`]), the Battle Arena per-move mind ratings (see
-//! [`arena_mind_ratings`]), the species/move/ability display text
+//! [`arena_mind_ratings`]), the Battle Arena prize-item pools (see
+//! [`battle_arena_prizes`]), the species/move/ability display text
 //! (see [`species_names`], [`move_names`], [`abilities`]), the Trainer and
 //! Greetings Easy Chat vocabulary groups (see [`easy_chat`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
@@ -61,6 +62,7 @@ pub mod arena_mind_ratings;
 pub mod audio;
 pub mod bard_events;
 pub mod battle_anim;
+pub mod battle_arena_prizes;
 pub mod battle_factory_styles;
 pub mod battle_moves;
 pub mod battle_palace;
@@ -220,6 +222,7 @@ pub use battle_anim::{
     AnimCommand, AnimSymbol, AnimationSelector, AnimationTable, BattleAnimationCatalog,
     BattleAnimationError, BattleAnimationProgram, EffectSpriteId, PanSweep, ProgramId,
 };
+pub use battle_arena_prizes::{prize_items, ArenaPrizePool};
 pub use items::{
     BattleUsage, HoldEffect, ItemData, ItemDisplayData, ItemDisplayTable, ItemTable, ItemType,
     Pocket, ITEMS_COUNT,
