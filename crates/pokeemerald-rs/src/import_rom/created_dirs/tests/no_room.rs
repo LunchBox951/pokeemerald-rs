@@ -191,10 +191,15 @@ fn a_full_filesystem_leaves_a_directory_that_took_the_name_before_the_move() {
             stderr.contains("another entry has taken its name"),
             "stderr:\n{stderr}"
         );
-        // Only where the held original's link count can tell moved from
-        // removed (Linux, Android) is it reported as moved away; elsewhere
-        // the warning says it may have been.
-        let moved = if cfg!(any(target_os = "linux", target_os = "android")) {
+        // Only where the held original can be told moved from removed is it
+        // reported as moved away: by its link count on Linux and Android, by
+        // its descriptor's path on Apple. Elsewhere the warning says it may
+        // have been.
+        let moved = if cfg!(any(
+            target_os = "linux",
+            target_os = "android",
+            target_vendor = "apple"
+        )) {
             "moved away before rollback could take it back"
         } else {
             "if it was moved rather than removed, the directory rollback made is left elsewhere"
