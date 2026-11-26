@@ -87,6 +87,42 @@ pub const VAR_WALLY_CALL_STEP_COUNTER: u16 = 0x40F2;
 /// Step count at which Wally's call is due (the literal in `ShouldDoWallyCall`,
 /// `src/field_specials.c:363`).
 pub const WALLY_CALL_STEP_THRESHOLD: u16 = 250;
+/// Set after defeating Winona; arms Scott's Fortree Gym call
+/// (`FLAG_SCOTT_CALL_FORTREE_GYM`, `include/constants/flags.h:160`).
+pub const FLAG_SCOTT_CALL_FORTREE_GYM: u16 = 0x8A;
+/// Steps counted toward Scott's Fortree Gym call (`VAR_SCOTT_FORTREE_CALL_STEP_COUNTER`,
+/// `include/constants/vars.h:263`).
+pub const VAR_SCOTT_FORTREE_CALL_STEP_COUNTER: u16 = 0x40F3;
+/// Step count at which Scott's Fortree Gym call is due (the literal in
+/// `ShouldDoScottFortreeCall`, `src/field_specials.c:388`).
+pub const SCOTT_FORTREE_CALL_STEP_THRESHOLD: u16 = 10;
+/// Arms Scott's Battle Frontier call (`FLAG_SCOTT_CALL_BATTLE_FRONTIER`,
+/// `include/constants/flags.h:134`).
+pub const FLAG_SCOTT_CALL_BATTLE_FRONTIER: u16 = 0x72;
+/// Steps counted toward Scott's Battle Frontier call (`VAR_SCOTT_BF_CALL_STEP_COUNTER`,
+/// `include/constants/vars.h:265`).
+pub const VAR_SCOTT_BF_CALL_STEP_COUNTER: u16 = 0x40F5;
+/// Step count at which Scott's Battle Frontier call is due (the literal in
+/// `ShouldDoScottBattleFrontierCall`, `src/field_specials.c:413`).
+pub const SCOTT_BF_CALL_STEP_THRESHOLD: u16 = 10;
+/// Set after defeating Brawly; arms Roxanne's first call
+/// (`FLAG_ENABLE_ROXANNE_FIRST_CALL`, `include/constants/flags.h:150`).
+pub const FLAG_ENABLE_ROXANNE_FIRST_CALL: u16 = 0x80;
+/// Steps counted toward Roxanne's first call (`VAR_ROXANNE_CALL_STEP_COUNTER`,
+/// `include/constants/vars.h:264`).
+pub const VAR_ROXANNE_CALL_STEP_COUNTER: u16 = 0x40F4;
+/// Step count at which Roxanne's call is due (the literal in `ShouldDoRoxanneCall`,
+/// `src/field_specials.c:438`).
+pub const ROXANNE_CALL_STEP_THRESHOLD: u16 = 250;
+/// Set when Team Magma is defeated at the Space Center; arms the rival's Rayquaza
+/// call (`FLAG_DEFEATED_MAGMA_SPACE_CENTER`, `include/constants/flags.h:137`).
+pub const FLAG_DEFEATED_MAGMA_SPACE_CENTER: u16 = 0x75;
+/// Steps counted toward the rival's Rayquaza call (`VAR_RIVAL_RAYQUAZA_CALL_STEP_COUNTER`,
+/// `include/constants/vars.h:266`).
+pub const VAR_RIVAL_RAYQUAZA_CALL_STEP_COUNTER: u16 = 0x40F6;
+/// Step count at which the rival's Rayquaza call is due (the literal in
+/// `ShouldDoRivalRayquazaCall`, `src/field_specials.c:463`).
+pub const RIVAL_RAYQUAZA_CALL_STEP_THRESHOLD: u16 = 250;
 /// Local day recorded when the Pacifidlog house gave its weekly TM
 /// (`VAR_PACIFIDLOG_TM_RECEIVED_DAY`, `include/constants/vars.h:214`).
 const VAR_PACIFIDLOG_TM_RECEIVED_DAY: u16 = 0x40C2;
@@ -288,7 +324,82 @@ impl EventData {
     /// [`WALLY_CALL_STEP_THRESHOLD`]. Otherwise the result is `false`. The
     /// caller owns dispatching the call script and clearing the flag.
     pub fn should_do_wally_call(&mut self, map_type: MapType) -> bool {
-        let flag = usize::from(FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL);
+        self.step_call_due(
+            FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL,
+            VAR_WALLY_CALL_STEP_COUNTER,
+            WALLY_CALL_STEP_THRESHOLD,
+            map_type,
+        )
+    }
+
+    /// Counts one step toward Scott's Fortree Gym call and reports whether the
+    /// call is due (`ShouldDoScottFortreeCall`, `src/field_specials.c:378-401`).
+    ///
+    /// Same shape as [`Self::should_do_wally_call`], over
+    /// [`FLAG_SCOTT_CALL_FORTREE_GYM`], [`VAR_SCOTT_FORTREE_CALL_STEP_COUNTER`]
+    /// and [`SCOTT_FORTREE_CALL_STEP_THRESHOLD`].
+    pub fn should_do_scott_fortree_call(&mut self, map_type: MapType) -> bool {
+        self.step_call_due(
+            FLAG_SCOTT_CALL_FORTREE_GYM,
+            VAR_SCOTT_FORTREE_CALL_STEP_COUNTER,
+            SCOTT_FORTREE_CALL_STEP_THRESHOLD,
+            map_type,
+        )
+    }
+
+    /// Counts one step toward Scott's Battle Frontier call and reports whether
+    /// the call is due (`ShouldDoScottBattleFrontierCall`,
+    /// `src/field_specials.c:403-426`).
+    ///
+    /// Same shape as [`Self::should_do_wally_call`], over
+    /// [`FLAG_SCOTT_CALL_BATTLE_FRONTIER`], [`VAR_SCOTT_BF_CALL_STEP_COUNTER`]
+    /// and [`SCOTT_BF_CALL_STEP_THRESHOLD`].
+    pub fn should_do_scott_battle_frontier_call(&mut self, map_type: MapType) -> bool {
+        self.step_call_due(
+            FLAG_SCOTT_CALL_BATTLE_FRONTIER,
+            VAR_SCOTT_BF_CALL_STEP_COUNTER,
+            SCOTT_BF_CALL_STEP_THRESHOLD,
+            map_type,
+        )
+    }
+
+    /// Counts one step toward Roxanne's first call and reports whether the call
+    /// is due (`ShouldDoRoxanneCall`, `src/field_specials.c:428-451`).
+    ///
+    /// Same shape as [`Self::should_do_wally_call`], over
+    /// [`FLAG_ENABLE_ROXANNE_FIRST_CALL`], [`VAR_ROXANNE_CALL_STEP_COUNTER`]
+    /// and [`ROXANNE_CALL_STEP_THRESHOLD`].
+    pub fn should_do_roxanne_call(&mut self, map_type: MapType) -> bool {
+        self.step_call_due(
+            FLAG_ENABLE_ROXANNE_FIRST_CALL,
+            VAR_ROXANNE_CALL_STEP_COUNTER,
+            ROXANNE_CALL_STEP_THRESHOLD,
+            map_type,
+        )
+    }
+
+    /// Counts one step toward the rival's Rayquaza call and reports whether the
+    /// call is due (`ShouldDoRivalRayquazaCall`, `src/field_specials.c:453-476`).
+    ///
+    /// Same shape as [`Self::should_do_wally_call`], over
+    /// [`FLAG_DEFEATED_MAGMA_SPACE_CENTER`],
+    /// [`VAR_RIVAL_RAYQUAZA_CALL_STEP_COUNTER`] and
+    /// [`RIVAL_RAYQUAZA_CALL_STEP_THRESHOLD`].
+    pub fn should_do_rival_rayquaza_call(&mut self, map_type: MapType) -> bool {
+        self.step_call_due(
+            FLAG_DEFEATED_MAGMA_SPACE_CENTER,
+            VAR_RIVAL_RAYQUAZA_CALL_STEP_COUNTER,
+            RIVAL_RAYQUAZA_CALL_STEP_THRESHOLD,
+            map_type,
+        )
+    }
+
+    /// Shared body of the scripted-call step predicates: nothing counts unless
+    /// `flag` is set and `map_type` is a town, city, route or ocean route; then
+    /// the `u16` counter `var` is incremented first (wrapping) and the result is
+    /// whether it has reached `threshold`. The flag is never cleared.
+    fn step_call_due(&mut self, flag: u16, var: u16, threshold: u16, map_type: MapType) -> bool {
+        let flag = usize::from(flag);
         if (self.flags[flag / FLAGS_PER_BYTE] >> (flag % FLAGS_PER_BYTE)) & 1 == 0 {
             return false;
         }
@@ -298,9 +409,9 @@ impl EventData {
         ) {
             return false;
         }
-        let count = &mut self.vars[usize::from(VAR_WALLY_CALL_STEP_COUNTER - VARS_START)];
+        let count = &mut self.vars[usize::from(var - VARS_START)];
         *count = count.wrapping_add(1);
-        *count >= WALLY_CALL_STEP_THRESHOLD
+        *count >= threshold
     }
 
     /// Days until the Pacifidlog house gives another TM, given the local day
@@ -823,6 +934,229 @@ mod tests {
             restored.flag_get(FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL),
             Ok(true)
         );
+    }
+
+    /// (name, flag, counter var, threshold) of each scripted-call step predicate.
+    const CALL_CASES: [(&str, u16, u16, u16); 5] = [
+        (
+            "wally",
+            FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL,
+            VAR_WALLY_CALL_STEP_COUNTER,
+            250,
+        ),
+        (
+            "scott_fortree",
+            FLAG_SCOTT_CALL_FORTREE_GYM,
+            VAR_SCOTT_FORTREE_CALL_STEP_COUNTER,
+            10,
+        ),
+        (
+            "scott_bf",
+            FLAG_SCOTT_CALL_BATTLE_FRONTIER,
+            VAR_SCOTT_BF_CALL_STEP_COUNTER,
+            10,
+        ),
+        (
+            "roxanne",
+            FLAG_ENABLE_ROXANNE_FIRST_CALL,
+            VAR_ROXANNE_CALL_STEP_COUNTER,
+            250,
+        ),
+        (
+            "rival_rayquaza",
+            FLAG_DEFEATED_MAGMA_SPACE_CENTER,
+            VAR_RIVAL_RAYQUAZA_CALL_STEP_COUNTER,
+            250,
+        ),
+    ];
+
+    fn call_step(data: &mut EventData, name: &str, map_type: MapType) -> bool {
+        match name {
+            "wally" => data.should_do_wally_call(map_type),
+            "scott_fortree" => data.should_do_scott_fortree_call(map_type),
+            "scott_bf" => data.should_do_scott_battle_frontier_call(map_type),
+            "roxanne" => data.should_do_roxanne_call(map_type),
+            "rival_rayquaza" => data.should_do_rival_rayquaza_call(map_type),
+            _ => unreachable!(),
+        }
+    }
+
+    fn assert_same_saved_state(left: &EventData, right: &EventData, label: &str) {
+        assert_eq!(left.flag_bytes(), right.flag_bytes(), "{label}");
+        assert_eq!(left.vars_raw(), right.vars_raw(), "{label}");
+    }
+
+    fn call_data(flag: Option<u16>, var: u16, count: u16) -> EventData {
+        let mut data = EventData::new();
+        if let Some(flag) = flag {
+            data.flag_set(flag).unwrap();
+        }
+        data.var_set(var, count).unwrap();
+        data
+    }
+
+    #[test]
+    fn scripted_call_constants_match_upstream_headers() {
+        assert_eq!(FLAG_SCOTT_CALL_FORTREE_GYM, 0x8A);
+        assert_eq!(VAR_SCOTT_FORTREE_CALL_STEP_COUNTER, 0x40F3);
+        assert_eq!(SCOTT_FORTREE_CALL_STEP_THRESHOLD, 10);
+        assert_eq!(FLAG_SCOTT_CALL_BATTLE_FRONTIER, 0x72);
+        assert_eq!(VAR_SCOTT_BF_CALL_STEP_COUNTER, 0x40F5);
+        assert_eq!(SCOTT_BF_CALL_STEP_THRESHOLD, 10);
+        assert_eq!(FLAG_ENABLE_ROXANNE_FIRST_CALL, 0x80);
+        assert_eq!(VAR_ROXANNE_CALL_STEP_COUNTER, 0x40F4);
+        assert_eq!(ROXANNE_CALL_STEP_THRESHOLD, 250);
+        assert_eq!(FLAG_DEFEATED_MAGMA_SPACE_CENTER, 0x75);
+        assert_eq!(VAR_RIVAL_RAYQUAZA_CALL_STEP_COUNTER, 0x40F6);
+        assert_eq!(RIVAL_RAYQUAZA_CALL_STEP_THRESHOLD, 250);
+    }
+
+    #[test]
+    fn scripted_call_predicates_count_only_on_town_city_route_and_ocean_route() {
+        for (name, flag, var, _) in CALL_CASES {
+            for (map_type, counts) in ALL_MAP_TYPES {
+                let mut data = call_data(Some(flag), var, 3);
+                data.var_set(var - 1, 0x1234).unwrap();
+                data.var_set(VAR_REPEL_STEP_COUNT, 37).unwrap();
+                data.flag_set(FLAG_SYS_SAFARI_MODE).unwrap();
+                let before = data.clone();
+                assert!(!call_step(&mut data, name, map_type), "{name} {map_type:?}");
+                let expected = if counts { 4 } else { 3 };
+                assert_eq!(data.var_get(var), Ok(expected), "{name} {map_type:?}");
+                // Ineligible or not, only this counter may change; no flag does.
+                assert_eq!(
+                    data.flag_bytes(),
+                    before.flag_bytes(),
+                    "{name} {map_type:?}"
+                );
+                for index in 0..VARS_COUNT {
+                    if index != usize::from(var - VARS_START) {
+                        assert_eq!(
+                            data.vars_raw()[index],
+                            before.vars_raw()[index],
+                            "{name} {map_type:?} var index {index}"
+                        );
+                    }
+                }
+                if !counts {
+                    assert_same_saved_state(&data, &before, &format!("{name} {map_type:?}"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scripted_call_predicates_are_due_exactly_at_their_threshold() {
+        for (name, flag, var, threshold) in CALL_CASES {
+            for (map_type, counts) in ALL_MAP_TYPES {
+                let mut data = call_data(Some(flag), var, threshold - 1);
+                assert_eq!(
+                    call_step(&mut data, name, map_type),
+                    counts,
+                    "{name} {map_type:?}"
+                );
+                let expected = if counts { threshold } else { threshold - 1 };
+                assert_eq!(data.var_get(var), Ok(expected), "{name} {map_type:?}");
+            }
+            let mut below = call_data(Some(flag), var, threshold - 2);
+            assert!(!call_step(&mut below, name, MapType::Route), "{name}");
+            assert_eq!(below.var_get(var), Ok(threshold - 1));
+            assert!(call_step(&mut below, name, MapType::Route), "{name}");
+            assert_eq!(below.var_get(var), Ok(threshold));
+        }
+    }
+
+    #[test]
+    fn scripted_call_predicates_stay_due_and_keep_counting_past_the_threshold() {
+        for (name, flag, var, threshold) in CALL_CASES {
+            let mut data = call_data(Some(flag), var, threshold + 50);
+            assert!(call_step(&mut data, name, MapType::Town), "{name}");
+            assert_eq!(data.var_get(var), Ok(threshold + 51));
+            assert!(call_step(&mut data, name, MapType::OceanRoute), "{name}");
+            assert_eq!(data.var_get(var), Ok(threshold + 52));
+            assert_eq!(data.flag_get(flag), Ok(true), "{name} keeps its flag");
+        }
+    }
+
+    #[test]
+    fn scripted_call_predicates_with_flag_clear_leave_state_untouched() {
+        for (name, _, var, threshold) in CALL_CASES {
+            for (map_type, _) in ALL_MAP_TYPES {
+                for count in [threshold - 1, threshold + 50] {
+                    let mut data = call_data(None, var, count);
+                    let before = data.clone();
+                    assert!(!call_step(&mut data, name, map_type), "{name} {map_type:?}");
+                    assert_same_saved_state(&data, &before, &format!("{name} {map_type:?}"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scripted_call_predicates_ignore_each_others_flags_and_counters() {
+        for (name, flag, var, _) in CALL_CASES {
+            let mut data = EventData::new();
+            for (other, other_flag, other_var, _) in CALL_CASES {
+                if other != name {
+                    data.flag_set(other_flag).unwrap();
+                    data.var_set(other_var, 5).unwrap();
+                }
+            }
+            let before = data.clone();
+            assert!(!call_step(&mut data, name, MapType::Route), "{name}");
+            assert_same_saved_state(&data, &before, &format!("{name} without {flag:#x}"));
+
+            data.flag_set(flag).unwrap();
+            call_step(&mut data, name, MapType::Route);
+            assert_eq!(data.var_get(var), Ok(1), "{name}");
+            for (other, _, other_var, _) in CALL_CASES {
+                if other != name {
+                    assert_eq!(data.var_get(other_var), Ok(5), "{name} vs {other}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scripted_call_predicates_wrap_as_u16_and_read_not_due_after_the_wrap() {
+        for (name, flag, var, _) in CALL_CASES {
+            let mut data = call_data(Some(flag), var, 0xFFFF);
+            assert!(!call_step(&mut data, name, MapType::City), "{name}");
+            assert_eq!(data.var_get(var), Ok(0));
+
+            let mut before_wrap = call_data(Some(flag), var, 0xFFFE);
+            assert!(call_step(&mut before_wrap, name, MapType::City), "{name}");
+            assert_eq!(before_wrap.var_get(var), Ok(0xFFFF));
+        }
+    }
+
+    #[test]
+    fn scripted_call_counters_survive_a_save_round_trip_and_touch_nothing_else() {
+        for (name, flag, var, threshold) in CALL_CASES {
+            let mut data = call_data(Some(flag), var, threshold - 2);
+            data.var_set(var - 1, 0x1234).unwrap();
+            data.var_set(VAR_REPEL_STEP_COUNT, 37).unwrap();
+            data.flag_set(FLAG_SYS_SAFARI_MODE).unwrap();
+            data.flag_set(100).unwrap();
+            let before = data.clone();
+
+            assert!(!call_step(&mut data, name, MapType::Route), "{name}");
+            assert!(call_step(&mut data, name, MapType::Route), "{name}");
+
+            let restored = EventData::from_saved_state(*data.flag_bytes(), *data.vars_raw());
+            assert_eq!(restored.var_get(var), Ok(threshold), "{name}");
+            assert_eq!(restored.flag_bytes(), before.flag_bytes(), "{name}");
+            for index in 0..VARS_COUNT {
+                if index != usize::from(var - VARS_START) {
+                    assert_eq!(
+                        restored.vars_raw()[index],
+                        before.vars_raw()[index],
+                        "{name}"
+                    );
+                }
+            }
+            assert_eq!(restored.flag_get(flag), Ok(true), "{name}");
+        }
     }
 
     const PACIFIDLOG_TM_VAR: u16 = 0x40C2;
