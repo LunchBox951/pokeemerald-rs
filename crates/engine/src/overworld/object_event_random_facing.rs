@@ -47,6 +47,9 @@ impl LiveObjectEvent {
     /// One call of `MovementType_{LookAround,FaceDownAndRight}_Step0` to `_Step4`; `true` runs the
     /// next step this frame.
     ///
+    /// Step 0 drops any running action (`ClearObjectEventMovement`, `:4486-4493`), so a walk
+    /// begun under the previous movement type does not outlive it.
+    ///
     /// Step 2's face action completes on its first execution, since a single movement action is
     /// never held (`ObjectEventSetSingleMovement`, `:5042-5046`, and `FaceDirection`,
     /// `:5048-5055`), so the first callback frame draws the delay and a turn frame draws the
@@ -59,6 +62,7 @@ impl LiveObjectEvent {
     ) -> bool {
         match self.type_func_id() {
             0 => {
+                self.state.clear_step();
                 self.set_type_func_id(1);
                 true
             }
