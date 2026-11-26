@@ -24,7 +24,8 @@
 //! Factory move-style lists and required counts (see
 //! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
 //! [`battle_pike_wild_mons`]), the Battle Pike room hint and Queen-healing
-//! tables (see [`battle_pike_rooms`]), the Battle Pyramid floor-item and Pickup
+//! tables (see [`battle_pike_rooms`]), the Battle Pyramid floor templates and
+//! their per-floor options (see [`battle_pyramid_floors`]), the Battle Pyramid floor-item and Pickup
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
 //! starting positions (see [`slot_machine_reels`]), the region-map section
@@ -66,6 +67,7 @@ pub mod battle_moves;
 pub mod battle_palace;
 pub mod battle_pike_rooms;
 pub mod battle_pike_wild_mons;
+pub mod battle_pyramid_floors;
 pub mod battle_pyramid_items;
 pub mod berries;
 pub mod bundled_overworld;
@@ -143,6 +145,12 @@ pub use battle_pike_rooms::{
 pub use battle_pike_wild_mons::{
     pike_header, pike_wild_mon, PikeLevelDecrement, PikeLevelMode, PikeWildMon, PikeWildMonError,
     PIKE_WILD_HEADERS, PIKE_WILD_MON_MOVES, PIKE_WILD_MON_SLOTS,
+};
+pub use battle_pyramid_floors::{
+    all_floor_template_options, floor_template, floor_template_option_offset,
+    floor_template_options, floor_templates, FloorTemplateOption, ObjectPositions,
+    PyramidFloorError, PyramidFloorTemplate, FLOOR_TEMPLATE_COUNT, FLOOR_TEMPLATE_OPTION_COUNT,
+    LAYOUT_OFFSETS_PER_TEMPLATE,
 };
 pub use battle_pyramid_items::{
     floor_item_row_offset, floor_item_rows, pickup_threshold, pickup_thresholds, pyramid_item,
