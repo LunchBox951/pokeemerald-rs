@@ -34,7 +34,8 @@
 //! and trainer-class lookups (see [`facility_classes`]), the four NPC trade
 //! offers with their mail messages (see [`ingame_trades`]), and the Lilycove
 //! Lady quiz, favor, and contest data (see [`lilycove_lady`]), and the Frontier
-//! Brain appearance thresholds (see [`frontier_brain_thresholds`]); more data
+//! Brain appearance thresholds (see [`frontier_brain_thresholds`]), and the
+//! Battle Point awards (see [`frontier_battle_points`]); more data
 //! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -81,6 +82,7 @@ pub mod evolution;
 pub mod experience;
 pub mod facility_classes;
 pub mod fonts;
+pub mod frontier_battle_points;
 pub mod frontier_brain_thresholds;
 pub mod frontier_exchange_corner;
 pub mod hidden_item_flags;
@@ -170,6 +172,10 @@ pub use fonts::{
     FontGlyphSheet, FontId, FontImageRef, Glyph, GlyphSource, GlyphSources, OwnedFontGlyphSheet,
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
     SHEET_HEIGHT, SHEET_WIDTH,
+};
+pub use frontier_battle_points::{
+    battle_point_award, BattlePointAwardError, FrontierFacility, FrontierMode,
+    BATTLE_POINT_AWARD_ROWS, FRONTIER_MODE_COUNT,
 };
 pub use frontier_brain_thresholds::{
     frontier_brain_thresholds, FrontierBrainThresholds, FrontierBrainThresholdsError,
