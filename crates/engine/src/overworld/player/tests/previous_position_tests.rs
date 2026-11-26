@@ -17,8 +17,17 @@ fn previous_position_is_the_departed_tile_until_the_crossing_finishes() {
     player.tick();
     assert_eq!(player.previous_position(), (4, 4));
 
-    while player.in_transit() {
+    // Bounded so a transit that never drains fails here instead of hanging the suite.
+    for frame in 1..WALK_FRAMES_PER_TILE {
+        assert!(
+            player.in_transit(),
+            "the crossing ended early, after {frame} of {WALK_FRAMES_PER_TILE} frames"
+        );
         player.tick();
     }
+    assert!(
+        !player.in_transit(),
+        "the crossing should finish within {WALK_FRAMES_PER_TILE} frames, but transit never drained"
+    );
     assert_eq!(player.previous_position(), (5, 4), "crossing finished");
 }
