@@ -46,6 +46,8 @@ pub(crate) mod text_window;
 pub(crate) mod tilesets;
 pub(crate) mod title;
 pub(crate) mod trainer_battlers;
+pub(crate) mod trainer_class_names;
+pub(crate) mod trainer_defeat_speeches;
 pub(crate) mod trainer_front;
 
 use pack_format::{raw_entry, EntryKind, PackEntry, PackWriter};
@@ -75,6 +77,8 @@ pub(crate) const DOMAINS: &[Domain] = &[
     song::write,
     battle_messages::write,
     field_messages::write,
+    trainer_defeat_speeches::write,
+    trainer_class_names::write,
     battle_anim::write,
     bag::write,
     starter_choose::write,

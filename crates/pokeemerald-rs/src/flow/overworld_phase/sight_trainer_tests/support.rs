@@ -9,7 +9,7 @@ use engine::overworld::{ObjectEventState, PlayerState};
 use platform::ButtonState;
 
 use super::super::sight_trainer_approach::SightApproach;
-use super::super::{ActiveBattle, OverworldPhase};
+use super::super::{ActiveBattle, OverworldPhase, PartyReserves};
 
 /// `MAP_ROUTE103`, used throughout the sight-trainer test modules.
 pub(super) const ROUTE_103: MapId = MapId("MAP_ROUTE103");
@@ -177,6 +177,7 @@ pub(super) fn seed_battle(
     phase.active_battle = Some(ActiveBattle::SightTrainer {
         battle,
         trainer_id: assets::trainers::TrainerId(trainer_id),
+        reserves: PartyReserves::default(),
     });
 }
 
@@ -245,6 +246,7 @@ pub(super) fn seed_approach_for(
         "Whoa!\nHow'd you get into a space this small?",
         battle,
         assets::trainers::TrainerId(TRAINER_RHETT),
+        PartyReserves::default(),
     ));
 }
 

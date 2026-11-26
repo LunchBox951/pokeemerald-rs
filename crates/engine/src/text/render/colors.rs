@@ -1,4 +1,4 @@
-//! The palette indices a printer draws with, and whether glyph backgrounds paint.
+//! The palette indices a printer draws with.
 
 /// The palette indices a printer draws with: upstream's `fgColor`, `bgColor`,
 /// and `shadowColor` (`pokeemerald/src/text.c:980-1003`), each an index into
@@ -32,24 +32,5 @@ impl TextColors {
 impl Default for TextColors {
     fn default() -> Self {
         Self::MESSAGE_BOX
-    }
-}
-
-/// Whether glyph background pixels paint `TextColors::background`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum BackgroundPaint {
-    /// The window's own background shows: the unmodified message-box default.
-    Window,
-    /// A `HIGHLIGHT`, or a configured non-default background, selected one.
-    Painted,
-}
-
-impl BackgroundPaint {
-    pub(super) const fn for_initial(colors: TextColors) -> Self {
-        if colors.background == TextColors::MESSAGE_BOX.background {
-            Self::Window
-        } else {
-            Self::Painted
-        }
     }
 }

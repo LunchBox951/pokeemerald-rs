@@ -271,13 +271,15 @@ pub enum BattleEvent {
         /// move without boosting (`B_MSG_FLASH_FIRE_NO_BOOST`).
         boosted: bool,
     },
-    /// A move dealt damage.
+    /// A move connected. A False Swipe that connects with a target at one HP
+    /// removes none (`damage` is zero).
     Hit {
         /// Whether the player used the move.
         by_player: bool,
         /// The move that dealt damage.
         move_id: MoveId,
-        /// HP removed from the target, capped at its HP before the hit.
+        /// HP removed from the target, capped at its HP before the hit (and at
+        /// one HP fewer for False Swipe).
         damage: u32,
         /// Whether the hit was critical.
         is_critical: bool,
@@ -658,6 +660,49 @@ pub enum BattleEvent {
         /// Whether the player used the contact move and so was infatuated.
         by_player: bool,
         /// The contact move that triggered Cute Charm.
+        move_id: MoveId,
+    },
+    /// The target's [`AbilityId::FLAME_BODY`] burned the attacker after a
+    /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
+    /// `battle_script_commands.c:4280`; `ABILITY_FLAME_BODY`,
+    /// `battle_util.c:2836`-`:2850`; `STATUS1_BURN`,
+    /// `battle_script_commands.c:2341`-`:2379`).
+    ///
+    /// The roll is one `Random() % 3` draw taken after the target's faint
+    /// settlement, whether or not the holder survived the hit; only a zero
+    /// roll on an attacker that the burn guards allow emits this event. A
+    /// Fire type, Water Veil and an existing primary status keep the attacker
+    /// unchanged and emit nothing.
+    BurnedByFlameBody {
+        /// Whether the player used the contact move and so was burned.
+        by_player: bool,
+        /// The contact move that triggered Flame Body.
+        move_id: MoveId,
+    },
+    /// A [`BattleEvent::BurnedByFlameBody`] burn on the attacker was reflected
+    /// by the attacker's own Synchronize onto the surviving holder
+    /// (`MOVEEND_SYNCHRONIZE_ATTACKER`, `battle_script_commands.c:4291`-
+    /// `:4294`; `ABILITYEFFECT_ATK_SYNCHRONIZE`, `battle_util.c:2987`-`:3001`).
+    ///
+    /// This follows the burn event it reflects and consumes no RNG.
+    BurnedByAttackerSynchronize {
+        /// Whether the player used the contact move; the opposing holder is
+        /// the battler burned.
+        by_player: bool,
+        /// The contact move that triggered Flame Body.
+        move_id: MoveId,
+    },
+    /// An attacker's Synchronize reflected a Flame Body burn (see
+    /// [`BattleEvent::BurnedByAttackerSynchronize`]), and the holder's own
+    /// Fire typing protected it (`BattleScript_BRNPrevention`,
+    /// `battle_script_commands.c:2361`-`:2370`).
+    ///
+    /// This follows the burn event it reflects.
+    AttackerSynchronizeFireTypeProtected {
+        /// Whether the player used the contact move; the opposing holder was
+        /// the protected battler.
+        by_player: bool,
+        /// The contact move that triggered Flame Body.
         move_id: MoveId,
     },
     /// The holder's [`AbilityId::COLOR_CHANGE`] changed both of its types to
