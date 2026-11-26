@@ -238,6 +238,20 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A PC wallpaper source differs from its upstream graphic's shape.
+    PcWallpaperAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A party-menu source differs from its upstream graphic's shape.
+    PartyMenuAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// An ordinary-bag source differs from its upstream graphic's shape.
     BagAssetMismatch {
         /// Source path.
@@ -256,6 +270,33 @@ pub enum ExtractError {
     },
     /// A field-message source does not parse as the pinned upstream shape.
     FieldMessageSource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A trainer defeat-speech source does not parse as the pinned upstream shape.
+    TrainerDefeatSpeechSource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A sight-trainer intro-speech source does not parse as the pinned upstream shape.
+    SightTrainerIntroSpeechSource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A trainer class-name source does not parse as the pinned upstream shape.
+    TrainerClassNameSource {
         /// Source path.
         path: PathBuf,
         /// One-based line, or zero when the fault is not tied to one line.
@@ -514,6 +555,12 @@ impl fmt::Display for ExtractError {
             Self::NamingScreenAssetMismatch { path, detail } => {
                 write!(f, "naming-screen asset `{}` {detail}", path.display())
             }
+            Self::PcWallpaperAssetMismatch { path, detail } => {
+                write!(f, "PC wallpaper asset `{}` {detail}", path.display())
+            }
+            Self::PartyMenuAssetMismatch { path, detail } => {
+                write!(f, "party-menu asset `{}` {detail}", path.display())
+            }
             Self::BagAssetMismatch { path, detail } => {
                 write!(f, "bag asset `{}` {detail}", path.display())
             }
@@ -522,6 +569,15 @@ impl fmt::Display for ExtractError {
             }
             Self::FieldMessageSource { path, line, detail } => {
                 write!(f, "field-message source `{}` line {line}: {detail}", path.display())
+            }
+            Self::TrainerDefeatSpeechSource { path, line, detail } => {
+                write!(f, "trainer defeat-speech source `{}` line {line}: {detail}", path.display())
+            }
+            Self::SightTrainerIntroSpeechSource { path, line, detail } => {
+                write!(f, "sight-trainer intro-speech source `{}` line {line}: {detail}", path.display())
+            }
+            Self::TrainerClassNameSource { path, line, detail } => {
+                write!(f, "trainer class-name source `{}` line {line}: {detail}", path.display())
             }
             Self::CrySource { path, line, detail } => {
                 write!(f, "cry source `{}` line {line}: {detail}", path.display())

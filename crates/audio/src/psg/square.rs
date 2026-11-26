@@ -211,6 +211,27 @@ impl SquareChannel {
         });
     }
 
+    /// Puts the predecessor's register and duty clock back before the first
+    /// pass's pitch write. That pass stores only the final frequency, so the
+    /// admitted note's pitch, which [`Self::continue_duty_from`] retimed to,
+    /// never reaches hardware (`pokeemerald/src/m4a.c:1197-1203`); retiming
+    /// can carry into the duty index, so retiming twice differs from once.
+    /// The predecessor stays held for [`Self::commit_initial_writes`].
+    pub(crate) fn rewind_to_predecessor_clock(&mut self) {
+        if let Some(hardware) = self.predecessor {
+            self.restore_hardware_clock(hardware);
+        }
+    }
+
+    fn restore_hardware_clock(&mut self, hardware: HardwareClock) {
+        self.frequency = hardware.frequency;
+        self.note_high_bits = hardware.note_high_bits;
+        self.phase = hardware.phase;
+        self.step_delta = hardware.step_delta;
+        self.idle_samples = hardware.idle_samples;
+        self.idle_step_delta = hardware.idle_step_delta;
+    }
+
     /// Settles the first pass's writes: a retiring pass jumps past the
     /// `NRx3`/`NRx4` pitch write, so only the duty and sweep writes land on
     /// the predecessor's register (`pokeemerald/src/m4a.c:997-1002,1053-1056,1197-1202`).
@@ -219,12 +240,7 @@ impl SquareChannel {
             return;
         };
         if retires_on_first_pass {
-            self.frequency = hardware.frequency;
-            self.note_high_bits = hardware.note_high_bits;
-            self.phase = hardware.phase;
-            self.step_delta = hardware.step_delta;
-            self.idle_samples = hardware.idle_samples;
-            self.idle_step_delta = hardware.idle_step_delta;
+            self.restore_hardware_clock(hardware);
         }
     }
 

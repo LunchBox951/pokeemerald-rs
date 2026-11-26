@@ -30,7 +30,7 @@
 //! Andrew's, Rhett's, Marcos's and Pete's real parties do construct, and
 //! `real_parties` drives each from its own cone to its conclusion. The
 //! `trigger` tests that need a refusal use the id of a party that stops at
-//! Taillow's Headbutt in place of Rhett's at Rhett's cone through
+//! Zangoose's Pursuit in place of Rhett's at Rhett's cone through
 //! `synthetic_sight_trainer`, so the geometry stays Rhett's while the refused
 //! party is real.
 //!
@@ -60,7 +60,10 @@
 //!   approach seeds).
 //! - `real_parties`: the four fighting trainers, cone to conclusion.
 //! - `live_selection`: selection from the live object-event collection.
+//! - `live_writeback`: the approach's write-back to the live collection,
+//!   seen after the battle (tile, facing, collision, sight, rendered OAM).
 //! - `trigger`: cone geometry, refusals, honest cuts, real-pack terrain.
+//! - `party`: the saved party behind the lead, handed over and filed back.
 //! - `battle`: frame ownership, win/loss outcomes, the defeated flag, abort.
 //! - `approach_timing`: the approach's tile timing, handoff and icon frames.
 //! - `approach_handoff`: the intro speech and the handoff into the battle.
@@ -69,6 +72,8 @@ mod approach_handoff;
 mod approach_timing;
 mod battle;
 mod live_selection;
+mod live_writeback;
+mod party;
 mod real_parties;
 mod support;
 mod trigger;

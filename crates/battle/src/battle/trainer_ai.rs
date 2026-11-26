@@ -26,6 +26,7 @@ use crate::damage::{
 use crate::damage::{DamageInput, MoveCategory, Weather};
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::gender::Gender;
 use crate::hit::defender_levitate_blocked;
 use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
 use crate::stat_change::{
@@ -36,6 +37,8 @@ use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 
 const PERCENT_SCALE: u32 = 100;
+/// `AI_CalcDmg`'s `gBattleMoveDamage *= 2` for a charged Electric move.
+const CHARGE_DAMAGE_MULTIPLIER: u32 = 2;
 const AI_RANDOM_ROLL_MODULUS: u16 = 256;
 const SIMULATED_DAMAGE_VARIANCE: u16 = 16;
 const MINIMUM_DAMAGE: u32 = 1;
@@ -48,11 +51,42 @@ const REDUNDANT_CONFUSION_PENALTY: i8 = -5;
 const SLIGHTLY_DISCOURAGE: i8 = -1;
 const ABSORBED_MOVE_PENALTY: i8 = -12;
 const DISCOURAGE: i8 = -2;
+const SLIGHTLY_ENCOURAGE: i8 = 1;
 const ENCOURAGE: i8 = 2;
 const STRONGLY_ENCOURAGE: i8 = 4;
+/// `AI_TryToFaint_TryToEncourageQuickAttack`'s extra `score +2` for a Quick
+/// Attack finisher, applied before the shared `+4` it falls through into
+/// (`data/battle_ai_scripts.s:2629-2635`).
+const QUICK_ATTACK_FINISHER_BONUS: i8 = 2;
 
 const QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD: u16 = 80;
+const RESISTED_DRAIN_PENALTY_THRESHOLD: u16 = 50;
+const RESISTED_DRAIN_PENALTY: i8 = -3;
 const STAT_DROP_DISCOURAGEMENT_THRESHOLD: u16 = 50;
+/// `AI_CV_Paralyze` (`data/battle_ai_scripts.s:1524`-`:1534`): a faster target
+/// rolls `if_random_less_than 20` for +3; otherwise a user at or below 70% HP
+/// scores -1.
+const PARALYZE_FASTER_BONUS_THRESHOLD: u16 = 20;
+const PARALYZE_FASTER_BONUS: i8 = 3;
+const PARALYZE_USER_HP_THRESHOLD: u32 = 70;
+/// The tie-break draw is `Random() & 1` (`src/battle_main.c:4745`).
+const SPEED_TIE_DRAW_MASK: u16 = 1;
+/// `AI_CV_SpeedUp` (`data/battle_ai_scripts.s:956`-`:965`): a slower target
+/// costs three points; a faster one rolls `if_random_less_than 70` for +3.
+const SPEED_UP_BONUS_THRESHOLD: u16 = 70;
+const SPEED_UP_BONUS: i8 = 3;
+const SPEED_UP_SLOWER_TARGET_PENALTY: i8 = -3;
+/// The one- and two-stage Speed raises, both routed to `AI_CV_SpeedUp`.
+const SPEED_RAISE_EFFECTS: [MoveEffect; 2] = [MoveEffect::SPEED_UP, MoveEffect::SPEED_UP_2];
+/// Cutoffs and rolls of `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:1536`-`:1545`).
+const VITAL_THROW_USER_HP_CEILING: u32 = 60;
+const VITAL_THROW_USER_HP_FLOOR: u32 = 40;
+const VITAL_THROW_GATE_THRESHOLD: u16 = 180;
+const VITAL_THROW_PENALTY_THRESHOLD: u16 = 50;
+/// `AI_CV_SpeedDown` (`data/battle_ai_scripts.s:1142`-`:1151`): a target that
+/// is not faster scores -3; a faster one rolls `if_random_less_than 70` for +2.
+const SPEED_DROP_NOT_FASTER_PENALTY: i8 = -3;
+const SPEED_DROP_FASTER_BONUS_THRESHOLD: u16 = 70;
 const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
 const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
 const DEFENSE_DROP_USER_HP_THRESHOLD: u32 = 70;
@@ -60,6 +94,19 @@ const STAT_DROP_TARGET_HP_THRESHOLD: u32 = 70;
 const HEAVILY_LOWERED_STAT_STAGE: i8 = -3;
 const FIRST_TURN: u8 = 0;
 
+/// `AI_CV_AlwaysHit` compares raw stages (`0..=12`, neutral `6`)
+/// (`data/battle_ai_scripts.s:1076`-`:1079`); these are the same cut-offs as
+/// signed offsets, so "above raw 10" is offset 5 or more.
+const ALWAYS_HIT_EVASION_IMMEDIATE_STAGE: i8 = 4;
+const ALWAYS_HIT_ACCURACY_IMMEDIATE_STAGE: i8 = -4;
+const ALWAYS_HIT_EVASION_RANDOM_STAGE: i8 = 2;
+const ALWAYS_HIT_ACCURACY_RANDOM_STAGE: i8 = -2;
+const ALWAYS_HIT_BONUS_THRESHOLD: u16 = 100;
+
+const AI_EFFECTIVENESS_QUARTER: u32 = 10;
+const AI_EFFECTIVENESS_QUARTER_WITH_STAB: u32 = 15;
+const AI_EFFECTIVENESS_HALF: u32 = 20;
+const AI_EFFECTIVENESS_HALF_WITH_STAB: u32 = 30;
 const AI_EFFECTIVENESS_NEUTRAL: u32 = 40;
 const AI_EFFECTIVENESS_SUPER: u32 = 80;
 const AI_EFFECTIVENESS_SUPER_WITH_STAB: u32 = 120;
@@ -100,7 +147,7 @@ fn is_ignored_powerful_move_effect(effect: MoveEffect) -> bool {
 /// passes: none appears in its `if_effect` chain
 /// (`data/battle_ai_scripts.s:105-214`). `EFFECT_HIT` has its own variant. Any
 /// other effect is never an implicit no-op.
-const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 16] = [
+const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
     MoveEffect::ABSORB,
     MoveEffect::POISON_HIT,
     MoveEffect::THAW_HIT,
@@ -116,32 +163,14 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 16] = [
     MoveEffect::SPLASH,
     MoveEffect::QUICK_ATTACK,
     MoveEffect::CHARGE,
+    MoveEffect::FLINCH_HIT,
+    MoveEffect::FLINCH_MINIMIZE_HIT,
     MoveEffect::ROLLOUT,
 ];
 
 /// Rows whose `AI_CheckViability` branch is not ported
-/// (`data/battle_ai_scripts.s:655,666,686,706,708`).
-const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 5] = [
-    MoveEffect::ABSORB,
-    MoveEffect::ALWAYS_HIT,
-    MoveEffect::HIGH_CRITICAL,
-    MoveEffect::SPEED_DOWN_HIT,
-    MoveEffect::VITAL_THROW,
-];
-
-/// Effects `AI_TryToFaint` refuses until its extra scoring is ported.
-///
-/// `Charge` doubles the next Electric move's damage, which upstream's
-/// `AI_CalcDmg` folds into every simulated-damage read
-/// (`src/battle_script_commands.c:1306-1316`); `estimated_damage` does not, so
-/// the one damage-reading script, `TRY_TO_FAINT` (`if_can_faint`,
-/// `data/battle_ai_scripts.s:2618`), refuses it. `AI_CheckViability` neither
-/// dispatches `EFFECT_CHARGE` nor reads damage (`:619-743`).
-///
-/// `QUICK_ATTACK` earns an extra +2 from `AI_TryToFaint` when it can faint the
-/// target (`data/battle_ai_scripts.s:2629-2634`).
-const UNPORTED_TRY_TO_FAINT_EFFECTS: [MoveEffect; 2] =
-    [MoveEffect::CHARGE, MoveEffect::QUICK_ATTACK];
+/// (`data/battle_ai_scripts.s:686`).
+const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 1] = [MoveEffect::HIGH_CRITICAL];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -198,6 +227,10 @@ enum ScoreableEffect {
     FocusEnergy,
     /// `AI_CBM_LeechSeed` (`data/battle_ai_scripts.s:410-416`).
     LeechSeed,
+    /// `AI_CBM_Attract` (`data/battle_ai_scripts.s:456-478`). Attract has no
+    /// `AI_CheckViability` branch and is absent from the first-turn setup
+    /// list, so only `CHECK_BAD_MOVE` scores it.
+    Attract,
     /// `AI_CBM_HighRiskForDamage`, reached from Sonic Boom
     /// (`data/battle_ai_scripts.s:177,368-376`).
     HighRiskForDamage,
@@ -205,7 +238,8 @@ enum ScoreableEffect {
     UnchangedAfterPrologue(MoveEffect),
     /// Any other shared stat-stage label (see [`ai_stat_label`]). Its
     /// `AI_CheckViability` and `AI_SetupFirstTurn` branches are not ported,
-    /// except that Defense Curl has no viability branch.
+    /// except that Defense Curl has no viability branch and the Speed raises
+    /// have `AI_CV_SpeedUp`.
     StatLabel(MoveEffect, StatChangeEffect),
 }
 
@@ -225,6 +259,8 @@ impl ScoreableEffect {
             Some(Self::FocusEnergy)
         } else if effect == MoveEffect::LEECH_SEED {
             Some(Self::LeechSeed)
+        } else if effect == MoveEffect::ATTRACT {
+            Some(Self::Attract)
         } else if effect == MoveEffect::SONICBOOM {
             Some(Self::HighRiskForDamage)
         } else if let Some(label) = ai_stat_label(effect) {
@@ -236,12 +272,13 @@ impl ScoreableEffect {
         }
     }
 
-    /// `AI_CheckViability` branches on Paralyze, Confuse and Leech Seed
-    /// (`data/battle_ai_scripts.s:687,704,711`), and `AI_SetupFirstTurn` rolls
-    /// for all four (`:2667,2668,2685,2687`); neither is ported. Focus Energy
-    /// has no viability branch.
+    /// `AI_CheckViability` branches on Confuse and Leech Seed
+    /// (`data/battle_ai_scripts.s:687,711`), and `AI_SetupFirstTurn` rolls
+    /// for all four (`:2667,2668,2685,2687`); neither is ported. Paralyze's
+    /// viability branch (`:704`) is ported, so only its setup roll refuses it.
+    /// Focus Energy has no viability branch.
     const fn supported_with_status_handler(self, flags: AiFlags) -> bool {
-        let viability_branch = !matches!(self, Self::FocusEnergy);
+        let viability_branch = !matches!(self, Self::FocusEnergy | Self::Paralyze);
         !(flags.contains(AiFlags::SETUP_FIRST_TURN)
             || viability_branch && flags.contains(AiFlags::CHECK_VIABILITY))
     }
@@ -260,16 +297,13 @@ impl ScoreableEffect {
             Self::StatLabel(effect, _) => {
                 return !flags.contains(AiFlags::SETUP_FIRST_TURN)
                     && (effect == MoveEffect::DEFENSE_CURL
+                        || SPEED_RAISE_EFFECTS.contains(&effect)
                         || !flags.contains(AiFlags::CHECK_VIABILITY));
             }
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
-            Self::Hit | Self::AttackDown | Self::DefenseDown => return true,
+            Self::Hit | Self::AttackDown | Self::DefenseDown | Self::Attract => return true,
         };
-        if flags.contains(AiFlags::CHECK_VIABILITY) && UNPORTED_VIABILITY_EFFECTS.contains(&effect)
-        {
-            return false;
-        }
-        !(flags.contains(AiFlags::TRY_TO_FAINT) && UNPORTED_TRY_TO_FAINT_EFFECTS.contains(&effect))
+        !(flags.contains(AiFlags::CHECK_VIABILITY) && UNPORTED_VIABILITY_EFFECTS.contains(&effect))
     }
 }
 
@@ -285,9 +319,9 @@ fn scoreable_effect(dex: &Dex, move_id: MoveId) -> Result<ScoreableEffect, Battl
 /// move's dex residency is checked.
 ///
 /// The unchanged-after-prologue rows are admitted when `CHECK_BAD_MOVE` is the
-/// only script that would reach them, and refused when `CHECK_VIABILITY` or
-/// `TRY_TO_FAINT` would take an unported branch. `SETUP_FIRST_TURN` has no
-/// branch for any of them.
+/// only script that would reach them, and refused when `CHECK_VIABILITY` would
+/// take an unported branch. `TRY_TO_FAINT` and `SETUP_FIRST_TURN` have no
+/// unported branch for any of them.
 ///
 /// # Errors
 ///
@@ -479,9 +513,12 @@ fn select_highest_scoring_move(
 
 /// A loaded stat cache is adopted verbatim ([`BattlePokemon::with_cached_stats`]),
 /// so a malformed save can carry a zero maximum; it reads as full-scale rather
-/// than dividing by zero.
+/// than dividing by zero. The product widens to `u64` because the cache may
+/// also carry `u32` HP past what `u32` can scale, and the quotient saturates.
 fn current_hp_percent(pokemon: &BattlePokemon) -> u32 {
-    PERCENT_SCALE * pokemon.current_hp() / pokemon.stats().max_hp.max(1)
+    let percent = u64::from(PERCENT_SCALE) * u64::from(pokemon.current_hp())
+        / u64::from(pokemon.stats().max_hp.max(1));
+    u32::try_from(percent).unwrap_or(u32::MAX)
 }
 
 fn random_roll_is_at_least(rng: &mut impl BattleRng, threshold: u16) -> bool {
@@ -563,8 +600,8 @@ const TRAPPING_ABILITIES: [AbilityId; 3] = [
 ];
 
 /// Refuses a scoring target whose species has two ability slots and whose
-/// true ability is not a trapping one, because upstream's ability read for it
-/// depends on battle history or a random guess the engine does not model
+/// native ability is not a trapping one, because upstream's ability read for
+/// it depends on battle history or a random guess the engine does not model
 /// (`src/battle_ai_script_commands.c:1350-1396`). A true Shadow Tag, Magnet
 /// Pull, or Arena Trap is admitted: upstream returns it before the guess
 /// (`src/battle_ai_script_commands.c:1368-1376`).
@@ -575,7 +612,7 @@ const TRAPPING_ABILITIES: [AbilityId; 3] = [
 /// whose selected ability is not a trapping one.
 pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Result<(), BattleError> {
     let [_, second] = target.ability_slots();
-    if second.0 == 0 || TRAPPING_ABILITIES.contains(&target.ability()) {
+    if second.0 == 0 || TRAPPING_ABILITIES.contains(&target.native_ability()) {
         Ok(())
     } else {
         Err(BattleError::AmbiguousPlayerAbility(target.species()))
@@ -585,7 +622,11 @@ pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Resul
 /// `Cmd_get_ability`'s target-ability read for the AI, restricted to the
 /// targets admission allows: a true trapping ability, read directly
 /// (`src/battle_ai_script_commands.c:1368-1376`), or a single-ability
-/// species' sole ability. No history lookup, no draw.
+/// species' sole ability. No history lookup, no draw. A Trace copy is the
+/// one history entry the read can reach: the drain ends in `RecordAbilityBattle`
+/// for the copied ability (`src/battle_util.c:3194`-`:3195`, `ABILITYEFFECT_TRACE`
+/// is below `ABILITYEFFECT_CHECK_OTHER_SIDE`), so a single-ability Trace
+/// holder reads as the ability it copied.
 ///
 /// # Errors
 ///
@@ -712,6 +753,13 @@ fn score_bad_move_prologue(
     Ok(false)
 }
 
+/// Saturated stats can already yield `u32::MAX` damage, so the product with the
+/// percentage needs the `u64` width `apply_damage_roll` uses.
+fn scale_by_simulated_percent(damage: u32, simulated_damage_percent: u32) -> u32 {
+    let scaled = u64::from(damage) * u64::from(simulated_damage_percent) / u64::from(PERCENT_SCALE);
+    u32::try_from(scaled).unwrap_or(u32::MAX)
+}
+
 fn estimated_damage(
     dex: &Dex,
     move_id: MoveId,
@@ -724,8 +772,7 @@ fn estimated_damage(
         return Ok(MINIMUM_DAMAGE);
     };
     let category = MoveCategory::for_type(move_type);
-    let (attack_stat, attack_stage) = attacker.attacking_stat(category);
-    let attack_stat = crate::ability::huge_power_attack(attacker.ability(), category, attack_stat);
+    let (attack_stat, attack_stage) = attacker.damage_attacking_stat(category);
     // Upstream's `CalculateBaseDamage` halves raw Special Attack for Fire/Ice
     // against Thick Fat before stage scaling (`pokemon.c:3202-3204`); the AI
     // estimates every populated slot, depleted or not.
@@ -739,7 +786,7 @@ fn estimated_damage(
         category,
         attack_stat,
     );
-    let (defense_stat, defense_stage) = defender.defending_stat(category);
+    let (defense_stat, defense_stage) = defender.damage_defending_stat(category);
     let input = DamageInput {
         attacker_level: attacker.level(),
         power: u32::from(move_data.power),
@@ -763,10 +810,19 @@ fn estimated_damage(
     // `CalculateBaseDamage` applies the attacker's Flash Fire latch to a Fire
     // move in every simulated read too (`pokemon.c:3366-3371`).
     let damage = base_damage_with_flash_fire(&input, attacker.volatiles().flash_fire);
+    // `AI_CalcDmg` doubles a charged attacker's Electric move before the
+    // caller's STAB and chart rows, as live damage does
+    // (`battle_script_commands.c:1306-1316`). Saturated stats can already
+    // yield `u32::MAX`, so the doubling saturates.
+    let damage = if attacker.volatiles().charged_up() && move_type == Type::Electric {
+        damage.saturating_mul(CHARGE_DAMAGE_MULTIPLIER)
+    } else {
+        damage
+    };
     // `TypeCalc` returns for Struggle before STAB and the chart (`battle_script_commands.c:1541`);
     // the caller's percentage and floor still apply (`battle_ai_script_commands.c:1208`-`:1213`).
     if move_id == MoveId::STRUGGLE {
-        return Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE));
+        return Ok(scale_by_simulated_percent(damage, simulated_damage_percent).max(MINIMUM_DAMAGE));
     }
     let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));
     let damage = if defender_levitate_blocked(move_type, defender.ability()) {
@@ -774,7 +830,7 @@ fn estimated_damage(
     } else {
         fold_ai_type_effectiveness(damage, move_type, defender.types())
     };
-    Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE))
+    Ok(scale_by_simulated_percent(damage, simulated_damage_percent).max(MINIMUM_DAMAGE))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -875,6 +931,7 @@ fn score_bad_move(
             user.volatiles().focus_energy.then_some(STRONGLY_DISCOURAGE)
         }
         ScoreableEffect::LeechSeed => leech_seed_penalty(target),
+        ScoreableEffect::Attract => attract_penalty(user, target)?,
         ScoreableEffect::HighRiskForDamage => {
             high_risk_for_damage_penalty(dex, move_id, user, target)?
         }
@@ -974,6 +1031,23 @@ fn leech_seed_penalty(target: &BattlePokemon) -> Option<i8> {
         .then_some(STRONGLY_DISCOURAGE)
 }
 
+/// `AI_CBM_Attract`: an already-infatuated target ends at `-10`, then an
+/// Oblivious target, then any pair that is not exactly one male and one
+/// female (`data/battle_ai_scripts.s:456-478`). It draws nothing.
+fn attract_penalty(
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+) -> Result<Option<i8>, BattleError> {
+    let opposite_genders = matches!(
+        (user.gender(), target.gender()),
+        (Gender::Male, Gender::Female) | (Gender::Female, Gender::Male)
+    );
+    let blocked = target.volatiles().infatuated()
+        || ai_get_ability(target)? == AbilityId::OBLIVIOUS
+        || !opposite_genders;
+    Ok(blocked.then_some(STRONGLY_DISCOURAGE))
+}
+
 fn score_try_to_faint(
     dex: &Dex,
     scores: &mut MoveScores,
@@ -993,6 +1067,9 @@ fn score_try_to_faint(
             scores.simulated_damage_percent[slot],
         )?;
         if target.current_hp() <= damage {
+            if move_data.effect == MoveEffect::QUICK_ATTACK {
+                scores.adjust(slot, QUICK_ATTACK_FINISHER_BONUS);
+            }
             scores.adjust(slot, STRONGLY_ENCOURAGE);
             return Ok(());
         }
@@ -1023,19 +1100,33 @@ fn score_viability(
     rng: &mut impl BattleRng,
 ) -> Result<(), BattleError> {
     match scoreable_effect(dex, move_id)? {
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ALWAYS_HIT) => {
+            score_always_hit_viability(scores, slot, user, target, rng);
+        }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ABSORB) => {
+            score_drain_viability(dex, scores, slot, move_id, user, target, rng)?;
+        }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::SPEED_DOWN_HIT) => {
+            score_speed_down_hit_viability(scores, slot, move_id, user, target, rng);
+        }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::VITAL_THROW) => {
+            score_vital_throw_viability(scores, slot, user, target, rng);
+        }
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
-        | ScoreableEffect::FocusEnergy => {}
+        | ScoreableEffect::FocusEnergy
+        | ScoreableEffect::Attract => {}
         ScoreableEffect::HighRiskForDamage => {
             return Err(BattleError::UnscoreableMoveEffect(move_id))
+        }
+        ScoreableEffect::StatLabel(effect, _) if SPEED_RAISE_EFFECTS.contains(&effect) => {
+            score_speed_up_viability(scores, slot, user, target, rng);
         }
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
         // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
-        ScoreableEffect::Paralyze
-        | ScoreableEffect::Confuse
-        | ScoreableEffect::LeechSeed
-        | ScoreableEffect::StatLabel(..) => {
+        ScoreableEffect::Paralyze => score_paralyze_viability(scores, slot, user, target, rng),
+        ScoreableEffect::Confuse | ScoreableEffect::LeechSeed | ScoreableEffect::StatLabel(..) => {
             return Err(BattleError::UnscoreableMoveEffect(move_id));
         }
         ScoreableEffect::AttackDown => {
@@ -1044,6 +1135,166 @@ fn score_viability(
         ScoreableEffect::DefenseDown => {
             score_defense_drop_viability(scores, slot, user, target, rng);
         }
+    }
+    Ok(())
+}
+
+/// `AI_CV_AlwaysHit` (`data/battle_ai_scripts.s:1075`-`:1088`); upstream's
+/// raw stages are the signed offsets plus six.
+fn score_always_hit_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    let evasion = target.stages().evasion.offset();
+    let accuracy = user.stages().accuracy.offset();
+    let rolls = if evasion > ALWAYS_HIT_EVASION_IMMEDIATE_STAGE
+        || accuracy < ALWAYS_HIT_ACCURACY_IMMEDIATE_STAGE
+    {
+        scores.adjust(slot, SLIGHTLY_ENCOURAGE);
+        true
+    } else {
+        evasion > ALWAYS_HIT_EVASION_RANDOM_STAGE || accuracy < ALWAYS_HIT_ACCURACY_RANDOM_STAGE
+    };
+    if rolls && random_roll_is_at_least(rng, ALWAYS_HIT_BONUS_THRESHOLD) {
+        scores.adjust(slot, SLIGHTLY_ENCOURAGE);
+    }
+}
+
+/// `if_target_faster` (`asm/macros/battle_ai_script.inc:595`-`:597`), i.e.
+/// `GetWhoStrikesFirst(user, target, TRUE) == 1`
+/// (`src/battle_ai_script_commands.c:1268`-`:1273`). `ignoreChosenMoves` zeroes
+/// both moves, so priority never decides (`src/battle_main.c:4743`-`:4753`).
+/// An equal Speed draws once (`Random() & 1`, `:4745`) and neither
+/// result means "target faster": the draw selects between the user going first
+/// and upstream's third, tied outcome, so it is spent and discarded.
+fn target_is_faster(
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> bool {
+    let user_speed = user.speed_for_turn_order();
+    let target_speed = target.speed_for_turn_order();
+    if user_speed == target_speed {
+        let _ = rng.next_u16() & SPEED_TIE_DRAW_MASK;
+    }
+    user_speed < target_speed
+}
+
+/// `AI_CV_SpeedUp` (`data/battle_ai_scripts.s:661`, `:690`, `:956`-`:965`),
+/// shared by the one- and two-stage raises: a user that is not already
+/// outsped loses three; otherwise one roll of 70 or more gains three.
+fn score_speed_up_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if !target_is_faster(user, target, rng) {
+        scores.adjust(slot, SPEED_UP_SLOWER_TARGET_PENALTY);
+    } else if random_roll_is_at_least(rng, SPEED_UP_BONUS_THRESHOLD) {
+        scores.adjust(slot, SPEED_UP_BONUS);
+    }
+}
+
+/// `AI_CV_Paralyze` (`data/battle_ai_scripts.s:704`, `:1524`-`:1534`): a
+/// faster target rolls once and gains three from a low byte of 20; otherwise a
+/// user whose truncated HP percentage is at most 70 loses one, with no roll.
+fn score_paralyze_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if target_is_faster(user, target, rng) {
+        if random_roll_is_at_least(rng, PARALYZE_FASTER_BONUS_THRESHOLD) {
+            scores.adjust(slot, PARALYZE_FASTER_BONUS);
+        }
+    } else if current_hp_percent(user) <= PARALYZE_USER_HP_THRESHOLD {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+    }
+}
+
+/// `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:708`, `:1536`-`:1545`). The
+/// speed query runs first, so a tie's draw is spent before any HP check.
+fn score_vital_throw_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if target_is_faster(user, target, rng) {
+        return;
+    }
+    let user_hp = current_hp_percent(user);
+    if user_hp > VITAL_THROW_USER_HP_CEILING {
+        return;
+    }
+    if user_hp >= VITAL_THROW_USER_HP_FLOOR
+        && !random_roll_is_at_least(rng, VITAL_THROW_GATE_THRESHOLD)
+    {
+        return;
+    }
+    if random_roll_is_at_least(rng, VITAL_THROW_PENALTY_THRESHOLD) {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+    }
+}
+
+/// `AI_CV_SpeedDownFromChance` (`data/battle_ai_scripts.s:1136`-`:1140`): only
+/// Icy Wind, Rock Tomb and Mud Shot reach `AI_CV_SpeedDown`
+/// (`:1142`-`:1151`); any other move with the effect ends at once, with no
+/// draw and no score change.
+fn score_speed_down_hit_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if !matches!(
+        move_id,
+        MoveId::ICY_WIND | MoveId::ROCK_TOMB | MoveId::MUD_SHOT
+    ) {
+        return;
+    }
+    if !target_is_faster(user, target, rng) {
+        scores.adjust(slot, SPEED_DROP_NOT_FASTER_PENALTY);
+    } else if random_roll_is_at_least(rng, SPEED_DROP_FASTER_BONUS_THRESHOLD) {
+        scores.adjust(slot, ENCOURAGE);
+    }
+}
+
+/// `AI_CV_Absorb` (`data/battle_ai_scripts.s:789`-`:798`): a draining move the
+/// target resists (half or quarter, with or without same-type bonus, as folded
+/// by `Cmd_if_type_effectiveness`, `src/battle_ai_script_commands.c:1515`-`:1556`)
+/// rolls once and loses three on a low byte of 50 or more. Every other class
+/// leaves the score alone and spends no draw.
+fn score_drain_viability(
+    dex: &Dex,
+    scores: &mut MoveScores,
+    slot: usize,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> Result<(), BattleError> {
+    let resisted = matches!(
+        ai_type_effectiveness(dex, move_id, user, target)?,
+        Some(
+            AI_EFFECTIVENESS_HALF
+                | AI_EFFECTIVENESS_HALF_WITH_STAB
+                | AI_EFFECTIVENESS_QUARTER
+                | AI_EFFECTIVENESS_QUARTER_WITH_STAB
+        )
+    );
+    if resisted && random_roll_is_at_least(rng, RESISTED_DRAIN_PENALTY_THRESHOLD) {
+        scores.adjust(slot, RESISTED_DRAIN_PENALTY);
     }
     Ok(())
 }
@@ -1332,6 +1583,67 @@ mod tests {
         assert!(latched > plain, "{latched} must exceed {plain}");
     }
 
+    /// `AI_CalcDmg` runs `CalculateBaseDamage` (`battle_script_commands.c:1306`
+    /// -`:1318`), so the player's Defense badges shrink the estimate.
+    #[test]
+    fn the_estimate_reads_the_players_defense_badges() {
+        use crate::badge_boosts::BadgeBoosts;
+
+        let dex = Dex::new();
+        let planted = |species, moves| {
+            BattlePokemon::new(
+                &dex,
+                species,
+                50,
+                Ivs::default(),
+                DEFAULT_PERSONALITY,
+                moves,
+            )
+            .expect("test Pokemon must be dex-resident")
+            .with_cached_stats(
+                crate::pokemon::Stats {
+                    max_hp: 1000,
+                    attack: 101,
+                    defense: 101,
+                    speed: 101,
+                    sp_attack: 101,
+                    sp_defense: 101,
+                },
+                1000,
+            )
+        };
+        let enemy = planted(MUDKIP, vec![MoveId::POUND, MoveId::WATER_GUN]);
+        let player = planted(TORCHIC, vec![SCRATCH]);
+        let plain = |move_id| estimated_damage(&dex, move_id, &enemy, &player, PERCENT_SCALE);
+        let badged = |move_id, badges: [bool; 4]| {
+            let player = player
+                .clone()
+                .with_stat_badges(BadgeBoosts::from_badges(badges));
+            estimated_damage(&dex, move_id, &enemy, &player, PERCENT_SCALE)
+        };
+        let pound = plain(MoveId::POUND).unwrap();
+        let water_gun = plain(MoveId::WATER_GUN).unwrap();
+
+        assert!(badged(MoveId::POUND, [false, false, true, false]).unwrap() < pound);
+        assert_eq!(
+            badged(MoveId::POUND, [true, true, false, true]).unwrap(),
+            pound
+        );
+        assert!(badged(MoveId::WATER_GUN, [false, false, false, true]).unwrap() < water_gun);
+        assert_eq!(
+            badged(MoveId::WATER_GUN, [true, true, true, false]).unwrap(),
+            water_gun
+        );
+
+        let boosted_enemy = enemy
+            .clone()
+            .with_stat_badges(BadgeBoosts::from_badges([true; 4]));
+        assert!(
+            estimated_damage(&dex, MoveId::POUND, &boosted_enemy, &player, PERCENT_SCALE).unwrap()
+                > pound
+        );
+    }
+
     /// Upstream's `AI_CalcDmg` runs `CalculateBaseDamage` for every nonempty
     /// slot, depleted or not (`battle_ai_script_commands.c:1204-1213`), and it
     /// halves raw Special Attack for Fire/Ice against Thick Fat
@@ -1408,6 +1720,45 @@ mod tests {
         );
         assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
         rng.assert_exhausted();
+    }
+
+    /// Haley's real party uses `AI_SCRIPT_CHECK_BAD_MOVE` only, and
+    /// `AI_CheckBadMove` has no flinch branch (`battle_ai_scripts.s:105-214`),
+    /// so Astonish, Bite and Headbutt add no effect-specific draw: the four
+    /// score-initialisation draws plus one tied-move selection, and nothing
+    /// else.
+    #[test]
+    fn flinch_moves_add_no_effect_specific_draw_to_a_check_bad_move_only_turn() {
+        let dex = Dex::new();
+        let flags = AiFlags::CHECK_BAD_MOVE;
+        let target = pokemon(TREECKO, vec![POUND]);
+        let enemy = pokemon(
+            MUDKIP,
+            vec![MoveId::ASTONISH, MoveId::BITE, MoveId::HEADBUTT],
+        );
+        for move_id in [MoveId::ASTONISH, MoveId::BITE, MoveId::HEADBUTT] {
+            assert_eq!(
+                ensure_scoreable(&dex, move_id, flags),
+                Ok(()),
+                "{move_id:?}"
+            );
+            assert_eq!(
+                crate::battle::trainer::ensure_move_playable(&dex, move_id, flags),
+                Ok(()),
+                "{move_id:?}"
+            );
+        }
+        for (selection, expected) in [
+            (SELECT_FIRST_TIED_MOVE, EnemyAction::Move(0)),
+            (SELECT_SECOND_TIED_MOVE, EnemyAction::Move(1)),
+        ] {
+            let mut rng = rng_with_maximum_simulated_damage([selection]);
+            let action =
+                choose_trainer_action(&dex, &enemy, &target, flags, FIRST_TURN, &mut rng).unwrap();
+            assert_eq!(action, expected);
+            assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+            rng.assert_exhausted();
+        }
     }
 
     #[test]
@@ -2186,6 +2537,79 @@ mod tests {
         assert!(boosted > control, "{boosted} vs {control}");
     }
 
+    fn cached_hp_pokemon(max_hp: u32, current_hp: u32) -> BattlePokemon {
+        BattlePokemon::new(
+            &Dex::new(),
+            TREECKO,
+            ROUTE_103_LEVEL,
+            Ivs::default(),
+            DEFAULT_PERSONALITY,
+            vec![MoveId::POUND],
+        )
+        .unwrap()
+        .with_cached_stats(
+            crate::pokemon::Stats {
+                max_hp,
+                attack: 0,
+                defense: 0,
+                speed: 0,
+                sp_attack: 0,
+                sp_defense: 0,
+            },
+            current_hp,
+        )
+    }
+
+    #[test]
+    fn a_cache_adopted_hp_past_the_u32_percent_product_does_not_overflow() {
+        // 100 * 50_000_000 exceeds u32::MAX before the divide.
+        let half = cached_hp_pokemon(100_000_000, 50_000_000);
+        assert_eq!(super::current_hp_percent(&half), 50);
+        let full = cached_hp_pokemon(u32::MAX, u32::MAX);
+        assert_eq!(super::current_hp_percent(&full), PERCENT_SCALE);
+        let tenth = cached_hp_pokemon(4_000_000_000, 400_000_000);
+        assert_eq!(super::current_hp_percent(&tenth), 10);
+    }
+
+    #[test]
+    fn a_cached_hp_percent_above_u32_saturates() {
+        let malformed = cached_hp_pokemon(1, u32::MAX);
+        assert_eq!(super::current_hp_percent(&malformed), u32::MAX);
+    }
+
+    #[test]
+    fn a_saturated_estimate_does_not_overflow_the_percentage() {
+        let dex = Dex::new();
+        let planted = |species, moves, stat| {
+            BattlePokemon::new(
+                &dex,
+                species,
+                100,
+                Ivs::default(),
+                DEFAULT_PERSONALITY,
+                moves,
+            )
+            .unwrap()
+            .with_cached_stats(
+                crate::pokemon::Stats {
+                    max_hp: 1000,
+                    attack: stat,
+                    defense: stat,
+                    speed: stat,
+                    sp_attack: stat,
+                    sp_defense: stat,
+                },
+                1000,
+            )
+        };
+        let enemy = planted(TREECKO, vec![POUND, MoveId::STRUGGLE], u32::MAX);
+        let player = planted(TORCHIC, vec![SCRATCH], 1);
+        for move_id in [POUND, MoveId::STRUGGLE] {
+            let estimate = estimated_damage(&dex, move_id, &enemy, &player, PERCENT_SCALE);
+            assert_eq!(estimate, Ok(u32::MAX), "{move_id:?}");
+        }
+    }
+
     #[test]
     fn a_zero_cached_maximum_does_not_divide_by_zero() {
         let malformed = BattlePokemon::new(
@@ -2213,8 +2637,26 @@ mod tests {
 }
 
 #[cfg(test)]
+mod always_hit_viability_tests;
+#[cfg(test)]
+mod attract_tests;
+#[cfg(test)]
+mod charge_tests;
+#[cfg(test)]
+mod drain_viability_tests;
+#[cfg(test)]
 mod leech_seed_tests;
+#[cfg(test)]
+mod paralyze_viability_tests;
 #[cfg(test)]
 mod prologue_tests;
 #[cfg(test)]
+mod quick_attack_tests;
+#[cfg(test)]
+mod speed_drop_viability_tests;
+#[cfg(test)]
+mod speed_raise_viability_tests;
+#[cfg(test)]
 mod stat_stage_tests;
+#[cfg(test)]
+mod vital_throw_viability_tests;

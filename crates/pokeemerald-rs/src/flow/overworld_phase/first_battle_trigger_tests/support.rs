@@ -23,6 +23,7 @@ pub(super) fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
         player,
         None,
     )
+    .with_private_object_event_rng()
 }
 
 /// The same Route 101 grid with `specials` overriding tile behaviours at the given cells.
@@ -36,6 +37,7 @@ pub(super) fn route_101_trigger_phase_with_special_tiles(
         player,
         None,
     )
+    .with_private_object_event_rng()
 }
 
 /// [`ROUTE_101_TRIGGER_TILE`] as the unsigned cell the synthetic-scene builders take.

@@ -2,7 +2,8 @@
 
 use assets::{AbilityId, MoveEffect, MoveId, MoveTarget, Type};
 
-use crate::ability::{burn_halves_damage, huge_power_attack};
+use crate::ability::burn_halves_damage;
+use crate::attract::is_attract_effect;
 use crate::confuse::{
     draw_confusion_duration, is_confuse_effect, resolve_confuse_move, ConfuseOutcome,
 };
@@ -36,10 +37,14 @@ use crate::status1::Status1;
 
 use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
+mod attract;
 mod burn;
+mod color_change;
+mod cute_charm;
 mod effect_spore;
 mod pipelines;
 mod rollout;
+mod yawn;
 use pipelines::hit_failure_event;
 
 /// Confusion's fixed self-hit power (`MOVE_POUND`'s override at
@@ -92,6 +97,8 @@ pub(super) enum MovePipeline {
     Confuse,
     LeechSeed,
     Rollout,
+    Attract,
+    Yawn,
     OrdinaryHit,
 }
 
@@ -139,6 +146,10 @@ impl MovePipeline {
             (Self::LeechSeed, crate::leech_seed::ensure_resolvable)
         } else if is_rollout_effect(effect) {
             (Self::Rollout, crate::rollout::ensure_resolvable)
+        } else if is_attract_effect(effect) {
+            (Self::Attract, crate::attract::ensure_resolvable)
+        } else if yawn::is_yawn_effect(effect) {
+            (Self::Yawn, yawn::ensure_resolvable)
         } else {
             (Self::OrdinaryHit, crate::hit::ensure_resolvable)
         }
@@ -221,9 +232,11 @@ impl Battle {
         );
     }
 
-    /// `MOVEEND_ON_DAMAGE_ABILITIES` for the contact abilities the engine
-    /// models (`battle_script_commands.c:4280`-`:4284`); a holder carries
-    /// at most one, so at most one of them acts.
+    /// `MOVEEND_ON_DAMAGE_ABILITIES` for the on-damage abilities the engine
+    /// models, Color Change and the contact abilities
+    /// (`battle_script_commands.c:4280`-`:4284`); a holder carries
+    /// at most one, so at most one of them acts. Callers reach it only after
+    /// the hit cost the target HP.
     ///
     /// # Errors
     ///
@@ -235,9 +248,12 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        self.apply_color_change(attacker_is_player, move_id, events)?;
         self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_poison_point_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_flame_body_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_effect_spore_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_cute_charm_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_rough_skin_contact(attacker_is_player, move_id, events)
     }
 
@@ -460,6 +476,13 @@ impl Battle {
             MovePipeline::Rollout => {
                 self.execute_rollout_move(attacker_is_player, move_id, rng, events)
             }
+            MovePipeline::Attract => {
+                self.execute_attract_move(attacker_is_player, move_id, rng, events)
+            }
+            MovePipeline::Yawn => {
+                self.execute_yawn_move(attacker_is_player, move_id, events);
+                Ok(())
+            }
             MovePipeline::OrdinaryHit => {
                 self.execute_hit_move(attacker_is_player, move_id, rng, events)
             }
@@ -667,6 +690,7 @@ impl Battle {
             SecondaryApplication::Burn => {
                 self.apply_secondary_burn(attacker_is_player, move_id, events);
             }
+            SecondaryApplication::Flinch => self.apply_secondary_flinch(attacker_is_player),
         }
         poisoned_synchronize_holder
     }
@@ -704,6 +728,22 @@ impl Battle {
             new_stage,
             magnitude: 1,
         });
+    }
+
+    /// `MOVE_EFFECT_FLINCH` sets the flag silently; [`BattleEvent::Flinched`] reports
+    /// it at the cancelled action (`battle_script_commands.c:2261`-`:2264`,
+    /// `:2561`-`:2565`).
+    fn apply_secondary_flinch(&mut self, attacker_is_player: bool) {
+        let target_acted = self.acted_this_turn[usize::from(attacker_is_player)];
+        let defender = if attacker_is_player {
+            &mut self.enemy
+        } else {
+            &mut self.player
+        };
+        if defender.is_fainted() || target_acted {
+            return;
+        }
+        defender.volatiles_mut().set_flinched();
     }
 
     /// Applies damage up to the target's remaining HP and returns the HP lost.
@@ -754,13 +794,16 @@ impl Battle {
     /// `CalculateBaseDamage` tests `gBattleMoves[gCurrentMove].effect` for
     /// `EFFECT_EXPLOSION` and halves the raw Defense before the stage scales
     /// it (`pokeemerald/src/pokemon.c:3228`-`:3230`, `:3248`-`:3260`), so a
-    /// confused Selfdestruct or Explosion user takes the larger self-hit
-    /// (`AtkCanceler_UnableToUseMove` runs ahead of the no-PP abort, so a
-    /// depleted slot reaches it too). The same call halves a burned battler's
-    /// damage unless it has Guts (`:3262`-`:3264`).
-    pub(super) fn apply_confusion_self_hit(
+    /// confused or disobedient Selfdestruct or Explosion user takes the larger
+    /// self-hit (`AtkCanceler_UnableToUseMove` runs ahead of the no-PP abort,
+    /// so a depleted slot reaches it too). The same call halves a burned
+    /// battler's damage unless it has Guts (`:3262`-`:3264`). `disobedient`
+    /// selects the [`BattleEvent::DisobedientSelfHit`] report over the confusion
+    /// one (`IsMonDisobedient`, `src/battle_util.c:4023`-`:4030`).
+    pub(super) fn apply_self_hit(
         &mut self,
         battler_is_player: bool,
+        disobedient: bool,
         selected_move: MoveId,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
@@ -771,9 +814,8 @@ impl Battle {
         } else {
             &self.enemy
         };
-        let (raw_attack, attack_stage) = battler.attacking_stat(MoveCategory::Physical);
-        let attack_stat = huge_power_attack(battler.ability(), MoveCategory::Physical, raw_attack);
-        let (raw_defense, defense_stage) = battler.defending_stat(MoveCategory::Physical);
+        let (attack_stat, attack_stage) = battler.damage_attacking_stat(MoveCategory::Physical);
+        let (raw_defense, defense_stage) = battler.damage_defending_stat(MoveCategory::Physical);
         let defense_stat = if halves_defense {
             raw_defense / 2
         } else {
@@ -789,7 +831,7 @@ impl Battle {
             defense_stage,
             // `CalculateBaseDamage` halves a burned non-Guts attacker's
             // damage after the division by 50 (`pokeemerald/src/pokemon.c:3262`
-            // -`:3264`); the confused battler is the attacker here.
+            // -`:3264`); the self-hitting battler is the attacker here.
             attacker_burned: burn_halves_damage(battler.ability(), battler.status1()),
             reflect: false,
             light_screen: false,
@@ -808,9 +850,16 @@ impl Battle {
         };
         let hp_lost = damage.min(battler.current_hp());
         battler.apply_damage(hp_lost);
-        events.push(BattleEvent::ConfusionSelfHit {
-            by_player: battler_is_player,
-            damage: hp_lost,
+        events.push(if disobedient {
+            BattleEvent::DisobedientSelfHit {
+                by_player: battler_is_player,
+                damage: hp_lost,
+            }
+        } else {
+            BattleEvent::ConfusionSelfHit {
+                by_player: battler_is_player,
+                damage: hp_lost,
+            }
         });
         self.settle_faint(battler_is_player, events);
         Ok(())
@@ -845,8 +894,9 @@ impl Battle {
         } else {
             &mut self.enemy
         };
-        fainted_battler.clear_battle_scratch();
+        fainted_battler.clear_fainted_scratch();
         fainted_battler.set_status1(Status1::Healthy);
+        self.clear_infatuation_from(BattlerSide::from_is_player(fainted_is_player));
         // `FaintClearSetData` resets the battler's history, Perish Song
         // countdown and Truant counter (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
         self.battler_states[BattlerSide::from_is_player(fainted_is_player).index()] =
@@ -1237,10 +1287,12 @@ mod pipeline_agreement_tests {
         (&[49], MovePipeline::Confuse),
         (&[84], MovePipeline::LeechSeed),
         (&[117], MovePipeline::Rollout),
+        (&[120], MovePipeline::Attract),
+        (&[187], MovePipeline::Yawn),
         (
             &[
-                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96, 103,
-                110, 125, 131, 141, 163,
+                0, 2, 12, 14, 15, 17, 21, 22, 31, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96,
+                101, 103, 110, 125, 131, 141, 150, 163,
             ],
             MovePipeline::OrdinaryHit,
         ),
@@ -1273,7 +1325,9 @@ mod pipeline_agreement_tests {
                     || crate::paralyze::ensure_resolvable(dex, move_id).is_ok()
                     || crate::confuse::ensure_resolvable(dex, move_id).is_ok()
                     || crate::leech_seed::ensure_resolvable(dex, move_id).is_ok()
-                    || crate::rollout::ensure_resolvable(dex, move_id).is_ok();
+                    || crate::rollout::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::attract::ensure_resolvable(dex, move_id).is_ok()
+                    || move_id == MoveId::YAWN;
                 if accepted {
                     Ok(())
                 } else {
@@ -1409,5 +1463,91 @@ mod absorbing_ability_tests {
             })
             .collect();
         assert_eq!(boosted, [true, false]);
+    }
+}
+
+#[cfg(test)]
+mod flinch_adapter_tests {
+    use assets::{MoveId, SpeciesId};
+
+    use super::*;
+    use crate::pokemon::{BattlePokemon, Ivs};
+    use crate::script_rng::SequenceRng;
+
+    const MAX_IVS: Ivs = Ivs {
+        hp: 31,
+        attack: 31,
+        defense: 31,
+        speed: 31,
+        sp_attack: 31,
+        sp_defense: 31,
+    };
+
+    fn battle() -> Battle {
+        let mon = |species: u16| {
+            BattlePokemon::new(
+                &Dex::new(),
+                SpeciesId(species),
+                5,
+                MAX_IVS,
+                0,
+                vec![MoveId::TACKLE],
+            )
+            .unwrap()
+        };
+        let mut rng = SequenceRng::new([0, 0]);
+        Battle::new(Dex::new(), mon(19), mon(288), false, &mut rng).unwrap()
+    }
+
+    #[test]
+    fn a_landed_flinch_flags_a_target_whose_slot_is_still_ahead() {
+        let mut battle = battle();
+        battle.acted_this_turn = [true, false];
+        battle.apply_secondary_flinch(true);
+        assert!(battle.enemy.volatiles().flinched);
+        assert!(!battle.player.volatiles().flinched);
+
+        battle.acted_this_turn = [false, true];
+        battle.apply_secondary_flinch(false);
+        assert!(battle.player.volatiles().flinched);
+    }
+
+    #[test]
+    fn a_target_that_already_acted_is_never_flagged() {
+        let mut battle = battle();
+        battle.acted_this_turn = [true, true];
+        battle.apply_secondary_flinch(true);
+        battle.apply_secondary_flinch(false);
+        assert!(!battle.enemy.volatiles().flinched);
+        assert!(!battle.player.volatiles().flinched);
+    }
+
+    #[test]
+    fn a_fainted_target_is_never_flagged() {
+        let mut battle = battle();
+        battle.acted_this_turn = [true, false];
+        let max_hp = battle.enemy.stats().max_hp;
+        battle.enemy.apply_damage(max_hp);
+        assert!(battle.enemy.is_fainted());
+        battle.apply_secondary_flinch(true);
+        assert!(!battle.enemy.volatiles().flinched);
+    }
+
+    #[test]
+    fn a_flinch_application_draws_nothing_and_emits_no_event() {
+        let mut battle = battle();
+        let mut events = Vec::new();
+        let mut rng = SequenceRng::new([]);
+        let poisoned = battle.apply_hit_secondary_effect(
+            true,
+            MoveId::HEADBUTT,
+            SecondaryApplication::Flinch,
+            &mut rng,
+            &mut events,
+        );
+        assert!(!poisoned);
+        assert!(events.is_empty());
+        assert!(battle.enemy.volatiles().flinched);
+        rng.assert_exhausted();
     }
 }

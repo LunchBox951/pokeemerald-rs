@@ -31,39 +31,6 @@ enum FieldPoison {
     Fainted,
 }
 
-/// `PokemonSubstruct0::species` (growth bytes `0..2`) and
-/// `PokemonSubstruct3`'s `isEgg` bit (the IV word's bit 30), the two fields
-/// `MON_DATA_SPECIES_OR_EGG` reads (`pokeemerald/src/pokemon.c:3992-3996`).
-const GROWTH_SPECIES: std::ops::Range<usize> = 0..2;
-const MISC_IV_WORD: std::ops::Range<usize> = 4..8;
-const IS_EGG_BIT: u32 = 1 << 30;
-/// `SPECIES_EGG` (`pokeemerald/include/constants/species.h`), the id
-/// `MON_DATA_SPECIES_OR_EGG` reports for an egg and which a record may also
-/// carry as its growth species.
-const SPECIES_EGG: u16 = 412;
-
-/// `IsMonValidSpecies` (`pokeemerald/src/field_poison.c:20-27`): a species
-/// that is neither `SPECIES_NONE` nor `SPECIES_EGG`. A record whose secure
-/// checksum fails is a Bad Egg, so it is not valid either.
-fn is_valid_species(record: &engine::save::Pokemon) -> bool {
-    if record.box_data.is_bad_egg() {
-        return false;
-    }
-    let Ok(substructures) = record.box_data.substructures() else {
-        return false;
-    };
-    let species = u16::from_le_bytes([
-        substructures.growth[GROWTH_SPECIES.start],
-        substructures.growth[GROWTH_SPECIES.start + 1],
-    ]);
-    let iv_word = u32::from_le_bytes(
-        substructures.misc[MISC_IV_WORD]
-            .try_into()
-            .expect("a u32 field has four bytes"),
-    );
-    species != 0 && species != SPECIES_EGG && iv_word & IS_EGG_BIT == 0
-}
-
 impl OverworldPhase {
     /// `TryFieldPoisonWhiteOut` (`pokeemerald/src/field_poison.c:61-117`),
     /// run after `OverworldPhase::do_poison_field_effect` reports a
@@ -79,7 +46,10 @@ impl OverworldPhase {
     /// facilities can reach.
     pub(super) fn try_field_poison_white_out(&mut self) -> bool {
         for record in &mut self.save1.player_party {
-            if is_valid_species(record) && record.hp == 0 && record.status & STATUS1_PSN_ANY != 0 {
+            if crate::party::has_valid_species(record)
+                && record.hp == 0
+                && record.status & STATUS1_PSN_ANY != 0
+            {
                 record.status = 0;
             }
         }
@@ -87,7 +57,7 @@ impl OverworldPhase {
             .save1
             .player_party
             .iter()
-            .all(|record| !is_valid_species(record) || record.hp == 0);
+            .all(|record| !crate::party::has_valid_species(record) || record.hp == 0);
         if all_fainted {
             self.white_out();
         }
@@ -152,7 +122,7 @@ impl OverworldPhase {
             .map(crate::party::LoadedLead::slot);
         let lead_poisoned = lead_slot.is_some_and(|slot| {
             self.lead_battler()
-                .is_some_and(|lead| lead.status1().is_poisoned())
+                .is_some_and(|lead| lead.status1().is_poisoned_any())
                 || self.save1.player_party[slot].status & STATUS1_PSN_ANY != 0
         });
         if lead_poisoned {
