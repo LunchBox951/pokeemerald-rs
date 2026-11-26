@@ -783,7 +783,11 @@ mod tests {
 
         assert!(context.run(&mut host));
         assert!(context.run(&mut host), "installed gate still blocks");
-        assert_eq!(context.cursor(), Some(&bytecode[..]), "bytecode did not run");
+        assert_eq!(
+            context.cursor(),
+            Some(&bytecode[..]),
+            "bytecode did not run"
+        );
     }
 
     #[test]
