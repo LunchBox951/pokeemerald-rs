@@ -283,6 +283,12 @@ impl StartMenu {
         self.items[self.cursor]
     }
 
+    /// How many actions the menu lists (`sNumStartMenuActions`,
+    /// `pokeemerald/src/start_menu.c`).
+    pub(crate) const fn item_count(&self) -> usize {
+        self.items.len()
+    }
+
     /// Returns the cursor position, for the caller to retain and pass back
     /// into the next [`Self::assemble`] across a close and reopen.
     pub(crate) const fn cursor_position(&self) -> usize {
