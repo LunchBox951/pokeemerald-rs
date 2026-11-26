@@ -43,10 +43,10 @@ pub(super) fn nickname_tokens(
 ///   `gText_BagFullCouldNotRemoveItem`.
 /// - [`TakeHeldItem::Took`] prints `DisplayTookHeldItemMessage`'s
 ///   `gText_ReceivedItemFromPkmn`, with `gStringVar2` the item's name.
-/// - [`TakeHeldItem::HoldsMail`] has no upstream text. Upstream never reaches
-///   TAKE ITEM for mail (it offers `CursorCb_TakeMail`, which this port does
-///   not model, #3017), so the port says what is true: the lead is holding
-///   MAIL, which TAKE leaves in place.
+/// - [`TakeHeldItem::HoldsMail`] has no `CursorCb_TakeItem` text: upstream
+///   never reaches TAKE ITEM for mail, and the start menu sends a mail holder
+///   to `CursorCb_TakeMail`'s flow (`start_menu::take_mail_dialog`) before this
+///   runs. The outcome cannot arise from the menu; it prints nothing.
 /// - No lead prints `gText_NoPokemon`.
 pub(super) fn take_item_message(outcome: Option<TakeHeldItem>, nickname: Vec<Token>) -> Vec<Token> {
     let mut tokens = match outcome {
@@ -56,11 +56,7 @@ pub(super) fn take_item_message(outcome: Option<TakeHeldItem>, nickname: Vec<Tok
             tokens.extend(plain(" isn't holding\nanything."));
             tokens
         }
-        Some(TakeHeldItem::HoldsMail(_)) => {
-            let mut tokens = nickname;
-            tokens.extend(plain(" is holding\nMAIL."));
-            tokens
-        }
+        Some(TakeHeldItem::HoldsMail(_)) => Vec::new(),
         Some(TakeHeldItem::BagFull(_)) => {
             plain("The BAG is full. The POKéMON's\nitem could not be removed.")
         }
@@ -125,7 +121,8 @@ mod tests {
         );
         assert_eq!(
             message(Some(TakeHeldItem::HoldsMail(ItemId::ORANGE_MAIL))),
-            "TREECKO is holding/MAIL.$"
+            "$",
+            "the mail flow owns mail holders, so this prints nothing"
         );
         assert_eq!(
             message(Some(TakeHeldItem::BagFull(ItemId::ORAN_BERRY))),
