@@ -28952,9 +28952,21 @@
           "spec": "S-4",
           "status": "stubbed"
         },
+        "sLongStreakPrizeItems": {
+          "reason": "src/battle_arena.c:365-376 sLongStreakPrizeItems, transcribed as the nine ItemId values (Bright Powder, White Herb, Quick Claw, Leftovers, Mental Herb, King's Rock, Focus Band, Scope Lens, Choice Band, in upstream order) behind prize_items(ArenaPrizePool::LongStreak). Pinned slot by slot against raw ITEM_* values by unit tests, and by an ignored test that re-parses src/battle_arena.c and include/constants/items.h. Data only: the streak test that picks the pool (SetArenaPrize, :744-752), the random draw, the bag award and the saved prize are NOT modelled.",
+          "rust_target": "crates/assets/src/battle_arena_prizes.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "sMindRatings": {
           "reason": "sMindRatings (src/battle_arena.c:58-276) re-expressed as a move-indexed accessor, arena_mind_rating: 212 moves at +1 and 4 (Protect, Detect, Endure, Fake Out) at -1, zero for every unlisted move including Counter, Mirror Coat and Bide (the table comment, :52-57), out-of-range moves refused. Table only: no Arena scoring or judgment screen consumes it yet.",
           "rust_target": "crates/assets/src/arena_mind_ratings.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sShortStreakPrizeItems": {
+          "reason": "src/battle_arena.c:355-363 sShortStreakPrizeItems, transcribed as the six ItemId values (HP Up, Protein, Iron, Calcium, Carbos, Zinc, in upstream order) behind prize_items(ArenaPrizePool::ShortStreak). Pinned slot by slot against raw ITEM_* values by unit tests, and by an ignored test that re-parses src/battle_arena.c and include/constants/items.h. Data only: the streak test that picks the pool (SetArenaPrize, :744-752), the random draw, the bag award and the saved prize are NOT modelled.",
+          "rust_target": "crates/assets/src/battle_arena_prizes.rs",
           "spec": "S-4",
           "status": "ported"
         }
