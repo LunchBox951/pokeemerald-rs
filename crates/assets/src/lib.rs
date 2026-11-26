@@ -23,7 +23,8 @@
 //! normal-ribbon description lines (see [`ribbon_descriptions`]), the Battle
 //! Factory move-style lists and required counts (see
 //! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
-//! [`battle_pike_wild_mons`]), the Battle Pyramid floor-item and Pickup
+//! [`battle_pike_wild_mons`]), the Battle Pike room hint and Queen-healing
+//! tables (see [`battle_pike_rooms`]), the Battle Pyramid floor-item and Pickup
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
 //! starting positions (see [`slot_machine_reels`]), the region-map section
@@ -32,7 +33,8 @@
 //! Events word group (see [`easy_chat_events`]), the facility-class portrait
 //! and trainer-class lookups (see [`facility_classes`]), the four NPC trade
 //! offers with their mail messages (see [`ingame_trades`]), and the Lilycove
-//! Lady quiz, favor, and contest data (see [`lilycove_lady`]); more data
+//! Lady quiz, favor, and contest data (see [`lilycove_lady`]), and the Frontier
+//! Brain appearance thresholds (see [`frontier_brain_thresholds`]); more data
 //! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -62,6 +64,7 @@ pub mod battle_anim;
 pub mod battle_factory_styles;
 pub mod battle_moves;
 pub mod battle_palace;
+pub mod battle_pike_rooms;
 pub mod battle_pike_wild_mons;
 pub mod battle_pyramid_items;
 pub mod berries;
@@ -78,6 +81,7 @@ pub mod evolution;
 pub mod experience;
 pub mod facility_classes;
 pub mod fonts;
+pub mod frontier_brain_thresholds;
 pub mod frontier_exchange_corner;
 pub mod hidden_item_flags;
 pub mod ingame_trades;
@@ -132,6 +136,10 @@ pub use battle_palace::{
     battle_palace_flavor_text, battle_palace_move_group_likelihood, battle_palace_move_target,
     BattlePalaceError, MoveGroupLikelihood, PalaceFlavorText, PalaceTarget, NATURES_COUNT,
 };
+pub use battle_pike_rooms::{
+    queen_heal_count, room_hint, PikeHint, PikeRoomError, PikeRoomType, PIKE_QUEEN_HEAL_ROWS,
+    PIKE_ROOM_POSITIONS, PIKE_ROOM_TYPES,
+};
 pub use battle_pike_wild_mons::{
     pike_header, pike_wild_mon, PikeLevelDecrement, PikeLevelMode, PikeWildMon, PikeWildMonError,
     PIKE_WILD_HEADERS, PIKE_WILD_MON_MOVES, PIKE_WILD_MON_SLOTS,
@@ -162,6 +170,10 @@ pub use fonts::{
     FontGlyphSheet, FontId, FontImageRef, Glyph, GlyphSource, GlyphSources, OwnedFontGlyphSheet,
     OwnedGlyphSources, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE,
     SHEET_HEIGHT, SHEET_WIDTH,
+};
+pub use frontier_brain_thresholds::{
+    frontier_brain_thresholds, FrontierBrainThresholds, FrontierBrainThresholdsError,
+    FRONTIER_FACILITY_COUNT,
 };
 pub use ingame_trades::{
     InGameTrade, InGameTradeError, InGameTradeId, InGameTradeMail, InGameTradeTable, TradeOtGender,
