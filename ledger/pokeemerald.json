@@ -29093,6 +29093,18 @@
     },
     "src/battle_factory.c": {
       "artifacts": {
+        "sFixedIVTable": {
+          "reason": "src/battle_factory.c:157-166 sFixedIVTable, transcribed as the eight rows of two IV bytes behind fixed_iv_row, which refuses a row of 8 or more. The two columns stay distinct: regular_iv is upstream's column 0 and last_battle_iv its column 1, which GetFactoryMonFixedIV (:739-757) selects with isLastBattle. Pinned field by field by unit tests against per-column literals and by an ignored test that re-parses src/battle_factory.c. NOT modelled: GetFactoryMonFixedIV's challenge-number handling and its out-of-bounds read past the table, the random-IV interpretation of a value above 31, and the callers' challenge-to-row selection.",
+          "rust_target": "crates/assets/src/battle_factory_rentals.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sInitialRentalMonRanges": {
+          "reason": "src/battle_factory.c:168-190 sInitialRentalMonRanges, transcribed as 16 inclusive Frontier-mon index ranges, 8 for Level 50 and 8 for Open Level, behind initial_rental_range(mode, row), which refuses a row of 8 or more. Upstream's reader (:839-862) adds 8 to the row for Open Level, so the modes are kept distinct; the endpoints are inclusive (the draw spans last - first + 1 values) and the final rows differ, Level 50 372-849 (FRONTIER_MONS_HIGH_TIER) against Open Level 372-881 (NUM_FRONTIER_MONS - 1). Endpoints are resolved from include/constants/battle_frontier_mons.h. Pinned field by field by unit tests against literals and by an ignored test that re-parses src/battle_factory.c and the header. NOT modelled: the rental draw, its RNG, the streak-to-row selection and the clamp of a challenge number of 7 or more, and the Frontier-mon sets.",
+          "rust_target": "crates/assets/src/battle_factory_rentals.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "sMoveStyles": {
           "reason": "sMoveStyles (src/battle_factory.c:113-122) re-expressed as FactoryStyle::LISTED, the seven listed styles in scan order (Preparation, Slow and Steady, Endurance, High Risk, Weakening, Unpredictable, Weather), with FACTORY_STYLE_NONE excluded. The lists overlap on MOVE_SNATCH (Preparation and Slow and Steady), so a first-match scan classifies it Preparation; membership is kept in both lists. GetMoveBattleStyle (:692-705) is not ported.",
           "rust_target": "crates/assets/src/battle_factory_styles.rs",

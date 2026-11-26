@@ -22,7 +22,8 @@
 //! Pokénav city-map selector entries (see [`pokenav_city_maps`]), and the
 //! normal-ribbon description lines (see [`ribbon_descriptions`]), the Battle
 //! Factory move-style lists and required counts (see
-//! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
+//! [`battle_factory_styles`]), the Battle Factory fixed-IV rows and rental ranges
+//! (see [`battle_factory_rentals`]), the Battle Pike wild Pokémon rosters (see
 //! [`battle_pike_wild_mons`]), the Battle Pike room hint and Queen-healing
 //! tables (see [`battle_pike_rooms`]), the Battle Pyramid floor-item and Pickup
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
@@ -61,6 +62,7 @@ pub mod arena_mind_ratings;
 pub mod audio;
 pub mod bard_events;
 pub mod battle_anim;
+pub mod battle_factory_rentals;
 pub mod battle_factory_styles;
 pub mod battle_moves;
 pub mod battle_palace;
@@ -128,6 +130,10 @@ pub use audio::{
     Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId, MAX_TRACKS, VOICE_SLOT_COUNT,
 };
 pub use bard_events::{BardEventsError, BardSlot, BardSoundTemplate, EventsBardTemplates};
+pub use battle_factory_rentals::{
+    fixed_iv_row, initial_rental_range, FactoryIvRow, FactoryLevelMode, FactoryRentalRange,
+    FactoryRentalsError, FIXED_IV_ROWS, RENTAL_RANGE_ROWS,
+};
 pub use battle_factory_styles::{FactoryStyle, FACTORY_LISTED_STYLE_COUNT};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
