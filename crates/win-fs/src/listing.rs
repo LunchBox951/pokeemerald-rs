@@ -36,7 +36,9 @@ impl DirectoryEntry {
 ///
 /// # Errors
 ///
-/// A listing call failing for any reason other than reaching the end.
+/// A listing call failing for any reason other than reaching the end, or
+/// `InvalidData` when a call succeeds but a record it wrote, or the name the
+/// record claims, does not lie wholly inside the listing buffer.
 ///
 /// # Panics
 ///
