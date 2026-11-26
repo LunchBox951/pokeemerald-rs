@@ -1,20 +1,6 @@
-//! The Battle Pyramid floor-template catalog: the sixteen floor templates and
-//! the per-floor options that choose between them.
-//!
-//! Source: `src/battle_pyramid.c`. Three tables live there, and this module
-//! keeps them as three separate things:
-//!
-//! 1. **The floor templates** `sPyramidFloorTemplates` (`:107-237`): sixteen
-//!    records, each with an item count, a trainer count, a position policy for
-//!    items and one for trainers, a run multiplier, and eight ordered layout
-//!    offsets. See [`PyramidFloorTemplate`], [`floor_template`] and
-//!    [`floor_templates`].
-//! 2. **The template options** `sPyramidFloorTemplateOptions` (`:239-282`):
-//!    34 `{cutoff, template id}` entries, grouped by floor. See
-//!    [`FloorTemplateOption`] and [`floor_template_options`].
-//! 3. **The floor offsets** `sFloorTemplateOffsets` (`:284-287`): the index
-//!    in the option list where each of the seven floors starts. See
-//!    [`floor_template_option_offset`].
+//! The Battle Pyramid floor-template catalog, from `src/battle_pyramid.c`:
+//! `sPyramidFloorTemplates` (`:107-237`), `sPyramidFloorTemplateOptions`
+//! (`:239-282`) and `sFloorTemplateOffsets` (`:284-287`).
 //!
 //! The cutoffs are cumulative, as upstream stores them, and are not converted
 //! to weights. Upstream picks a template for a floor by drawing a value from
@@ -23,15 +9,9 @@
 //! (`GetPyramidFloorTemplateId`, `src/battle_pyramid.c:1919-1927`). Every
 //! floor's last cutoff is `100`, so that walk always stops within the floor.
 //!
-//! Floors, template ids and option positions are all indexed from `0`, in the
-//! order the upstream tables give. Every lookup refuses an index that is out
-//! of range instead of clamping it.
-//!
-//! This is data only. The draw and the walk, the choice of the layout offset
-//! for each square (`src/battle_pyramid.c:1900-1913`), the placement of items
-//! and trainers by their position policy, the run multiplier's use, and the
-//! wild rosters are not ported here. The item distributions are in
-//! [`battle_pyramid_items`](crate::battle_pyramid_items).
+//! This is data only: the draw and the walk, the layout offset choice for each
+//! square (`src/battle_pyramid.c:1900-1913`), object placement and the wild
+//! rosters are not ported here.
 
 use std::error::Error;
 use std::fmt;
