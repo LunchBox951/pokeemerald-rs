@@ -128,13 +128,25 @@ pub(in crate::overworld) struct DepthSprite {
 
 impl DepthSprite {
     /// A 16x32 sprite whose single OBJ is `entry` at `elevation`.
+    #[cfg(test)]
     pub(in crate::overworld) fn single(entry: SheetSprite, elevation: u8) -> Self {
+        Self::single_over_ground(entry, entry.y(), elevation)
+    }
+
+    /// [`Self::single`] whose subpriority comes from `ground_y`, the OBJ's top
+    /// before any lift: upstream's `sprite->y` excludes `y2`
+    /// (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7779`).
+    pub(in crate::overworld) fn single_over_ground(
+        entry: SheetSprite,
+        ground_y: u8,
+        elevation: u8,
+    ) -> Self {
         Self {
             height: 32,
             ..Self::with_subpriority(
                 entry,
                 subpriority_from_bottom(
-                    i32::from(entry.y()) + 32,
+                    i32::from(ground_y) + 32,
                     elevation,
                     OBJECT_EVENT_SUBPRIORITY,
                 ),
