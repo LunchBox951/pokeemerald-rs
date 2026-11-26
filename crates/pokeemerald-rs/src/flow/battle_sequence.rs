@@ -192,7 +192,16 @@ fn resolve(
 ///   (`:3164-3177`), and the forgetting lines ahead of the learned line
 ///   (`:3178-3187`);
 /// - the defeated-trainer and defeat-speech lines ahead of the prize
-///   (`:2920-2943`).
+///   (`:2920-2943`);
+/// - a replacement's send-out, whose `STRINGID_SWITCHINMON` is followed by
+///   `hidepartystatussummary` and `switchinanim`, not a `waitmessage`
+///   (`:2883-2897`; `Cmd_printstring` only waits for a free controller,
+///   `battle_script_commands.c:2137-2146`). The switch-in animation is not
+///   modelled here; when it is, it waits on the controller, apart from this
+///   table.
+///
+/// The opening send-outs are opening prints with no hold of their own
+/// ([`BattleSequence::begin`]).
 fn script_hold(event: &BattleEvent, position: usize, count: usize) -> u16 {
     let last = position + 1 == count;
     match event {
@@ -200,7 +209,8 @@ fn script_hold(event: &BattleEvent, position: usize, count: usize) -> u16 {
         | BattleEvent::Fainted { .. }
         | BattleEvent::ExpGained { .. }
         | BattleEvent::MoveLearnPrompt { .. }
-        | BattleEvent::MoveLearnDeclined { .. } => 0,
+        | BattleEvent::MoveLearnDeclined { .. }
+        | BattleEvent::PlayerSentOut { .. } => 0,
         BattleEvent::MoveReplaced { .. } | BattleEvent::MoneyGained(_) if !last => 0,
         _ => WAIT_TIME_LONG,
     }
