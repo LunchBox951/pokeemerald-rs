@@ -1,13 +1,14 @@
 //! Locating the party menu's sheets, palettes, and maps.
 //!
 //! The expectation is the checkout's fixed party-menu inventory, which
-//! extraction also reads ([`crate::extract::scope::party_menu_ids`]): three
-//! sheets, three palettes, and eight maps. Every root is found from the pack
+//! extraction also reads ([`crate::extract::scope::party_menu_ids`]): four
+//! sheets, three palettes, and eight maps. The small Poké Ball sheet has no
+//! palette root: it draws with the Poké Ball's. Every root is found from the pack
 //! payload alone; how the ROM stores each is read from upstream's C
 //! (`src/graphics.c:1111-1117`, `src/data/party_menu.h`):
 //!
 //! - The background sheet, palette and screen, and the menu Poké Ball sheet
-//!   and palette, are `.lz` streams.
+//!   and palette, and the small Poké Ball sheet, are `.lz` streams.
 //! - The held-item sheet and palette, the five `u8` slot maps, and the two
 //!   button maps are raw `INCBIN`s, all `static`.
 //! - The background sheet is built with `-num_tiles 62`, so the ROM stores 62
@@ -19,13 +20,14 @@
 //! Every root is searched without a cap so that no copy is hidden. A root with
 //! more than one copy is settled in this order:
 //!
-//! 1. The held-item and Poké Ball sheets are named by the whole sprite-sheet
-//!    record upstream writes for them (`data`, `size`, `tag`), and their two
-//!    palettes by the sprite-palette record (`data`, `tag`;
-//!    `src/data/party_menu.h:844-847`, `:900-903`), which the game loads at
-//!    `src/party_menu.c:4064` and `:4181`. A pointer alone, or a size or tag
-//!    elsewhere, proves nothing, so a copy qualifies only when a pointer to it
-//!    sits in a record whose own fields match. Exactly one copy must qualify.
+//! 1. The held-item, Poké Ball and small Poké Ball sheets are named by the
+//!    whole sprite-sheet record upstream writes for them (`data`, `size`,
+//!    `tag`), and the held-item and Poké Ball palettes by the sprite-palette
+//!    record (`data`, `tag`; `src/data/party_menu.h:844-847`, `:900-903`),
+//!    which the game loads at `src/party_menu.c:4064` and `:4181`. A pointer
+//!    alone, or a size or tag elsewhere, proves nothing, so a copy qualifies
+//!    only when a pointer to it sits in a record whose own fields match.
+//!    Exactly one copy must qualify.
 //! 2. Any other root with several copies is [`Resolution::ArbitraryAmongIdentical`]
 //!    at the lowest address: every copy decodes to the same pack entry, and
 //!    nothing in the ROM tells them apart. Only the background palette, the
@@ -153,13 +155,15 @@ const fn map(id: &'static str, len: u32, encoding: Encoding, declared: Declarati
 const HELD_ITEM_TAG: u16 = 55120;
 /// `TAG_POKEBALL` (`src/party_menu.c:143`).
 const POKEBALL_TAG: u16 = 1200;
+/// `TAG_POKEBALL_SMALL`, the next enumerator (`src/party_menu.c:144`).
+const POKEBALL_SMALL_TAG: u16 = 1201;
 
 /// Every root, in extraction order. `sSpriteSheet_HeldItem`
-/// (`src/data/party_menu.h:839-842`) and `sSpriteSheet_MenuPokeball`
-/// (`:895-898`) are the records that name the two sheets, and
-/// `sSpritePalette_HeldItem` (`:844-847`) and `sSpritePalette_MenuPokeball`
-/// (`:900-903`) the two palettes.
-const ROOTS: [Root; 14] = [
+/// (`src/data/party_menu.h:839-842`), `sSpriteSheet_MenuPokeball` (`:895-898`)
+/// and `sSpriteSheet_MenuPokeballSmall` (`:981-984`) are the records that name
+/// the three sheets, and `sSpritePalette_HeldItem` (`:844-847`) and
+/// `sSpritePalette_MenuPokeball` (`:900-903`) the two palettes.
+const ROOTS: [Root; 15] = [
     root(
         "party-menu/image/bg",
         Shape::Image {
@@ -197,6 +201,20 @@ const ROOTS: [Root; 14] = [
         Some(Record::Sheet {
             size: 64,
             tag: HELD_ITEM_TAG,
+        }),
+    ),
+    root(
+        "party-menu/image/pokeball_small",
+        Shape::Image {
+            width: 16,
+            height: 96,
+            tiles: 24,
+        },
+        Encoding::Lz77,
+        Declaration::Global("gPartyMenuPokeballSmall_Gfx"),
+        Some(Record::Sheet {
+            size: 0x300,
+            tag: POKEBALL_SMALL_TAG,
         }),
     ),
     root(
@@ -403,7 +421,7 @@ fn validate_shapes(ctx: &Context<'_>) -> Result<(), GenRomProfileError> {
 
 /// Every address each root's bytes turn up at, in [`ROOTS`] order, ascending.
 ///
-/// One raw and one LZ77 pass cover all fourteen. Uncapped, so a sheet copied
+/// One raw and one LZ77 pass cover all fifteen. Uncapped, so a sheet copied
 /// more often than the usual cap still shows the copy its record names.
 fn find_copies(ctx: &Context<'_>) -> Result<Vec<Vec<u32>>, GenRomProfileError> {
     let mut copies = vec![Vec::new(); ROOTS.len()];
