@@ -69,6 +69,9 @@ impl std::error::Error for ScriptError {}
 #[derive(Debug)]
 enum Mode<H> {
     Stopped,
+    /// Held while a native or gate step runs, so `run` can tell whether the step
+    /// replaced the mode through the context it was handed.
+    InStep,
     Bytecode,
     Native(NativeStep<H>),
     Gate(NativeStep<H>),
@@ -305,22 +308,37 @@ impl<'commands, 'script, H> ScriptContext<'commands, 'script, H> {
     /// Returns `true` while work remains. Native mode always yields for one
     /// call; matching `RunScriptCommand` in `pokeemerald/src/script.c`, a
     /// completed native step resumes bytecode on the next call, while a ready
-    /// gate resumes it in this one ([`setup_gate`](Self::setup_gate)).
+    /// gate resumes it in this one ([`setup_gate`](Self::setup_gate)). A step
+    /// that changes the mode itself, by stopping or installing another step,
+    /// keeps that change instead of resuming bytecode.
     /// Exhausted bytecode and unknown opcodes stop execution and return `false`.
     pub fn run(&mut self, host: &mut H) -> bool {
         match self.mode {
             Mode::Stopped => false,
+            Mode::InStep => false,
             Mode::Native(step) => {
-                if step(self, host) {
-                    self.mode = Mode::Bytecode;
+                self.mode = Mode::InStep;
+                let ready = step(self, host);
+                if matches!(self.mode, Mode::InStep) {
+                    self.mode = if ready {
+                        Mode::Bytecode
+                    } else {
+                        Mode::Native(step)
+                    };
                 }
                 true
             }
             Mode::Gate(step) => {
-                if step(self, host) {
+                self.mode = Mode::InStep;
+                let ready = step(self, host);
+                if !matches!(self.mode, Mode::InStep) {
+                    return !self.is_stopped();
+                }
+                if ready {
                     self.mode = Mode::Bytecode;
                     self.run(host)
                 } else {
+                    self.mode = Mode::Gate(step);
                     true
                 }
             }
@@ -711,6 +729,133 @@ mod tests {
             "still yields on the call that finishes the step"
         );
         assert!(context.run(&mut host), "bytecode command yields");
+    }
+
+    fn step_never_ready(_ctx: &mut ScriptContext<'_, '_, TestHost>, _host: &mut TestHost) -> bool {
+        false
+    }
+
+    #[test]
+    fn native_step_that_stops_the_context_stays_stopped() {
+        fn step_stop_then_ready(
+            ctx: &mut ScriptContext<'_, '_, TestHost>,
+            _host: &mut TestHost,
+        ) -> bool {
+            ctx.stop();
+            true
+        }
+        fn step_stop_not_ready(
+            ctx: &mut ScriptContext<'_, '_, TestHost>,
+            _host: &mut TestHost,
+        ) -> bool {
+            ctx.stop();
+            false
+        }
+        let commands: &[Command<TestHost>] = &[command_yield];
+        let bytecode = [0u8];
+        let mut host = TestHost::default();
+
+        for step in [step_stop_then_ready, step_stop_not_ready] {
+            let mut context = ScriptContext::new(commands);
+            context.setup_bytecode(&bytecode);
+            context.setup_native(step);
+            assert!(context.run(&mut host), "native mode always yields");
+            assert!(context.is_stopped(), "stop() inside the step was lost");
+            assert!(!context.run(&mut host));
+        }
+    }
+
+    #[test]
+    fn native_step_that_installs_another_wait_keeps_it() {
+        fn step_rearm_then_ready(
+            ctx: &mut ScriptContext<'_, '_, TestHost>,
+            _host: &mut TestHost,
+        ) -> bool {
+            ctx.setup_gate(step_never_ready);
+            true
+        }
+        let commands: &[Command<TestHost>] = &[command_yield];
+        let bytecode = [0u8];
+        let mut host = TestHost::default();
+        let mut context = ScriptContext::new(commands);
+        context.setup_bytecode(&bytecode);
+        context.setup_native(step_rearm_then_ready);
+
+        assert!(context.run(&mut host));
+        assert!(context.run(&mut host), "installed gate still blocks");
+        assert_eq!(context.cursor(), Some(&bytecode[..]), "bytecode did not run");
+    }
+
+    #[test]
+    fn gate_step_that_installs_another_gate_keeps_it() {
+        fn gate_rearm_then_ready(
+            ctx: &mut ScriptContext<'_, '_, TestHost>,
+            _host: &mut TestHost,
+        ) -> bool {
+            ctx.setup_gate(step_never_ready);
+            true
+        }
+        let commands: &[Command<TestHost>] = &[command_yield];
+        let bytecode = [0u8];
+        let mut host = TestHost::default();
+        let mut context = ScriptContext::new(commands);
+        context.setup_bytecode(&bytecode);
+        context.setup_gate(gate_rearm_then_ready);
+
+        assert!(context.run(&mut host));
+        assert_eq!(context.cursor(), Some(&bytecode[..]), "bytecode ran early");
+        assert!(context.run(&mut host), "installed gate still blocks");
+        assert_eq!(context.cursor(), Some(&bytecode[..]));
+    }
+
+    #[test]
+    fn gate_step_that_stops_the_context_reports_no_work_left() {
+        fn gate_stop_then_ready(
+            ctx: &mut ScriptContext<'_, '_, TestHost>,
+            _host: &mut TestHost,
+        ) -> bool {
+            ctx.stop();
+            true
+        }
+        fn gate_stop_not_ready(
+            ctx: &mut ScriptContext<'_, '_, TestHost>,
+            _host: &mut TestHost,
+        ) -> bool {
+            ctx.stop();
+            false
+        }
+        let commands: &[Command<TestHost>] = &[command_yield];
+        let bytecode = [0u8];
+        let mut host = TestHost::default();
+
+        for gate in [gate_stop_then_ready, gate_stop_not_ready] {
+            let mut context = ScriptContext::new(commands);
+            context.setup_bytecode(&bytecode);
+            context.setup_gate(gate);
+            assert!(!context.run(&mut host));
+            assert!(context.is_stopped());
+        }
+    }
+
+    #[test]
+    fn unready_native_and_gate_steps_keep_polling() {
+        let commands: &[Command<TestHost>] = &[command_yield];
+        let bytecode = [0u8];
+        let mut host = TestHost::default();
+
+        let mut native = ScriptContext::new(commands);
+        native.setup_bytecode(&bytecode);
+        native.setup_native(step_never_ready);
+        assert!(native.run(&mut host));
+        assert!(native.run(&mut host));
+        assert_eq!(native.cursor(), Some(&bytecode[..]));
+
+        let mut gate = ScriptContext::new(commands);
+        gate.setup_bytecode(&bytecode);
+        gate.setup_gate(step_never_ready);
+        assert!(gate.run(&mut host));
+        assert!(gate.run(&mut host));
+        assert_eq!(gate.cursor(), Some(&bytecode[..]));
     }
 
     #[test]
