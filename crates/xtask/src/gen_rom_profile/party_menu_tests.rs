@@ -8,8 +8,8 @@ use rom_import::fixture::RomFixture;
 use rom_import::Encoding;
 
 use super::{
-    locate, Root, Shape, HELD_ITEM_TAG, POKEBALL_SMALL_TAG, POKEBALL_TAG, ROOTS, SHEET_SIZE_FIELD,
-    SHEET_TAG_FIELD,
+    locate, Record, Root, Shape, HELD_ITEM_TAG, PALETTE_TAG_FIELD, POKEBALL_SMALL_TAG,
+    POKEBALL_TAG, ROOTS, SHEET_SIZE_FIELD, SHEET_TAG_FIELD,
 };
 use crate::extract::scope::party_menu_ids;
 use crate::gen_rom_profile::error::GenRomProfileError;
@@ -29,6 +29,8 @@ const POKEBALL_SHEET: usize = 1;
 const HELD_ITEM_SHEET: usize = 2;
 const SMALL_SHEET: usize = 3;
 const BG_PALETTE: usize = 4;
+const POKEBALL_PALETTE: usize = 5;
+const HELD_ITEM_PALETTE: usize = 6;
 const BG_MAP: usize = 7;
 const SLOT_MAIN: usize = 8;
 const CONFIRM_MAP: usize = 13;
@@ -104,8 +106,26 @@ fn record(data: u32, size: u16, tag: u16) -> Vec<u8> {
 
 /// The record upstream writes for sheet `index`, naming `target`.
 fn sheet_record(index: usize, target: usize) -> Vec<u8> {
-    let named = ROOTS[index].record.expect("a sheet with a record");
-    record(bus(target), named.size, named.tag)
+    let Some(Record::Sheet { size, tag }) = ROOTS[index].record else {
+        panic!("{} has no sprite-sheet record", ROOTS[index].id);
+    };
+    record(bus(target), size, tag)
+}
+
+/// The `{data, tag}` record (padded to eight bytes) naming `target` under `tag`.
+fn palette_record(target: usize, tag: u16) -> Vec<u8> {
+    let mut row = bus(target).to_le_bytes().to_vec();
+    row.extend_from_slice(&tag.to_le_bytes());
+    row.extend_from_slice(&0u16.to_le_bytes());
+    row
+}
+
+/// The record upstream writes for palette `index`, naming `target`.
+fn named_palette_record(index: usize, target: usize) -> Vec<u8> {
+    let Some(Record::Palette { tag }) = ROOTS[index].record else {
+        panic!("{} has no sprite-palette record", ROOTS[index].id);
+    };
+    palette_record(target, tag)
 }
 
 /// Every root in the ROM, with no sprite-sheet record yet.
@@ -122,12 +142,21 @@ const fn record_slot(index: usize) -> usize {
     RECORDS + index * 0x100
 }
 
-/// Every root, and the records naming the three witnessed sheets.
+/// Every root, and the records naming the three witnessed sheets and the two
+/// palettes.
 fn fixture() -> RomFixture {
-    [HELD_ITEM_SHEET, POKEBALL_SHEET, SMALL_SHEET]
+    let fixture = [HELD_ITEM_SHEET, POKEBALL_SHEET, SMALL_SHEET]
         .into_iter()
         .fold(bare(), |fixture, index| {
             fixture.write(record_slot(index), &sheet_record(index, offset_of(index)))
+        });
+    [HELD_ITEM_PALETTE, POKEBALL_PALETTE]
+        .into_iter()
+        .fold(fixture, |fixture, index| {
+            fixture.write(
+                record_slot(index),
+                &named_palette_record(index, offset_of(index)),
+            )
         })
 }
 
@@ -280,15 +309,15 @@ fn the_report_names_what_a_map_can_and_cannot_confirm() {
 }
 
 #[test]
-fn each_sheet_is_settled_by_its_record_and_the_rest_by_their_bytes() {
+fn each_sheet_and_palette_is_settled_by_its_record_and_the_rest_by_their_bytes() {
     let rom = fixture().finish();
     with_context("party-menu-resolution", &rom, entries(), |ctx| {
         let mut report = Vec::new();
         locate(ctx, &mut report).expect("located");
         for line in &report {
             let expected = if ["pokeball", "hold_icons", "pokeball_small"]
-                .map(|stem| format!("party-menu/image/{stem}"))
-                .contains(&line.id)
+                .iter()
+                .any(|stem| line.id.ends_with(&format!("/{stem}")))
             {
                 Resolution::StructDerived
             } else {
@@ -350,17 +379,23 @@ fn a_record_naming_the_lowest_copy_leaves_the_higher_one_unchosen() {
 
 #[test]
 fn a_pointer_without_the_whole_record_names_nothing() {
-    let named = ROOTS[HELD_ITEM_SHEET].record.unwrap();
+    let Some(Record::Sheet {
+        size: named_size,
+        tag: named_tag,
+    }) = ROOTS[HELD_ITEM_SHEET].record
+    else {
+        panic!("a sheet record");
+    };
     let target = bus(offset_of(HELD_ITEM_SHEET));
     // The default record, overwritten by each decoy in turn.
     let mut shifted = target.to_le_bytes().to_vec();
     shifted.extend_from_slice(&[0, 0]);
-    shifted.extend_from_slice(&named.size.to_le_bytes());
-    shifted.extend_from_slice(&named.tag.to_le_bytes());
+    shifted.extend_from_slice(&named_size.to_le_bytes());
+    shifted.extend_from_slice(&named_tag.to_le_bytes());
     for (label, decoy) in [
         ("no record", vec![0; 8]),
-        ("wrong size", record(target, named.size + 32, named.tag)),
-        ("wrong tag", record(target, named.size, named.tag + 1)),
+        ("wrong size", record(target, named_size + 32, named_tag)),
+        ("wrong tag", record(target, named_size, named_tag + 1)),
         // The size and tag follow the pointer, but not at the offsets of a
         // sprite-sheet record.
         ("shifted fields", shifted),
@@ -380,18 +415,19 @@ fn a_pointer_without_the_whole_record_names_nothing() {
 
 #[test]
 fn the_small_ball_needs_its_own_size_and_tag_not_the_big_balls() {
-    let named = ROOTS[SMALL_SHEET].record.unwrap();
+    let sheet = |index: usize| match ROOTS[index].record {
+        Some(Record::Sheet { size, tag }) => (size, tag),
+        _ => panic!("{} has a sprite-sheet record", ROOTS[index].id),
+    };
+    let (size, tag) = sheet(SMALL_SHEET);
     let target = bus(offset_of(SMALL_SHEET));
-    let big = ROOTS[POKEBALL_SHEET].record.unwrap();
+    let (big_size, _) = sheet(POKEBALL_SHEET);
     for (label, decoy) in [
         ("no record", vec![0; 8]),
-        ("wrong size", record(target, named.size + 32, named.tag)),
+        ("wrong size", record(target, size + 32, tag)),
         // Both balls load through one function and differ only in tag.
-        (
-            "the big ball's tag",
-            record(target, named.size, POKEBALL_TAG),
-        ),
-        ("the big ball's size", record(target, big.size, named.tag)),
+        ("the big ball's tag", record(target, size, POKEBALL_TAG)),
+        ("the big ball's size", record(target, big_size, tag)),
     ] {
         let rom = fixture().write(record_slot(SMALL_SHEET), &decoy).finish();
         with_context("party-menu-small-decoy", &rom, entries(), |ctx| {
@@ -435,15 +471,157 @@ fn two_copies_both_named_by_a_record_settle_nothing() {
 }
 
 #[test]
+fn a_palette_record_naming_the_higher_identical_copy_settles_it() {
+    // `sSpritePalette_MenuPokeball` and `sSpritePalette_HeldItem` are
+    // `{data, tag}` records (`src/data/party_menu.h:844-847`, `:900-903`).
+    for (index, tag) in [
+        (POKEBALL_PALETTE, POKEBALL_TAG),
+        (HELD_ITEM_PALETTE, HELD_ITEM_TAG),
+    ] {
+        let rom = fixture()
+            .write(STRAY, &stored(&ROOTS[index], &content(index)))
+            .write(
+                RECORDS + 0x1000 + index * 0x100,
+                &palette_record(offset_of(index), tag),
+            )
+            .finish();
+        with_context("party-menu-palette-record", &rom, entries(), |ctx| {
+            let mut report = Vec::new();
+            let plan = locate(ctx, &mut report).expect("located");
+            let found = line(&report, ROOTS[index].id);
+            assert_eq!(
+                (found.addr, found.resolution),
+                (bus(offset_of(index)), Resolution::StructDerived),
+                "{}: note {:?}",
+                ROOTS[index].id,
+                found.note
+            );
+            assert!(found.note.as_deref().unwrap().contains("2 addresses"));
+            let palette = plan
+                .palettes
+                .iter()
+                .find(|p| p.id == ROOTS[index].id)
+                .unwrap();
+            assert_eq!(palette.addr, bus(offset_of(index)));
+        });
+    }
+}
+
+#[test]
+fn a_palette_record_naming_the_lowest_copy_leaves_the_higher_one_unchosen() {
+    for index in [POKEBALL_PALETTE, HELD_ITEM_PALETTE] {
+        let rom = fixture()
+            .write(STRAY, &stored(&ROOTS[index], &content(index)))
+            .write(record_slot(index), &named_palette_record(index, STRAY))
+            .finish();
+        with_context("party-menu-palette-low", &rom, entries(), |ctx| {
+            let mut report = Vec::new();
+            locate(ctx, &mut report).expect("located");
+            let found = line(&report, ROOTS[index].id);
+            assert_eq!(
+                (found.addr, found.resolution),
+                (bus(STRAY), Resolution::StructDerived)
+            );
+        });
+    }
+}
+
+#[test]
+fn a_palette_record_with_the_wrong_tag_names_nothing() {
+    for index in [POKEBALL_PALETTE, HELD_ITEM_PALETTE] {
+        let Some(Record::Palette { tag }) = ROOTS[index].record else {
+            panic!("a palette with a record");
+        };
+        // The other palette's tag, the sheet's tag moved, and a near miss.
+        for wrong in [
+            if tag == POKEBALL_TAG {
+                HELD_ITEM_TAG
+            } else {
+                POKEBALL_TAG
+            },
+            tag + 1,
+            0,
+        ] {
+            let rom = fixture()
+                .write(record_slot(index), &palette_record(offset_of(index), wrong))
+                .finish();
+            with_context("party-menu-palette-tag", &rom, entries(), |ctx| {
+                let err = locate(ctx, &mut Vec::new()).unwrap_err();
+                assert_struct_mismatch(&err, ROOTS[index].id);
+            });
+        }
+    }
+}
+
+#[test]
+fn a_palette_without_a_record_is_not_settled_even_when_stored_once() {
+    for index in [POKEBALL_PALETTE, HELD_ITEM_PALETTE] {
+        let rom = fixture().write(record_slot(index), &[0; 8]).finish();
+        with_context("party-menu-palette-bare", &rom, entries(), |ctx| {
+            let err = locate(ctx, &mut Vec::new()).unwrap_err();
+            assert_struct_mismatch(&err, ROOTS[index].id);
+        });
+    }
+}
+
+#[test]
+fn two_palette_records_that_disagree_settle_nothing() {
+    // One record names the real copy and another names a stray, both with the
+    // right tag.
+    for index in [POKEBALL_PALETTE, HELD_ITEM_PALETTE] {
+        let rom = fixture()
+            .write(STRAY, &stored(&ROOTS[index], &content(index)))
+            .write(
+                RECORDS + 0x1000 + index * 0x100,
+                &named_palette_record(index, STRAY),
+            )
+            .finish();
+        with_context("party-menu-palette-disagree", &rom, entries(), |ctx| {
+            let err = locate(ctx, &mut Vec::new()).unwrap_err();
+            assert_struct_mismatch(&err, ROOTS[index].id);
+        });
+    }
+}
+
+#[test]
+fn a_palette_record_tag_field_is_where_upstream_puts_it() {
+    // A tag at the sprite-sheet offset (past the padding) is not the record.
+    let index = HELD_ITEM_PALETTE;
+    let mut shifted = bus(offset_of(index)).to_le_bytes().to_vec();
+    shifted.extend_from_slice(&[0, 0]);
+    shifted.extend_from_slice(&HELD_ITEM_TAG.to_le_bytes());
+    let rom = fixture().write(record_slot(index), &shifted).finish();
+    with_context("party-menu-palette-shifted", &rom, entries(), |ctx| {
+        let err = locate(ctx, &mut Vec::new()).unwrap_err();
+        assert_struct_mismatch(&err, ROOTS[index].id);
+    });
+}
+
+#[test]
 fn the_record_size_and_tag_are_the_ones_upstream_writes() {
-    assert_eq!(ROOTS[HELD_ITEM_SHEET].record.unwrap().tag, HELD_ITEM_TAG);
+    let tag_of = |index: usize| match ROOTS[index].record {
+        Some(Record::Sheet { tag, .. } | Record::Palette { tag }) => tag,
+        None => panic!("{} has a record", ROOTS[index].id),
+    };
+    assert_eq!(tag_of(HELD_ITEM_SHEET), HELD_ITEM_TAG);
+    assert_eq!(tag_of(HELD_ITEM_PALETTE), HELD_ITEM_TAG);
     assert_eq!(HELD_ITEM_TAG, 55120);
-    assert_eq!(ROOTS[POKEBALL_SHEET].record.unwrap().size, 0x400);
+    let Some(Record::Sheet { size, .. }) = ROOTS[POKEBALL_SHEET].record else {
+        panic!("a sheet record");
+    };
+    assert_eq!(size, 0x400);
+    assert_eq!(tag_of(POKEBALL_PALETTE), POKEBALL_TAG);
     assert_eq!(POKEBALL_TAG, 1200);
-    assert_eq!(ROOTS[SMALL_SHEET].record.unwrap().size, 0x300);
-    assert_eq!(ROOTS[SMALL_SHEET].record.unwrap().tag, POKEBALL_SMALL_TAG);
+    let Some(Record::Sheet { size, .. }) = ROOTS[SMALL_SHEET].record else {
+        panic!("a sheet record");
+    };
+    assert_eq!(size, 0x300);
+    assert_eq!(tag_of(SMALL_SHEET), POKEBALL_SMALL_TAG);
     assert_eq!(POKEBALL_SMALL_TAG, 1201);
-    assert_eq!((SHEET_SIZE_FIELD, SHEET_TAG_FIELD), (4, 6));
+    assert_eq!(
+        (SHEET_SIZE_FIELD, SHEET_TAG_FIELD, PALETTE_TAG_FIELD),
+        (4, 6, 4)
+    );
 }
 
 #[test]

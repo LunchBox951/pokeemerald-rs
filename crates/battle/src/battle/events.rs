@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt;
 
 use assets::items::ItemId;
-use assets::{AbilityId, Effectiveness, MoveId, SpeciesId};
+use assets::{AbilityId, Effectiveness, MoveId, SpeciesId, Type};
 
 use crate::error::BattleError;
 use crate::stat_change::ChangedStat;
@@ -63,6 +63,21 @@ pub enum BattleEvent {
     /// every later draw do not run for the action.
     LoafingAround {
         /// Whether the player's battler loafed.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// A flinched battler lost its action: `CANCELER_FLINCH` consumed the
+    /// flag and cancelled the chosen move before any PP was spent
+    /// (`BattleScript_MoveUsedFlinched`, `src/battle_util.c:2110`-`:2121`;
+    /// `STRINGID_PKMNFLINCHED`).
+    ///
+    /// Sleep, freeze and Truant are checked first; the confusion and
+    /// paralysis cancellers and every later draw do not run for the action.
+    /// `by_player` names the cancelled battler and `move_id` its cancelled
+    /// move, not the move that caused the flinch.
+    Flinched {
+        /// Whether the player's battler flinched.
         by_player: bool,
         /// The move that was never attempted.
         move_id: MoveId,
@@ -256,13 +271,15 @@ pub enum BattleEvent {
         /// move without boosting (`B_MSG_FLASH_FIRE_NO_BOOST`).
         boosted: bool,
     },
-    /// A move dealt damage.
+    /// A move connected. A False Swipe that connects with a target at one HP
+    /// removes none (`damage` is zero).
     Hit {
         /// Whether the player used the move.
         by_player: bool,
         /// The move that dealt damage.
         move_id: MoveId,
-        /// HP removed from the target, capped at its HP before the hit.
+        /// HP removed from the target, capped at its HP before the hit (and at
+        /// one HP fewer for False Swipe).
         damage: u32,
         /// Whether the hit was critical.
         is_critical: bool,
@@ -337,6 +354,39 @@ pub enum BattleEvent {
         by_player: bool,
         /// The move that failed.
         move_id: MoveId,
+    },
+    /// Yawn left its target drowsy (`STRINGID_PKMNWASMADEDROWSY`,
+    /// `BattleScript_EffectYawn`, `data/battle_scripts_1.s:2451`-`:2473`).
+    /// Sleep follows at the end of the target's second turn tick unless a
+    /// status or sleep-preventing ability intervenes, with no further event.
+    MadeDrowsy {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that applied the effect.
+        move_id: MoveId,
+    },
+    /// The target's Insomnia or Vital Spirit made Yawn ineffective
+    /// (`STRINGID_PKMNSXMADEITINEFFECTIVE`,
+    /// `BattleScript_PrintBankAbilityMadeIneffective`,
+    /// `data/battle_scripts_1.s:2455`-`:2456`, `:2467`-`:2473`). The script
+    /// checks the ability before any status, so it wins over an existing
+    /// status or drowsiness, which fail with [`BattleEvent::ButItFailed`].
+    YawnAbilityProtected {
+        /// Whether the player used the move; the ability belongs to the other
+        /// side.
+        by_player: bool,
+        /// The move that was made ineffective.
+        move_id: MoveId,
+        /// The target's ability that prevented the drowsiness.
+        ability: AbilityId,
+    },
+    /// Yawn's drowsiness expired and the battler fell asleep
+    /// (`STRINGID_PKMNFELLASLEEP`, `BattleScript_YawnMakesAsleep`,
+    /// `data/battle_scripts_1.s:3878`-`:3885`; `ENDTURN_YAWN`,
+    /// `src/battle_util.c:1753`-`:1771`). Refused expiry emits nothing.
+    FellAsleepFromYawn {
+        /// Whether the player's battler fell asleep.
+        by_player: bool,
     },
     /// A move started or refreshed its user's Charge effect.
     ChargingPower {
@@ -612,6 +662,66 @@ pub enum BattleEvent {
         /// The contact move that triggered Cute Charm.
         move_id: MoveId,
     },
+    /// The target's [`AbilityId::FLAME_BODY`] burned the attacker after a
+    /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
+    /// `battle_script_commands.c:4280`; `ABILITY_FLAME_BODY`,
+    /// `battle_util.c:2836`-`:2850`; `STATUS1_BURN`,
+    /// `battle_script_commands.c:2341`-`:2379`).
+    ///
+    /// The roll is one `Random() % 3` draw taken after the target's faint
+    /// settlement, whether or not the holder survived the hit; only a zero
+    /// roll on an attacker that the burn guards allow emits this event. A
+    /// Fire type, Water Veil and an existing primary status keep the attacker
+    /// unchanged and emit nothing.
+    BurnedByFlameBody {
+        /// Whether the player used the contact move and so was burned.
+        by_player: bool,
+        /// The contact move that triggered Flame Body.
+        move_id: MoveId,
+    },
+    /// A [`BattleEvent::BurnedByFlameBody`] burn on the attacker was reflected
+    /// by the attacker's own Synchronize onto the surviving holder
+    /// (`MOVEEND_SYNCHRONIZE_ATTACKER`, `battle_script_commands.c:4291`-
+    /// `:4294`; `ABILITYEFFECT_ATK_SYNCHRONIZE`, `battle_util.c:2987`-`:3001`).
+    ///
+    /// This follows the burn event it reflects and consumes no RNG.
+    BurnedByAttackerSynchronize {
+        /// Whether the player used the contact move; the opposing holder is
+        /// the battler burned.
+        by_player: bool,
+        /// The contact move that triggered Flame Body.
+        move_id: MoveId,
+    },
+    /// An attacker's Synchronize reflected a Flame Body burn (see
+    /// [`BattleEvent::BurnedByAttackerSynchronize`]), and the holder's own
+    /// Fire typing protected it (`BattleScript_BRNPrevention`,
+    /// `battle_script_commands.c:2361`-`:2370`).
+    ///
+    /// This follows the burn event it reflects.
+    AttackerSynchronizeFireTypeProtected {
+        /// Whether the player used the contact move; the opposing holder was
+        /// the protected battler.
+        by_player: bool,
+        /// The contact move that triggered Flame Body.
+        move_id: MoveId,
+    },
+    /// The holder's [`AbilityId::COLOR_CHANGE`] changed both of its types to
+    /// the type of the damaging move that just hit it and left it standing
+    /// (`BattleScript_ColorChangeActivates`, `data/battle_scripts_1.s:4179`-
+    /// `:4182`; `battle_util.c:2749`-`:2766`).
+    ///
+    /// It follows the [`BattleEvent::Hit`] that caused it, so a multi-hit move
+    /// emits it between the strikes it affects, and it is absent when the
+    /// holder already had that type. No `Random()` call is made.
+    TypeChanged {
+        /// Whether the player used the damaging move; the holder is the
+        /// other side.
+        by_player: bool,
+        /// The damaging move whose type the holder took.
+        move_id: MoveId,
+        /// The holder's new type in both slots.
+        new_type: Type,
+    },
     /// The target's [`AbilityId::POISON_POINT`] poisoned the attacker after a
     /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
     /// `battle_script_commands.c:4280`; `ABILITY_POISON_POINT`,
@@ -811,6 +921,18 @@ pub enum BattleEvent {
         /// The primary status Shed Skin cured.
         status: Status1,
     },
+    /// `STRINGID_PKMNRAISEDSPEED`, `BattleScript_SpeedBoostActivates`
+    /// (`data/battle_scripts_1.s:3965-3969`): a living Speed Boost holder
+    /// below +6 raised its own Speed stage by one at its `ENDTURN_ABILITIES`
+    /// position, with no RNG draw (`pokeemerald/src/battle_util.c:2642-2652`).
+    /// Nothing is reported for a holder already at +6 or one whose first-turn
+    /// counter still suppresses the ability.
+    SpeedBoostActivated {
+        /// Whether the player's battler is the holder.
+        by_player: bool,
+        /// The holder's Speed stage after the boost.
+        new_stage: StatStage,
+    },
     /// A trainer sent out a party member: the forced replacement after a
     /// faint, or a prechosen voluntary switch.
     TrainerSentOut {
@@ -827,6 +949,21 @@ pub enum BattleEvent {
         species: SpeciesId,
         /// Usable (non-fainted) reserves remaining after the replacement.
         reserves_remaining: usize,
+    },
+    /// A queued Trace holder copied the opposing battler's ability:
+    /// `BattleScript_TraceActivates` (`data/battle_scripts_1.s:3971`-`:3975`),
+    /// whose `STRINGID_PKMNTRACED` names the copied-from battler and ability
+    /// (`src/battle_util.c:3017`-`:3069`).
+    ///
+    /// This follows the entry that queued the activation: the battle's first
+    /// turn events for the initial entrants, or the replacement's send-out
+    /// event after a faint. The copy draws no RNG.
+    TracedAbility {
+        /// Whether the player's battler is the Trace holder. The copied-from
+        /// battler is the other side.
+        by_player: bool,
+        /// The ability the holder now has.
+        ability: AbilityId,
     },
     /// The full experience award after the opposing battler fainted.
     ///

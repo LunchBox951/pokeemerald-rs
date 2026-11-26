@@ -606,6 +606,36 @@ fn real_pack_down_arrow_frames_bob_the_arrow_up_one_row_at_a_time() {
 
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_dark_down_arrow_bobs_like_the_light_one_in_its_own_indices() {
+    // `down_arrow_alt.png` paints the same arrow at sheet row 5, in palette
+    // indices 0, 1 and 2; the blit windows start at rows 0, 1, 2, 1.
+    const FIRST_ARROW_ROW: usize = 5;
+    const FRAME_START_ROWS: [usize; 4] = [0, 1, 2, 1];
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    let dark = pack
+        .text_printer_dark_down_arrow()
+        .expect("the dark down arrow");
+    let light = pack.text_printer_down_arrow().expect("the down arrow");
+
+    for (index, start) in FRAME_START_ROWS.into_iter().enumerate() {
+        let frame = dark.frame(u8::try_from(index).unwrap());
+        assert_eq!((frame.width, frame.height, frame.bit_depth), (8, 16, 4));
+        let first_painted_row = frame
+            .pixels
+            .chunks_exact(8)
+            .position(|row| row.iter().any(|&pixel| pixel != 0));
+        assert_eq!(first_painted_row, Some(FIRST_ARROW_ROW - start), "{index}");
+        assert!(frame.pixels.iter().all(|pixel| [0, 1, 2].contains(pixel)));
+        assert_ne!(
+            frame.pixels,
+            light.frame(u8::try_from(index).unwrap()).pixels
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_party_menu_has_every_record_in_its_upstream_shape() {
     use crate::{PartyMenuButton, PartyMenuSlot};
     let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");

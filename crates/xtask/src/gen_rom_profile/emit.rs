@@ -10,7 +10,9 @@ use super::plan::{
     OpeningScenePlan, PalettePlan, PartyMenuPlan, ProfilePlan, ReportLine, Resolution,
     StarterChooserPlan, TileAnimPlan, TilesetPlan,
 };
-use super::plan::{TrainerBattlerPlan, TrainerFrontPlan};
+use super::plan::{
+    TrainerBattlerPlan, TrainerClassNamePlan, TrainerDefeatSpeechPlan, TrainerFrontPlan,
+};
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
 ///
@@ -78,7 +80,7 @@ use crate::roots::{{
     KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PartyMenuRoots,
     PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    TrainerDefeatSpeechRoot, VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
 use crate::roots::{{TrainerFrontRoot, TrainerFrontRoots}};
@@ -137,6 +139,8 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
     field_message_roots(&mut out, &plan.field_messages);
+    trainer_defeat_speech_roots(&mut out, &plan.trainer_defeat_speeches);
+    trainer_class_name_roots(&mut out, &plan.trainer_class_names);
     battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
@@ -359,6 +363,11 @@ fn sprite_roots(out: &mut String, plan: &ProfilePlan) {
     );
     image_slice(out, "        ", "sheets", &sprites.sheets);
     palette_slice(out, "        ", &sprites.palettes);
+    let _ = writeln!(out, "        field_effect_palettes: &[");
+    for palette in &sprites.field_effect_palettes {
+        let _ = writeln!(out, "            {},", palette_root(palette));
+    }
+    let _ = writeln!(out, "        ],");
     let _ = writeln!(out, "    }},");
 }
 
@@ -491,6 +500,31 @@ fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
     }
     let _ = writeln!(out, "        ],");
     let _ = writeln!(out, "    }},");
+}
+
+fn trainer_defeat_speech_roots(out: &mut String, speeches: &TrainerDefeatSpeechPlan) {
+    let _ = writeln!(out, "    trainer_defeat_speeches: &[");
+    for speech in &speeches.speeches {
+        let script = speech.script.map_or_else(
+            || "None".to_owned(),
+            |script| format!("Some({})", gba_ptr_expression(script)),
+        );
+        let _ = writeln!(
+            out,
+            "        TrainerDefeatSpeechRoot {{ symbol: {:?}, addr: {}, script: {script} }},",
+            speech.symbol,
+            gba_ptr_expression(speech.addr)
+        );
+    }
+    let _ = writeln!(out, "    ],");
+}
+
+fn trainer_class_name_roots(out: &mut String, names: &TrainerClassNamePlan) {
+    let _ = writeln!(
+        out,
+        "    trainer_class_names: Some({}),",
+        gba_ptr_expression(names.addr)
+    );
 }
 
 fn field_message_roots(out: &mut String, messages: &FieldMessagePlan) {
@@ -721,6 +755,19 @@ mod tests {
     }
 
     #[test]
+    fn the_trainer_class_name_root_renders_as_one_present_address() {
+        use super::trainer_class_name_roots;
+        use crate::gen_rom_profile::plan::TrainerClassNamePlan;
+
+        let mut out = String::new();
+        trainer_class_name_roots(&mut out, &TrainerClassNamePlan { addr: 0x083C_4E10 });
+        assert_eq!(
+            out,
+            "    trainer_class_names: Some(GbaPtr::at(0x083C_4E10)),\n"
+        );
+    }
+
+    #[test]
     fn battle_message_roots_render_one_address_per_line() {
         use super::battle_message_roots;
         use crate::gen_rom_profile::plan::{BattleMessagePlan, SpecialMessagePlan};
@@ -921,7 +968,8 @@ mod bag_field_tests {
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
         BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, InterfacePlan,
         NamingScreenPlan, OpeningScenePlan, PalettePlan, PartyMenuPlan, ProfilePlan, SpritePlan,
-        StarterChooserPlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan, TrainerFrontPlan,
+        StarterChooserPlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan,
+        TrainerClassNamePlan, TrainerDefeatSpeechPlan, TrainerFrontPlan,
     };
     use rom_import::Encoding;
 
@@ -1261,6 +1309,27 @@ mod bag_field_tests {
         assert!(!module.contains("BattleInterfaceRoots::NONE"), "{module}");
     }
 
+    fn sprites_plan(base: u32) -> SpritePlan {
+        SpritePlan {
+            palette_table: base,
+            sheets: vec![],
+            palettes: vec![],
+            field_effect_palettes: vec![PalettePlan {
+                id: "field-effect/palette/general_1".to_owned(),
+                addr: 0x0850_0000,
+                color_count: 16,
+                encoding: Encoding::Raw,
+            }],
+        }
+    }
+
+    fn assert_field_effect_palette_root(module: &str) {
+        assert!(
+            module.contains("        field_effect_palettes: &[\n            PaletteRoot { id: \"field-effect/palette/general_1\", addr: GbaPtr::at(0x0850_0000), color_count: 16, encoding: Encoding::Raw },\n        ],"),
+            "{module}"
+        );
+    }
+
     fn assert_chooser_roots(module: &str) {
         assert!(
             module.contains("    starter_chooser: StarterChooserRoots {"),
@@ -1327,9 +1396,13 @@ mod bag_field_tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "one field per profile family")]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
+        let front_plan = || TrainerFrontPlan {
+            front_table: base,
+            palette_table: base,
+            trainers: vec![],
+        };
         let plan = ProfilePlan {
             tilesets: vec![],
             title_screen: TitleScreenPlan {
@@ -1338,11 +1411,7 @@ mod bag_field_tests {
                 palettes: vec![],
                 bg_palettes: base,
             },
-            sprites: SpritePlan {
-                palette_table: base,
-                sheets: vec![],
-                palettes: vec![],
-            },
+            sprites: sprites_plan(base),
             layouts: vec![],
             fonts: vec![],
             font_images: vec![],
@@ -1366,6 +1435,8 @@ mod bag_field_tests {
                 specials: vec![],
             },
             field_messages: FieldMessagePlan { messages: vec![] },
+            trainer_defeat_speeches: TrainerDefeatSpeechPlan { speeches: vec![] },
+            trainer_class_names: TrainerClassNamePlan { addr: base },
             battle_anims: BattleAnimationPlan {
                 tables: [base; 4],
                 programs: vec![],
@@ -1380,17 +1451,9 @@ mod bag_field_tests {
                 shiny_palette_table: base,
                 species: vec![],
             },
-            trainer_front: TrainerFrontPlan {
-                front_table: base,
-                palette_table: base,
-                trainers: vec![],
-            },
+            trainer_front: front_plan(),
             trainer_battlers: TrainerBattlerPlan {
-                front: TrainerFrontPlan {
-                    front_table: base,
-                    palette_table: base,
-                    trainers: vec![],
-                },
+                front: front_plan(),
                 back_table: base,
                 back_palette_table: base,
                 backs: vec![],
@@ -1405,6 +1468,7 @@ mod bag_field_tests {
             party_menu: party_menu_plan(),
         };
         let module = module(&plan, "0", &[]);
+        assert_field_effect_palette_root(&module);
         assert_chooser_roots(&module);
         assert_scene_roots(&module);
         assert_evolution_roots(&module);

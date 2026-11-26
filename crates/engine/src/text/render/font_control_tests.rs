@@ -76,7 +76,8 @@ fn font_switches_the_source_and_advance_and_the_following_clear_height() {
             x,
             y: 0,
             width: 4,
-            height: 12
+            height: 12,
+            colors: TextColors::default(),
         })
     );
     assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
@@ -86,7 +87,8 @@ fn font_switches_the_source_and_advance_and_the_following_clear_height() {
             x: x + 4,
             y: 0,
             width: 0x20 - x - 4,
-            height: 12
+            height: 12,
+            colors: TextColors::default(),
         })
     );
 }

@@ -20,14 +20,19 @@
 //! Every root is searched without a cap so that no copy is hidden. A root with
 //! more than one copy is settled in this order:
 //!
-//! 1. The held-item, Poké Ball and small Poké Ball sheets are named by the whole
-//!    sprite-sheet record upstream writes for them (`data`, `size`, `tag`). A pointer alone,
-//!    or a size or tag elsewhere, proves nothing, so a copy qualifies only when
-//!    a pointer to it sits in a record whose own size and tag fields match.
+//! 1. The held-item, Poké Ball and small Poké Ball sheets are named by the
+//!    whole sprite-sheet record upstream writes for them (`data`, `size`,
+//!    `tag`), and the held-item and Poké Ball palettes by the sprite-palette
+//!    record (`data`, `tag`; `src/data/party_menu.h:844-847`, `:900-903`),
+//!    which the game loads at `src/party_menu.c:4064` and `:4181`. A pointer
+//!    alone, or a size or tag elsewhere, proves nothing, so a copy qualifies
+//!    only when a pointer to it sits in a record whose own fields match.
 //!    Exactly one copy must qualify.
 //! 2. Any other root with several copies is [`Resolution::ArbitraryAmongIdentical`]
 //!    at the lowest address: every copy decodes to the same pack entry, and
-//!    nothing in the ROM tells them apart.
+//!    nothing in the ROM tells them apart. Only the background palette, the
+//!    background sheet, and the maps fall here: upstream loads the background
+//!    palette directly (`src/party_menu.c:749`), through no record.
 //!
 //! The planner loads no ELF symbols, so a map label never decides a copy.
 
@@ -48,6 +53,8 @@ const COLOR_BYTES: u32 = 2;
 /// A sprite-sheet record is `{data: u32, size: u16, tag: u16}`.
 const SHEET_SIZE_FIELD: u32 = 4;
 const SHEET_TAG_FIELD: u32 = 6;
+/// A sprite-palette record is `{data: u32, tag: u16}`, padded to four bytes.
+const PALETTE_TAG_FIELD: u32 = 4;
 
 /// Whether upstream declares a root `static`, so a linker map cannot list it.
 #[derive(Clone, Copy)]
@@ -65,11 +72,43 @@ impl Declaration {
     }
 }
 
-/// The `{data, size, tag}` sprite-sheet record that names a sheet.
+/// The record that names a root: the sprite-sheet record `{data, size, tag}`
+/// for a sheet, the sprite-palette record `{data, tag}` for a palette.
 #[derive(Clone, Copy)]
-struct SheetRecord {
-    size: u16,
-    tag: u16,
+enum Record {
+    Sheet { size: u16, tag: u16 },
+    Palette { tag: u16 },
+}
+
+impl Record {
+    /// Whether the record at `record` carries this record's own fields.
+    fn matches_at(self, rom: &[u8], record: u32) -> bool {
+        match self {
+            Self::Sheet { size, tag } => {
+                u16_at_addr(rom, record + SHEET_SIZE_FIELD) == Some(size)
+                    && u16_at_addr(rom, record + SHEET_TAG_FIELD) == Some(tag)
+            }
+            Self::Palette { tag } => u16_at_addr(rom, record + PALETTE_TAG_FIELD) == Some(tag),
+        }
+    }
+
+    /// What the report says names the copy.
+    fn describe(self) -> String {
+        match self {
+            Self::Sheet { size, tag } => {
+                format!("a sprite-sheet record with size {size} and tag {tag}")
+            }
+            Self::Palette { tag } => format!("a sprite-palette record with tag {tag}"),
+        }
+    }
+
+    /// What `only_one_matching` says it wanted.
+    const fn wanted(self) -> &'static str {
+        match self {
+            Self::Sheet { .. } => "a {data, size, tag} sprite-sheet record pointing at the copy",
+            Self::Palette { .. } => "a {data, tag} sprite-palette record pointing at the copy",
+        }
+    }
 }
 
 /// What the pack must hold for a root, and so what the ROM stores.
@@ -89,7 +128,7 @@ struct Root {
     encoding: Encoding,
     declared: Declaration,
     /// The record that decides between copies of the root, if upstream has one.
-    record: Option<SheetRecord>,
+    record: Option<Record>,
 }
 
 const fn root(
@@ -97,7 +136,7 @@ const fn root(
     shape: Shape,
     encoding: Encoding,
     declared: Declaration,
-    record: Option<SheetRecord>,
+    record: Option<Record>,
 ) -> Root {
     Root {
         id,
@@ -122,7 +161,8 @@ const POKEBALL_SMALL_TAG: u16 = 1201;
 /// Every root, in extraction order. `sSpriteSheet_HeldItem`
 /// (`src/data/party_menu.h:839-842`), `sSpriteSheet_MenuPokeball` (`:895-898`)
 /// and `sSpriteSheet_MenuPokeballSmall` (`:981-984`) are the records that name
-/// the three sheets.
+/// the three sheets, and `sSpritePalette_HeldItem` (`:844-847`) and
+/// `sSpritePalette_MenuPokeball` (`:900-903`) the two palettes.
 const ROOTS: [Root; 15] = [
     root(
         "party-menu/image/bg",
@@ -144,7 +184,7 @@ const ROOTS: [Root; 15] = [
         },
         Encoding::Lz77,
         Declaration::Global("gPartyMenuPokeball_Gfx"),
-        Some(SheetRecord {
+        Some(Record::Sheet {
             size: 0x400,
             tag: POKEBALL_TAG,
         }),
@@ -158,7 +198,7 @@ const ROOTS: [Root; 15] = [
         },
         Encoding::Raw,
         Declaration::Static("sHeldItemGfx"),
-        Some(SheetRecord {
+        Some(Record::Sheet {
             size: 64,
             tag: HELD_ITEM_TAG,
         }),
@@ -172,7 +212,7 @@ const ROOTS: [Root; 15] = [
         },
         Encoding::Lz77,
         Declaration::Global("gPartyMenuPokeballSmall_Gfx"),
-        Some(SheetRecord {
+        Some(Record::Sheet {
             size: 0x300,
             tag: POKEBALL_SMALL_TAG,
         }),
@@ -189,14 +229,14 @@ const ROOTS: [Root; 15] = [
         Shape::Palette { colors: 16 },
         Encoding::Lz77,
         Declaration::Global("gPartyMenuPokeball_Pal"),
-        None,
+        Some(Record::Palette { tag: POKEBALL_TAG }),
     ),
     root(
         "party-menu/palette/hold_icons",
         Shape::Palette { colors: 16 },
         Encoding::Raw,
         Declaration::Static("sHeldItemPalette"),
-        None,
+        Some(Record::Palette { tag: HELD_ITEM_TAG }),
     ),
     map(
         "party-menu/raw/bg",
@@ -404,13 +444,12 @@ fn find_copies(ctx: &Context<'_>) -> Result<Vec<Vec<u32>>, GenRomProfileError> {
     Ok(copies)
 }
 
-/// Whether a pointer to `target` sits in a record carrying `record`'s size
-/// and tag.
-fn named_by_record(ctx: &Context<'_>, target: u32, record: SheetRecord) -> bool {
-    ctx.pointers.refs_to(target).iter().any(|&pointer| {
-        u16_at_addr(ctx.rom, pointer + SHEET_SIZE_FIELD) == Some(record.size)
-            && u16_at_addr(ctx.rom, pointer + SHEET_TAG_FIELD) == Some(record.tag)
-    })
+/// Whether a pointer to `target` sits in a record carrying `record`'s fields.
+fn named_by_record(ctx: &Context<'_>, target: u32, record: Record) -> bool {
+    ctx.pointers
+        .refs_to(target)
+        .iter()
+        .any(|&pointer| record.matches_at(ctx.rom, pointer))
 }
 
 /// The address to record for `root` among its `copies`, and its report line.
@@ -425,18 +464,10 @@ fn settle(
         });
     };
     let (addr, resolution, note) = if let Some(record) = root.record {
-        let addr = only_one_matching(
-            root.id,
-            "a {data, size, tag} sprite-sheet record pointing at the copy",
-            copies.iter().copied(),
-            |&copy| named_by_record(ctx, copy, record),
-        )?;
-        let note = format!(
-            "named by a sprite-sheet record with size {} and tag {}{}",
-            record.size,
-            record.tag,
-            repeats(copies.len()),
-        );
+        let addr = only_one_matching(root.id, record.wanted(), copies.iter().copied(), |&copy| {
+            named_by_record(ctx, copy, record)
+        })?;
+        let note = format!("named by {}{}", record.describe(), repeats(copies.len()));
         (addr, Resolution::StructDerived, Some(note))
     } else if copies.len() == 1 {
         (lowest, Resolution::UniqueSignature, None)

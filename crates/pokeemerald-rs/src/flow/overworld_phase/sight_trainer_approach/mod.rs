@@ -48,8 +48,9 @@
 //!   data.
 //! - **`FreezeObjectEvents`/`LockPlayerFieldControls`.** The approach owns
 //!   every frame it runs on ([`super::sight_trainer_trigger::SightTrainerOutcome::owns_frame`]), which is
-//!   the observable half of both; there are no other moving object events to
-//!   freeze, and the one control this port's own lock does not reach -- the
+//!   the observable half of both; every other object event is frozen with it, and the
+//!   approaching trainer finishes a step already in flight before the icon, as a patrolling
+//!   trainer can be mid-step when it sees the player. The one control this port's own lock does not reach -- the
 //!   start menu -- is [`super::start_menu`]'s to gate, not this module's.
 //!   the loaded lead is therefore left in place until the
 //!   battle actually starts, so a save taken mid-approach persists an honest
@@ -59,6 +60,8 @@ use assets::trainers::TrainerId;
 use engine::overworld::{
     trainer_facing_movement_type, Direction, ObjectEventState, TilePos, WALK_FRAMES_PER_TILE,
 };
+
+use super::PartyReserves;
 
 /// How long the exclamation-mark icon animates, in frames:
 /// `sSpriteAnim_Icons1`'s single `ANIMCMD_FRAME(0, 60)`
@@ -156,13 +159,20 @@ enum ApproachStage {
 /// than built at the end -- see that trigger method's own docs for why
 /// (refusals must not cost a hundred frames of cutscene, and the RNG stream
 /// is unaffected either way).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct SightApproach {
-    /// The local ID of the active map's live collection entry that was
-    /// selected: every walk, turn and write-back of this approach lands on
-    /// that entry ([`crate::flow::overworld_phase::OverworldPhase::object_events`]), so the stopped trainer
-    /// outlives the approach.
+    /// The local ID of the live collection entry that was selected: every
+    /// walk, turn and write-back of this approach lands on that entry
+    /// ([`crate::flow::overworld_phase::OverworldPhase::object_events`]), so the stopped trainer
+    /// outlives the approach. A local id names an object only within its own
+    /// map, so it resolves together with [`Self::carried_from`].
     local_id: u8,
+    /// The map a connection crossing carried the selected entry out of, if it
+    /// did ([`engine::overworld::object_event::LiveObjectEvent::carried_from`]).
+    /// With `local_id` it is the entry's identity
+    /// (`GetObjectEventIdByLocalIdAndMap`, `event_object_movement.c:1263-1285`),
+    /// so a namesake of the entered map is never the one that walks.
+    carried_from: Option<assets::MapId>,
     /// `InitTrainerApproachTask`'s `range` argument, `approachDistance - 1`
     /// -- how many tiles the trainer walks in total.
     walk_tiles: u8,
@@ -174,6 +184,8 @@ pub(super) struct SightApproach {
     /// Which trainer that fight is against, for the defeated flag
     /// [`crate::flow::overworld_phase::OverworldPhase::advance_sight_trainer_battle_frame`] sets on a win.
     trainer_id: TrainerId,
+    /// The saved members beside the lead that the fight was built with.
+    reserves: PartyReserves,
     /// Where in the sequence this approach currently is.
     stage: ApproachStage,
 }
@@ -185,17 +197,21 @@ impl SightApproach {
     /// while a step is in flight) and the walk-up begins when it comes down.
     pub(super) const fn new(
         local_id: u8,
+        carried_from: Option<assets::MapId>,
         walk_tiles: u8,
         intro: &'static str,
         battle: battle::Battle,
         trainer_id: TrainerId,
+        reserves: PartyReserves,
     ) -> Self {
         Self {
             local_id,
+            carried_from,
             walk_tiles,
             intro,
             battle,
             trainer_id,
+            reserves,
             stage: ApproachStage::LockHandoff {
                 frames_left: LOCK_HANDOFF_FRAMES_AT_REST,
             },
@@ -206,6 +222,13 @@ impl SightApproach {
     #[cfg(test)]
     pub(super) const fn local_id(&self) -> u8 {
         self.local_id
+    }
+
+    /// The map the live collection entry this approach is for was carried
+    /// out of, if a connection crossing carried it.
+    #[cfg(test)]
+    pub(super) const fn carried_from(&self) -> Option<assets::MapId> {
+        self.carried_from
     }
 
     /// The already-constructed fight, for tests that pin its party.
@@ -229,9 +252,20 @@ impl SightApproach {
         self.stage = ApproachStage::IntroMessage { opened: true };
     }
 
+    /// The `(carried_from, local_id)` of the approaching trainer while the lock handoff waits
+    /// on it: `FreezeForApproachingTrainers` leaves it unfrozen until its in-flight step ends
+    /// (`event_object_lock.c:130-147`), so the scheduler lets that step finish. The walk-up and
+    /// the icon drive the trainer themselves.
+    pub(in crate::flow::overworld_phase) fn trainer_finishing_step(
+        &self,
+    ) -> Option<(Option<assets::MapId>, u8)> {
+        matches!(self.stage, ApproachStage::LockHandoff { .. })
+            .then_some((self.carried_from, self.local_id))
+    }
+
     /// Spend one frame of [`ApproachStage::LockHandoff`]. `player_was_moving`
-    /// is whether the player's step was still in flight *before* this frame's
-    /// animation ran: the freeze task polls the state the previous frame left,
+    /// is whether the player's step, or the approaching trainer's, was still in flight *before*
+    /// this frame's animation ran: the freeze task polls the state the previous frame left,
     /// so the frame a step drains on is still a moving frame -- the trigger
     /// frame included, which [`crate::flow::overworld_phase::OverworldPhase::step`] reports itself.
     pub(super) fn advance_lock_handoff(&mut self, player_was_moving: bool) {
@@ -252,6 +286,12 @@ impl SightApproach {
         };
     }
 
+    /// `TrainerExclamationMark` re-faces the trainer, settling its previous tile
+    /// (`trainer_see.c:465-466`; `event_object_movement.c:5048-5068,2162-2165`).
+    pub(super) fn exclamation_mark(trainer: &mut ObjectEventState) {
+        trainer.face_in_place();
+    }
+
     /// Spend one frame of the icon or the walk-up
     /// (`WaitTrainerExclamationMark`, `TrainerMoveToPlayer`).
     ///
@@ -262,7 +302,21 @@ impl SightApproach {
     /// is also the frame the first walked tile is committed on, and
     /// the frame the last tile's animation ends on is also the frame the
     /// trainer turns to the player.
-    fn advance_movement(&mut self, trainer: &mut ObjectEventState, player_position: TilePos) {
+    ///
+    /// `settle` is the finish-step elevation update
+    /// (`DoGroundEffects_OnFinishStep`, `event_object_movement.c:8119-8132`), which the driver
+    /// supplies because only the scene holds the cell grid. It runs as each walked tile ends,
+    /// after the trainer's previous tile is settled and before the next tile begins: upstream
+    /// finishes a tile in `AnimateSprites` and starts the next one only on the following
+    /// frame's trainer-see task (`trainer_see.c:490-505`), so each intermediate tile reads
+    /// `(dest, dest)` ahead of the next tile's begin-step update. This port chains both into
+    /// one frame, so the next tile's begin must not run ahead of it.
+    fn advance_movement(
+        &mut self,
+        trainer: &mut ObjectEventState,
+        player_position: TilePos,
+        mut settle: impl FnMut(&mut ObjectEventState),
+    ) {
         match self.stage {
             ApproachStage::ExclamationIcon { frames_left } => {
                 let frames_left = frames_left.saturating_sub(1);
@@ -277,14 +331,25 @@ impl SightApproach {
                 frames_left,
             } => {
                 if frames_left > 0 {
+                    let frames_left = frames_left - 1;
+                    if frames_left == 0 {
+                        trainer.settle_previous_position();
+                    }
                     self.stage = ApproachStage::WalkUp {
                         tiles_left,
-                        frames_left: frames_left - 1,
+                        frames_left,
                     };
-                } else if tiles_left > 0 {
-                    self.begin_tile(trainer, tiles_left - 1);
                 } else {
-                    self.face_player(trainer, player_position);
+                    // `UpdateMovementNormal` ends every walked tile with
+                    // `ShiftStillObjectEventCoords`
+                    // (`event_object_movement.c:5116-5125`).
+                    trainer.settle_previous_position();
+                    settle(trainer);
+                    if tiles_left > 0 {
+                        self.begin_tile(trainer, tiles_left - 1);
+                    } else {
+                        self.face_player(trainer, player_position);
+                    }
                 }
             }
             // Driven by `OverworldPhase`, which owns the player and the
@@ -332,8 +397,12 @@ impl SightApproach {
     /// that a zero-tile approach (the trainer was already adjacent, possibly
     /// having been *walked into* rather than having walked) turns the same
     /// way upstream would.
+    ///
+    /// `FaceDirection` also settles the previous tile
+    /// (`event_object_movement.c:5048-5056,2162-2165`).
     fn face_player(&mut self, trainer: &mut ObjectEventState, player_position: TilePos) {
         trainer.face(direction_to_face(trainer.position(), player_position));
+        trainer.settle_previous_position();
         self.stage = ApproachStage::PlayerFacesTrainer;
     }
 
