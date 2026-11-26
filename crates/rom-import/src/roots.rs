@@ -201,10 +201,15 @@ pub struct SpriteRoots {
     /// which palette a graphics id draws from. The generator uses it to
     /// pick the right address for a palette whose bytes repeat in the ROM.
     pub palette_table: GbaPtr,
-    /// Every `sprite/*` sheet.
+    /// Every `sprite/*` sheet and the `field-effect/image/*` sheet.
     pub sheets: &'static [ImageRoot],
-    /// Every `sprite/palette/*` bank.
+    /// Every `sprite/palette/*` bank. Each must be named in
+    /// [`Self::palette_table`].
     pub palettes: &'static [PaletteRoot],
+    /// Every `field-effect/palette/*` bank. These are not named in
+    /// [`Self::palette_table`] (`gFieldEffectObjectPalette1` is bound through
+    /// a field-effect template), so they are not corroborated against it.
+    pub field_effect_palettes: &'static [PaletteRoot],
 }
 
 /// One `struct MapLayout` and the two grids it points at.
@@ -259,9 +264,12 @@ pub struct TextWindowRoots {
     pub window_palettes: GbaPtr,
 }
 
-/// Interface palettes the no-save menus need.
+/// Interface art: the text printer's light and dark down-arrow sheets and the
+/// palettes the no-save menus need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InterfaceRoots {
+    /// Every `interface/image/*` sheet.
+    pub images: &'static [ImageRoot],
     /// Every `interface/palette/*` bank.
     pub palettes: &'static [PaletteRoot],
 }
@@ -335,7 +343,27 @@ pub struct SampleRoot {
     pub data_len: u32,
 }
 
-/// The audio roots `MUS_TITLE` needs.
+/// The species cry tables and the samples they name.
+///
+/// `gCryTable` and `gCryTable_Reverse` (`pokeemerald/sound/cry_tables.inc`)
+/// are each [`assets::audio::CRY_TABLE_LEN`] `ToneData` records whose `wav`
+/// word points at a DPCM-compressed `WaveData`. The reverse table repeats the
+/// normal table's samples under the reverse `ToneData` type, so one sample
+/// list serves both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CryRoots {
+    /// `gCryTable`, the first normal `ToneData` record.
+    pub normal: GbaPtr,
+    /// `gCryTable_Reverse`, the first reverse `ToneData` record.
+    pub reverse: GbaPtr,
+    /// Every cry sample in table order, so entry `n` is the sample record `n`
+    /// of both tables points at. Each root has a 16-byte `WaveData` header,
+    /// and its `data_len` is the decoded sample count, not the compressed
+    /// length stored in the ROM.
+    pub samples: &'static [SampleRoot],
+}
+
+/// The audio roots `MUS_TITLE` and the species cries need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioRoots {
     /// `gSongTable`, an array of 8-byte `{header, ms, me}` entries.
@@ -350,6 +378,9 @@ pub struct AudioRoots {
     pub direct_sound: &'static [SampleRoot],
     /// Every CGB programmable-wave table those voicegroups reference.
     pub programmable_wave: &'static [SampleRoot],
+    /// The species cry tables and samples, or `None` for a profile built
+    /// from a pack that holds no cries.
+    pub cry: Option<CryRoots>,
 }
 
 /// One special battle-message template and the upstream symbol it is.
@@ -390,6 +421,42 @@ pub struct FieldMessageRoot {
     pub symbol: &'static str,
     /// Where the message's `EOS`-terminated token stream starts.
     pub addr: GbaPtr,
+}
+
+/// One trainer defeat speech and the context it is.
+///
+/// The ROM string is `EOS`-terminated, so no length is recorded: the reader
+/// finds its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerDefeatSpeechRoot {
+    /// The upstream label, which must be the matching entry of
+    /// `assets::TrainerDefeatSpeechContext::ALL`. Recorded so a profile whose
+    /// roots drifted out of inventory order is refused rather than mislabelled.
+    pub symbol: &'static str,
+    /// Where the speech's `EOS`-terminated token stream starts.
+    pub addr: GbaPtr,
+    /// Where the `trainerbattle` command naming the speech sits, for a speech
+    /// whose bytes recur elsewhere in the image so the text alone does not
+    /// identify it. `None` for the rest.
+    pub script: Option<GbaPtr>,
+}
+
+/// One sight-trainer intro speech and the script it belongs to.
+///
+/// The ROM string is `EOS`-terminated, so no length is recorded: the reader
+/// finds its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SightTrainerIntroSpeechRoot {
+    /// The object-event script, which must be the matching entry of
+    /// `assets::SIGHT_TRAINER_INTRO_SCRIPTS`. Recorded so a profile whose roots
+    /// drifted out of inventory order is refused rather than mislabelled.
+    pub symbol: &'static str,
+    /// Where the speech's `EOS`-terminated token stream starts.
+    pub addr: GbaPtr,
+    /// Where the script's `trainerbattle` command sits. Amy and Liv share a
+    /// trainer and a rematch can repeat a speech, so only this command ties
+    /// the text to its script.
+    pub script: GbaPtr,
 }
 
 /// One battle-animation program: a label and where its commands start.
@@ -544,6 +611,45 @@ pub struct BattleInterfaceRoots {
     pub battle_bar: Option<BlobRoot>,
 }
 
+/// The naming screen's graphics (`graphics/naming_screen`).
+///
+/// The fifteen sheets, seven palettes, and four tilemaps under the
+/// `naming-screen/` pack ids the checkout extractor emits. Only the menu sheet
+/// and the tilemaps are LZ77 streams; the other sheets and the palettes are
+/// raw. The three cursor sheets are stored as their first five tiles, which
+/// the pack publishes as an 8x40 strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NamingScreenRoots {
+    /// Every `naming-screen/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `naming-screen/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `naming-screen/raw/*` tilemap.
+    pub tilemaps: &'static [BlobRoot],
+}
+
+/// The party menu's graphics (`graphics/party_menu`).
+///
+/// The fixed 15 `party-menu/` pack records the checkout extractor emits: the
+/// background, Poké Ball, held-item, and small Poké Ball sheets (`image`),
+/// their palettes except the small sheet's, which draws with the Poké Ball's,
+/// and eight maps (`raw`): the background screen, five slot panels, and two
+/// buttons. The background sheet, palette and screen and the two Poké Ball
+/// sheets and the Poké Ball palette are LZ77 streams (`src/graphics.c:1111-1117`);
+/// the slot maps, buttons, and held-item sheet and palette are raw
+/// (`src/data/party_menu.h`).
+/// The background sheet is stored as its first 62 tiles, which the pack
+/// publishes as an 8x496 strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartyMenuRoots {
+    /// Every `party-menu/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `party-menu/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `party-menu/raw/*` map.
+    pub tilemaps: &'static [BlobRoot],
+}
+
 /// One species' static battler art: the rows its `SPECIES_*` index selects in
 /// `gMonStillFrontPicTable`, `gMonBackPicTable`, `gMonPaletteTable`, and
 /// `gMonShinyPaletteTable`.
@@ -657,9 +763,11 @@ pub struct Roots {
     pub layouts: &'static [MapLayoutRoot],
     /// The five Latin glyph sheets.
     pub fonts: &'static [FontRoot],
+    /// Font bitmaps that are ordinary tile sheets: the keypad-icon sheet.
+    pub font_images: &'static [ImageRoot],
     /// Text-window frames and palettes.
     pub text_window: TextWindowRoots,
-    /// Interface palettes.
+    /// Interface images and palettes.
     pub interface: InterfaceRoots,
     /// `MUS_TITLE` and everything it plays through.
     pub audio: AudioRoots,
@@ -667,6 +775,14 @@ pub struct Roots {
     pub battle_messages: BattleMessageRoots,
     /// The field-message token table.
     pub field_messages: &'static [FieldMessageRoot],
+    /// The trainer defeat-speech table.
+    pub trainer_defeat_speeches: &'static [TrainerDefeatSpeechRoot],
+    /// The sight-trainer intro-speech table.
+    pub sight_trainer_intro_speeches: &'static [SightTrainerIntroSpeechRoot],
+    /// Where `gTrainerClassNames` starts: 66 fixed-width rows of 13 bytes, each
+    /// a charmap name, `EOS`, and zero padding. `None` when the profile
+    /// records no class-name table.
+    pub trainer_class_names: Option<GbaPtr>,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationRoots,
     /// The ordinary-bag images, palettes, and tilemap.
@@ -679,7 +795,11 @@ pub struct Roots {
     pub evolution_scene: EvolutionSceneRoots,
     /// The battle textbox and menu text palettes.
     pub battle_interface: BattleInterfaceRoots,
-    /// The starters' static battler images and palettes.
+    /// The naming screen's sheets, palettes, and tilemaps.
+    pub naming_screen: NamingScreenRoots,
+    /// The party menu's sheets, palettes, and maps.
+    pub party_menu: PartyMenuRoots,
+    /// The static battler images and palettes of the species in the pack.
     pub battlers: BattlerRoots,
     /// The Poké Ball's sheet, palette, and opened-ball sheet.
     pub poke_ball: PokeBallRoots,
@@ -707,15 +827,20 @@ impl Roots {
             palette_table: GbaPtr::AT_BASE,
             sheets: &[],
             palettes: &[],
+            field_effect_palettes: &[],
         },
         layouts: &[],
         fonts: &[],
+        font_images: &[],
         text_window: TextWindowRoots {
             images: &[],
             palettes: &[],
             window_palettes: GbaPtr::AT_BASE,
         },
-        interface: InterfaceRoots { palettes: &[] },
+        interface: InterfaceRoots {
+            images: &[],
+            palettes: &[],
+        },
         audio: AudioRoots {
             song_table: GbaPtr::AT_BASE,
             songs: &[],
@@ -723,15 +848,21 @@ impl Roots {
             keysplits: &[],
             direct_sound: &[],
             programmable_wave: &[],
+            cry: None,
         },
         battle_messages: BattleMessageRoots::NONE,
         field_messages: &[],
+        trainer_defeat_speeches: &[],
+        sight_trainer_intro_speeches: &[],
+        trainer_class_names: None,
         battle_anims: BattleAnimationRoots::NONE,
         bag: BagRoots::NONE,
         starter_chooser: StarterChooserRoots::NONE,
         opening_scene: OpeningSceneRoots::NONE,
         evolution_scene: EvolutionSceneRoots::NONE,
         battle_interface: BattleInterfaceRoots::NONE,
+        naming_screen: NamingScreenRoots::NONE,
+        party_menu: PartyMenuRoots::NONE,
         battlers: BattlerRoots::NONE,
         poke_ball: PokeBallRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
@@ -752,12 +883,16 @@ impl Roots {
             })
             .chain(self.title_screen.images.iter())
             .chain(self.sprites.sheets.iter())
+            .chain(self.font_images.iter())
             .chain(self.text_window.images.iter())
+            .chain(self.interface.images.iter())
             .chain(self.bag.images.iter())
             .chain(self.starter_chooser.images.iter())
             .chain(self.opening_scene.images.iter())
             .chain(self.evolution_scene.images.iter())
             .chain(self.battle_interface.images.iter())
+            .chain(self.naming_screen.images.iter())
+            .chain(self.party_menu.images.iter())
             .chain(
                 self.battlers
                     .species
@@ -788,6 +923,7 @@ impl Roots {
             .flat_map(|tileset| tileset.palettes.iter())
             .chain(self.title_screen.palettes.iter())
             .chain(self.sprites.palettes.iter())
+            .chain(self.sprites.field_effect_palettes.iter())
             .chain(self.text_window.palettes.iter())
             .chain(self.interface.palettes.iter())
             .chain(self.bag.palettes.iter())
@@ -795,6 +931,8 @@ impl Roots {
             .chain(self.opening_scene.palettes.iter())
             .chain(self.evolution_scene.palettes.iter())
             .chain(self.battle_interface.palettes.iter())
+            .chain(self.naming_screen.palettes.iter())
+            .chain(self.party_menu.palettes.iter())
             .chain(
                 self.battlers
                     .species
@@ -876,6 +1014,24 @@ impl BattleInterfaceRoots {
         tilemaps: &[],
         healthbox_elements: &[],
         battle_bar: None,
+    };
+}
+
+impl NamingScreenRoots {
+    /// No naming-screen roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+    };
+}
+
+impl PartyMenuRoots {
+    /// No party-menu roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
     };
 }
 

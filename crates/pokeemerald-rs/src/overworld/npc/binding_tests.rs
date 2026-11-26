@@ -1,5 +1,6 @@
 use super::test_support::{bundled_map_graphics_ids, NON_RIVAL_GFX_ID};
 use super::*;
+use engine::overworld::Direction;
 
 #[test]
 fn both_rival_variants_resolve_for_either_player_gender() {
@@ -150,67 +151,72 @@ fn resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs() {
 }
 
 /// The bundled maps' graphics ids `resolve_sprite_source` draws.
-const DRAWN_GRAPHICS_IDS: [&str; 22] = [
+const DRAWN_GRAPHICS_IDS: [&str; 41] = [
+    "OBJ_EVENT_GFX_BIRCHS_BAG",
     "OBJ_EVENT_GFX_BLACK_BELT",
     "OBJ_EVENT_GFX_BOY_1",
     "OBJ_EVENT_GFX_BOY_2",
+    "OBJ_EVENT_GFX_CUTTABLE_TREE",
     "OBJ_EVENT_GFX_FAT_MAN",
     "OBJ_EVENT_GFX_FISHERMAN",
+    "OBJ_EVENT_GFX_GENTLEMAN",
     "OBJ_EVENT_GFX_GIRL_3",
+    "OBJ_EVENT_GFX_ITEM_BALL",
     "OBJ_EVENT_GFX_MANIAC",
     "OBJ_EVENT_GFX_MAN_3",
     "OBJ_EVENT_GFX_MAN_5",
     "OBJ_EVENT_GFX_MART_EMPLOYEE",
     "OBJ_EVENT_GFX_MOM",
+    "OBJ_EVENT_GFX_MOVING_BOX",
+    "OBJ_EVENT_GFX_MYSTERY_GIFT_MAN",
+    "OBJ_EVENT_GFX_NINJA_BOY",
     "OBJ_EVENT_GFX_NORMAN",
+    "OBJ_EVENT_GFX_NURSE",
+    "OBJ_EVENT_GFX_PICHU_DOLL",
+    "OBJ_EVENT_GFX_POKEFAN_F",
     "OBJ_EVENT_GFX_POKEFAN_M",
     "OBJ_EVENT_GFX_PROF_BIRCH",
     "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
     "OBJ_EVENT_GFX_RIVAL_MAY_NORMAL",
+    "OBJ_EVENT_GFX_SCHOOL_KID_M",
     "OBJ_EVENT_GFX_SCIENTIST_1",
+    "OBJ_EVENT_GFX_SWABLU_DOLL",
     "OBJ_EVENT_GFX_SWIMMER_F",
     "OBJ_EVENT_GFX_SWIMMER_M",
+    "OBJ_EVENT_GFX_TEALA",
+    "OBJ_EVENT_GFX_TRUCK",
     "OBJ_EVENT_GFX_TWIN",
+    "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
+    "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
     "OBJ_EVENT_GFX_WOMAN_2",
     "OBJ_EVENT_GFX_WOMAN_4",
+    "OBJ_EVENT_GFX_WOMAN_5",
+    "OBJ_EVENT_GFX_YOUNGSTER",
+    "OBJ_EVENT_GFX_ZIGZAGOON_1",
 ];
 
 /// The bundled maps' graphics ids `resolve_sprite_source` leaves undrawn.
-const UNDRAWN_GRAPHICS_IDS: [&str; 54] = [
+const UNDRAWN_GRAPHICS_IDS: [&str; 35] = [
     "OBJ_EVENT_GFX_BERRY_TREE",
-    "OBJ_EVENT_GFX_BIRCHS_BAG",
     "OBJ_EVENT_GFX_BOY_3",
     "OBJ_EVENT_GFX_BUG_CATCHER",
-    "OBJ_EVENT_GFX_CUTTABLE_TREE",
     "OBJ_EVENT_GFX_EXPERT_F",
     "OBJ_EVENT_GFX_EXPERT_M",
     "OBJ_EVENT_GFX_GAMEBOY_KID",
-    "OBJ_EVENT_GFX_GENTLEMAN",
     "OBJ_EVENT_GFX_GIRL_1",
     "OBJ_EVENT_GFX_GIRL_2",
-    "OBJ_EVENT_GFX_ITEM_BALL",
     "OBJ_EVENT_GFX_KECLEON",
     "OBJ_EVENT_GFX_LASS",
     "OBJ_EVENT_GFX_LITTLE_BOY",
     "OBJ_EVENT_GFX_MAN_1",
     "OBJ_EVENT_GFX_MAN_4",
-    "OBJ_EVENT_GFX_MOVING_BOX",
-    "OBJ_EVENT_GFX_MYSTERY_GIFT_MAN",
-    "OBJ_EVENT_GFX_NINJA_BOY",
-    "OBJ_EVENT_GFX_NURSE",
     "OBJ_EVENT_GFX_OLD_MAN",
     "OBJ_EVENT_GFX_OLD_WOMAN",
-    "OBJ_EVENT_GFX_PICHU_DOLL",
     "OBJ_EVENT_GFX_PICNICKER",
     "OBJ_EVENT_GFX_PIKACHU",
-    "OBJ_EVENT_GFX_POKEFAN_F",
     "OBJ_EVENT_GFX_SAILOR",
-    "OBJ_EVENT_GFX_SCHOOL_KID_M",
     "OBJ_EVENT_GFX_SCOTT",
     "OBJ_EVENT_GFX_SKITTY",
-    "OBJ_EVENT_GFX_SWABLU_DOLL",
-    "OBJ_EVENT_GFX_TEALA",
-    "OBJ_EVENT_GFX_TRUCK",
     "OBJ_EVENT_GFX_VAR_0",
     "OBJ_EVENT_GFX_VAR_1",
     "OBJ_EVENT_GFX_VAR_2",
@@ -223,14 +229,9 @@ const UNDRAWN_GRAPHICS_IDS: [&str; 54] = [
     "OBJ_EVENT_GFX_VAR_9",
     "OBJ_EVENT_GFX_VAR_A",
     "OBJ_EVENT_GFX_VAR_B",
-    "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
-    "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
     "OBJ_EVENT_GFX_WINGULL",
     "OBJ_EVENT_GFX_WOMAN_1",
     "OBJ_EVENT_GFX_WOMAN_3",
-    "OBJ_EVENT_GFX_WOMAN_5",
-    "OBJ_EVENT_GFX_YOUNGSTER",
-    "OBJ_EVENT_GFX_ZIGZAGOON_1",
 ];
 
 #[test]
@@ -270,26 +271,109 @@ fn resolve_sprite_source_partitions_every_bundled_map_graphics_id() {
 }
 
 #[test]
-fn resolve_sprite_source_returns_none_for_decorations_and_props() {
+fn resolve_sprite_source_returns_none_for_decorations_and_per_event_berries() {
     let no_flags = EventData::new();
-    assert!(
-        resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::Brendan, &no_flags).is_none()
+    for id in [
+        "OBJ_EVENT_GFX_VAR_0",
+        "OBJ_EVENT_GFX_VAR_1",
+        "OBJ_EVENT_GFX_BERRY_TREE",
+    ] {
+        assert!(
+            resolve_sprite_source(id, PlayerCharacter::Brendan, &no_flags).is_none(),
+            "{id}"
+        );
+    }
+}
+
+/// Geometry, sheet, palette and pose of each non-people-sheet graphic, from
+/// `object_event_graphics_info.h` and the pic and anim tables.
+#[test]
+fn object_sheets_carry_upstream_geometry_palette_and_pose() {
+    use super::sheets::{object_sheet, Facing};
+    // (id, w, h, cells, bank, facing cell for South, North, East flip)
+    let rows = [
+        ("OBJ_EVENT_GFX_TRUCK", 48, 48, 1, 8, 0, 0, false),
+        ("OBJ_EVENT_GFX_MOVING_BOX", 16, 16, 1, 7, 0, 0, false),
+        ("OBJ_EVENT_GFX_ITEM_BALL", 16, 16, 1, 3, 0, 0, false),
+        ("OBJ_EVENT_GFX_PICHU_DOLL", 16, 16, 1, 2, 0, 0, false),
+        ("OBJ_EVENT_GFX_SWABLU_DOLL", 16, 16, 1, 1, 0, 0, false),
+        ("OBJ_EVENT_GFX_BIRCHS_BAG", 16, 16, 1, 2, 0, 0, false),
+        ("OBJ_EVENT_GFX_CUTTABLE_TREE", 16, 16, 4, 3, 0, 0, false),
+        ("OBJ_EVENT_GFX_NINJA_BOY", 16, 16, 9, 1, 0, 1, true),
+        ("OBJ_EVENT_GFX_NURSE", 16, 32, 4, 1, 0, 1, true),
+        ("OBJ_EVENT_GFX_MYSTERY_GIFT_MAN", 16, 32, 3, 1, 0, 1, true),
+        ("OBJ_EVENT_GFX_ZIGZAGOON_1", 32, 32, 9, 10, 0, 1, true),
+        (
+            "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
+            32,
+            32,
+            5,
+            9,
+            0,
+            0,
+            true,
+        ),
+        (
+            "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
+            32,
+            32,
+            5,
+            9,
+            3,
+            3,
+            true,
+        ),
+    ];
+    for (id, width, height, cells, bank, south, north, east_flips) in rows {
+        let sheet = object_sheet(id).unwrap_or_else(|| panic!("{id} has no row"));
+        assert_eq!(
+            (sheet.width, sheet.height, sheet.cells, sheet.palette_bank),
+            (width, height, cells, bank),
+            "{id}"
+        );
+        assert_eq!(
+            sheet.facing.cell_for(Direction::South),
+            (south, false),
+            "{id}"
+        );
+        assert_eq!(
+            sheet.facing.cell_for(Direction::North),
+            (north, false),
+            "{id}"
+        );
+        let (_, flipped) = sheet.facing.cell_for(Direction::East);
+        assert_eq!(
+            flipped, east_flips,
+            "{id}: east reuses west flipped only for Standard"
+        );
+        assert!(sheet.cells > 0 && sheet.width.is_multiple_of(8) && sheet.height.is_multiple_of(8));
+    }
+    assert_eq!(
+        Facing::PEOPLE.cell_for(Direction::West),
+        (2, false),
+        "west stand frame"
     );
-    assert!(
-        resolve_sprite_source("OBJ_EVENT_GFX_TRUCK", PlayerCharacter::Brendan, &no_flags).is_none()
-    );
-    assert!(resolve_sprite_source(
-        "OBJ_EVENT_GFX_ITEM_BALL",
-        PlayerCharacter::Brendan,
-        &no_flags
-    )
-    .is_none());
-    assert!(resolve_sprite_source(
-        "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
-        PlayerCharacter::Brendan,
-        &no_flags
-    )
-    .is_none());
+}
+
+#[test]
+fn berry_trees_resolve_to_the_fresh_save_berries_stage_per_tree() {
+    use super::sheets::initial_berry_sheet;
+    for (tree, path, bank) in [
+        ("BERRY_TREE_ROUTE_103_CHERI_1", "berry_trees/cheri", 3),
+        ("BERRY_TREE_ROUTE_103_CHERI_2", "berry_trees/cheri", 3),
+        ("BERRY_TREE_ROUTE_103_LEPPA", "berry_trees/leppa", 2),
+    ] {
+        let sheet = initial_berry_sheet(tree).unwrap();
+        assert_eq!(
+            (sheet.sprite_path, sheet.palette_bank),
+            (path, bank),
+            "{tree}"
+        );
+        assert_eq!((sheet.width, sheet.height), (16, 32));
+        // sAnim_BerryTreeStage4 starts at pic 7 = berry-sheet cell 4.
+        assert_eq!(sheet.facing.cell_for(Direction::South), (4, false));
+    }
+    assert!(initial_berry_sheet("BERRY_TREE_ROUTE_104_PECHA_1").is_none());
 }
 
 #[test]

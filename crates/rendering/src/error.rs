@@ -52,6 +52,17 @@ pub enum RenderError {
         /// Supplied tile-index count.
         actual: usize,
     },
+
+    /// A tile handed to a tileset holds a palette index its bit depth cannot
+    /// express (a 4bpp set given an index above 15).
+    TileIndexExceedsBitDepth {
+        /// The tileset's bit depth.
+        bit_depth: BitDepth,
+        /// Position of the offending tile in the supplied list.
+        tile: usize,
+        /// The first palette index found beyond the bit depth's range.
+        index: u8,
+    },
 }
 
 impl fmt::Display for RenderError {
@@ -85,6 +96,14 @@ impl fmt::Display for RenderError {
                 f,
                 "affine tilemap expected {expected} tile indices, got {actual}"
             ),
+            Self::TileIndexExceedsBitDepth {
+                bit_depth,
+                tile,
+                index,
+            } => write!(
+                f,
+                "tile {tile} holds palette index {index}, which a {bit_depth:?} tileset cannot hold"
+            ),
         }
     }
 }
@@ -105,6 +124,15 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("31"));
         assert!(msg.contains("32"));
+
+        let err = RenderError::TileIndexExceedsBitDepth {
+            bit_depth: BitDepth::Bpp4,
+            tile: 3,
+            index: 16,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains('3'));
+        assert!(msg.contains("16"));
 
         let err = RenderError::TilemapSizeMismatch {
             expected: 6,

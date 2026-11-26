@@ -43,6 +43,9 @@ pub enum AssetError {
     /// The contained index is outside the ordered TM/HM slot list.
     UnknownTmHmSlot(usize),
 
+    /// The contained index is outside the ordered move-tutor slot list.
+    UnknownTutorSlot(usize),
+
     /// The contained [`SpeciesId`](crate::species::SpeciesId) is valid but has
     /// no egg-move group.
     NoEggMoves(u16),
@@ -50,6 +53,10 @@ pub enum AssetError {
     /// The contained [`AbilityId`](crate::species::AbilityId) is outside the
     /// ability tables.
     UnknownAbility(u16),
+
+    /// The contained nature discriminant is outside
+    /// [`NATURE_COUNT`](crate::pokeblock_flavors::NATURE_COUNT).
+    UnknownNature(u8),
 
     /// The contained level exceeds [`MAX_LEVEL`](crate::experience::MAX_LEVEL).
     InvalidLevel(u8),
@@ -147,6 +154,23 @@ pub enum AssetError {
     ///
     /// Contains the font's asset-pack name.
     FontSourceMissing(&'static str),
+
+    /// The keypad-icon sheet is not the 128x32 four-bit raster
+    /// [`keypad_icons`](crate::keypad_icons) documents.
+    ///
+    /// Contains the actual width, height, and bit depth.
+    KeypadSheetWrongShape(u32, u32, u8),
+
+    /// The keypad-icon sheet's pixel count does not match its dimensions.
+    ///
+    /// Contains the expected count and the actual count.
+    KeypadSheetWrongPixelCount(usize, usize),
+
+    /// The keypad-icon sheet holds a palette index outside the window's
+    /// sixteen colours.
+    ///
+    /// Contains the row-major pixel index and the invalid palette index.
+    KeypadSheetInvalidPixel(usize, u8),
 }
 
 impl fmt::Display for AssetError {
@@ -164,8 +188,10 @@ impl fmt::Display for AssetError {
                 write!(f, "unknown item battle-usage id `{id}`")
             }
             Self::UnknownTmHmSlot(index) => write!(f, "unknown TM/HM slot index `{index}`"),
+            Self::UnknownTutorSlot(index) => write!(f, "unknown move-tutor slot index `{index}`"),
             Self::NoEggMoves(id) => write!(f, "species id `{id}` has no egg moves"),
             Self::UnknownAbility(id) => write!(f, "unknown ability id `{id}`"),
+            Self::UnknownNature(id) => write!(f, "unknown nature id `{id}`"),
             Self::InvalidLevel(level) => write!(f, "invalid level `{level}` (exceeds MAX_LEVEL)"),
             Self::UnknownMap(name) => write!(f, "unknown map or wild-encounter label `{name}`"),
             Self::UnknownTrainer(id) => write!(f, "unknown trainer id `{id}`"),
@@ -212,6 +238,20 @@ impl fmt::Display for AssetError {
                 write!(f, "font `{name}` has more than one glyph source")
             }
             Self::FontSourceMissing(name) => write!(f, "font `{name}` has no glyph source"),
+            Self::KeypadSheetWrongShape(width, height, bit_depth) => write!(
+                f,
+                "keypad-icon sheet wrong shape: expected {}x{} at 4bpp, got {width}x{height} at {bit_depth}bpp",
+                crate::keypad_icons::SHEET_WIDTH,
+                crate::keypad_icons::SHEET_HEIGHT
+            ),
+            Self::KeypadSheetWrongPixelCount(expected, actual) => write!(
+                f,
+                "keypad-icon sheet wrong pixel count: expected {expected}, got {actual}"
+            ),
+            Self::KeypadSheetInvalidPixel(index, value) => write!(
+                f,
+                "keypad-icon sheet has invalid palette index {value} at pixel {index}: expected 0..=15"
+            ),
         }
     }
 }

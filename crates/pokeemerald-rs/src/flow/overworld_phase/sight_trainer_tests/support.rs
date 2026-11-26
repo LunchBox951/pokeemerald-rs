@@ -9,7 +9,7 @@ use engine::overworld::{ObjectEventState, PlayerState};
 use platform::ButtonState;
 
 use super::super::sight_trainer_approach::SightApproach;
-use super::super::{ActiveBattle, OverworldPhase};
+use super::super::{ActiveBattle, OverworldPhase, PartyReserves};
 
 /// `MAP_ROUTE103`, used throughout the sight-trainer test modules.
 pub(super) const ROUTE_103: MapId = MapId("MAP_ROUTE103");
@@ -26,9 +26,11 @@ pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 /// range 2.
 pub(super) const TRAINER_RHETT: u16 = 703;
 
-/// `TRAINER_ISABELLE` (`include/constants/opponents.h`): her party fails to
-/// construct (`MOVE_ROLLOUT`), so tests use her id as the refused party.
-pub(super) const TRAINER_ISABELLE: u16 = 736;
+/// `TRAINER_THOMAS` (`include/constants/opponents.h`), whose level-45
+/// Zangoose knows Pursuit (`EFFECT_PURSUIT`), which the battle crate does not
+/// execute: its construction is refused for a move, so tests use its id as
+/// the refused party.
+pub(super) const TRAINER_REFUSED_FOR_MOVE: u16 = 256;
 
 /// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
 /// has no resolver, so `validate_player_move` refuses it ahead of any draw
@@ -69,6 +71,7 @@ pub(super) fn route_103_phase(player: PlayerState) -> OverworldPhase {
         player,
         None,
     )
+    .with_private_object_event_rng()
 }
 
 /// [`route_103_phase`] that retains the checkout pack, for the real-pack
@@ -81,6 +84,7 @@ pub(super) fn repo_route_103_phase(player: PlayerState) -> OverworldPhase {
         None,
         crate::pack_source::PackSource::Repo,
     )
+    .with_private_object_event_rng()
 }
 
 /// A battle-ready lead of `species`/`level` with a single `move_id`, mirroring
@@ -173,6 +177,7 @@ pub(super) fn seed_battle(
     phase.active_battle = Some(ActiveBattle::SightTrainer {
         battle,
         trainer_id: assets::trainers::TrainerId(trainer_id),
+        reserves: PartyReserves::default(),
     });
 }
 
@@ -206,7 +211,7 @@ pub(super) fn rhetts_object_event() -> &'static assets::ObjectEvent {
         .expect("MAP_ROUTE103 is bundled map data")
         .object_events
         .iter()
-        .find(|event| event.script == "Route103_EventScript_Rhett")
+        .find(|event| event.script == Some(assets::ScriptRef::new("Route103_EventScript_Rhett")))
         .expect("Route 103 declares Rhett's own object event")
 }
 
@@ -215,6 +220,17 @@ pub(super) fn rhetts_object_event() -> &'static assets::ObjectEvent {
 /// (`InitTrainerApproachTask`'s own `approachDistance - 1`), carrying a real
 /// stand-in battle (section docs).
 pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
+    seed_approach_for(phase, rhetts_object_event().local_id, None, walk_tiles);
+}
+
+/// [`seed_approach`] for the live entry `(carried_from, local_id)` names, so a
+/// test can approach a trainer a connection crossing carried into this map.
+pub(super) fn seed_approach_for(
+    phase: &mut OverworldPhase,
+    local_id: u8,
+    carried_from: Option<MapId>,
+    walk_tiles: u8,
+) {
     phase.rng = engine::rng::Rng::new(7);
     let battle = crate::flow::npc_trainer_battle::start_npc_trainer_battle(
         overwhelming_lead(),
@@ -224,22 +240,33 @@ pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
     .expect("the stand-in Route 103 rival must always construct");
     phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.sight_approach = Some(SightApproach::new(
-        ObjectEventState::from_template(rhetts_object_event()),
+        local_id,
+        carried_from,
         walk_tiles,
         "Whoa!\nHow'd you get into a space this small?",
         battle,
         assets::trainers::TrainerId(TRAINER_RHETT),
+        PartyReserves::default(),
     ));
 }
 
-/// The approaching trainer's live object-event state, for the approach tests'
-/// assertions.
-pub(super) fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
+/// The live collection state of the entry `local_id` names.
+pub(super) fn live_trainer(phase: &OverworldPhase, local_id: u8) -> &ObjectEventState {
     phase
+        .object_events
+        .get(local_id)
+        .expect("the live collection holds the entry")
+        .state()
+}
+
+/// The approaching trainer's live object-event state in the phase's own
+/// collection, for the approach tests' assertions.
+pub(super) fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
+    let approach = phase
         .sight_approach
         .as_ref()
-        .expect("the approach must still be running")
-        .trainer()
+        .expect("the approach must still be running");
+    live_trainer(phase, approach.local_id())
 }
 
 /// How many consecutive frames the multi-frame RNG tests stand still for --

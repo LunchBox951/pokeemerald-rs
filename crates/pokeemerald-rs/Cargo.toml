@@ -62,6 +62,15 @@ rom-import = { path = "../rom-import" }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
 
+# `crate::pack_test_support::ScratchClaim` (compiled under `cfg(test)` only)
+# removes its scratch file on Windows through `win-fs`'s handle identity and
+# verified-handle delete, so a replacement under the same name is never
+# unlinked. Dev-only, so the shipped Windows binary gains no edge; in-workspace,
+# not a new external dependency, and `win-fs` owns the one `windows-sys` use
+# (dependency ledger, `README.md`).
+[target.'cfg(windows)'.dev-dependencies]
+win-fs = { path = "../win-fs" }
+
 [dev-dependencies]
 # The same workspace-local `assets` crate with its test-only seam enabled
 # (mirrors `engine`'s `Cargo.toml`): `main_menu`/`intro`'s unit tests build
@@ -69,7 +78,18 @@ rustix = { version = "1.1", default-features = false, features = ["std", "fs", "
 # asset pack. Dev-only, so production builds keep the pack-mediated pairing
 # guarantee.
 assets = { path = "../assets", features = ["test-support"] }
+# `battle`'s test-only seam (BattlePokemon::reconcile_saved_experience) for
+# unit tests that level a lead without a battle fixture. Dev-only, so the
+# production build carries no level-raise outside an award.
+battle = { path = "../battle", features = ["test-support"] }
 # `pack-format` is a plain dependency now (see above), so it needs no
 # dev-dependency entry: `title`'s tile round-trip test, which proves
 # `title::pack_tile_bytes` is the exact inverse of
 # `pack_format::image_entry_from_tiles`, reaches it through that.
+
+# rustix's `thread` feature, for tests only: `import_rom`'s rollback tests
+# fail a created level's owner-access restore for real by unsharing the
+# test thread's descriptor table and dropping its DAC capabilities. Adds no
+# crate; production builds keep the features above.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { version = "1.1", default-features = false, features = ["thread"] }

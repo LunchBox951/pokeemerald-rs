@@ -3,7 +3,8 @@
 //! # RNG stream
 //!
 //! [`SharedRng`] lends the overworld-owned generator to battle code, keeping
-//! encounter selection, opponent construction, battle initialization, and turns on one
+//! encounter selection (including the level coin party slot 0's Hustle, Vital Spirit or
+//! Pressure draws), opponent construction, battle initialization, and turns on one
 //! stream. [`start_wild_battle`] consumes those construction draws in order, including the
 //! held-item draw whose result is not modelled.
 //! Only the frame-free draw order matches upstream: `VBlankCB_Battle`
@@ -13,36 +14,50 @@
 //!
 //! # Headless action policy
 //!
-//! With no battle menu, [`advance_wild_battle`] attempts to run every turn. Scripted and
+//! With no battle menu, a wild battle attempts to run every turn: [`take_run_turn`], which
+//! the running game plays through `flow::battle_sequence` with the battle's text and
+//! [`advance_wild_battle`] plays with none. Scripted and
 //! trainer battles use separate drivers because they require different legal actions. A
 //! rolled encounter without a party lead is logged and dropped before construction, so it
 //! spends no battle-construction draws.
 //!
 //! # Wild-battle loss
 //!
-//! A terminal battle is written back before [`advance_wild_battle`] returns its outcome. Its
-//! same-frame caller sends [`BattleOutcome::PlayerLost`] through the overworld white-out,
-//! which heals the lead before another field frame can observe it.
+//! A terminal battle is written back before its same-frame caller reads the outcome:
+//! [`advance_wild_battle`] hands back every player-side member, and the caller files each
+//! one that entered into its own saved slot. `BattleOutcome::PlayerLost` is the battle's
+//! report that the whole party is exhausted (`Cmd_checkteamslost`,
+//! `src/battle_script_commands.c:3534-3564`), and only it goes through the overworld
+//! white-out (`CB2_EndWildBattle`, `src/battle_setup.c:602-616`), which heals the party
+//! before another field frame can observe it.
 //!
 //! # Lead-health eligibility
 //!
-//! Encounter eligibility needs no lead-health gate. Wild losses white out in their terminal
-//! frame, the scripted first-battle conclusion heals the lead after every outcome, and save
-//! loading heals the single-member Route 101 rescue state that can otherwise contain a
-//! fainted lead.
+//! Wild losses white out in their terminal frame, the scripted first-battle conclusion heals
+//! the lead after every outcome, and save loading heals the single-member Route 101 rescue
+//! state that can otherwise contain a fainted lead. A fainted lead that survives anyway (an
+//! imported save, or an undecodable reserve that keeps the party's HP total nonzero) is
+//! refused by the shared lead screen (`lead_screen::ensure_lead_can_battle`), which disables
+//! the encounter roll before any draw.
 
 use battle::{
-    Battle, BattleError, BattleOutcome, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction,
+    Battle, BattleError, BattleEvent, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction,
+    TurnError,
 };
+use engine::event_data::{EventData, VAR_REPEL_STEP_COUNT};
 use engine::overworld::metatile_behavior::MB_NORMAL;
 use engine::overworld::warp::WarpTrigger;
-use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
+use engine::overworld::wild_encounter::{
+    EncounterRateModifiers, RepelGate, WildEncounter, WildEncounterState,
+};
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
+use engine::save::{Pokemon, SaveBlock1};
 
-use super::battle_finalize::finalize_battle_turn;
+use super::battle_finalize::{finalize_party_battle_turn, PartyBattleEnd};
 use super::lead_screen::ensure_lead_can_battle;
 use super::move_learn::settle_move_learn_prompts;
+use crate::party::{first_repel_qualifying_level, LoadedLead};
 
 /// Marks `lead` traded when its OT id differs from the save owner's -- the
 /// id half of `IsOtherTrainer` (`pokemon.c:6611-6620`); a lead the save
@@ -70,17 +85,70 @@ impl BattleRng for SharedRng<'_> {
     }
 }
 
+/// The saved and live state one step's encounter roll reads besides the map.
+pub(super) struct StepEncounterInputs<'a> {
+    pub(super) rate_modifiers: EncounterRateModifiers,
+    /// Source of the saved `VAR_REPEL_STEP_COUNT`.
+    pub(super) event_data: &'a EventData,
+    /// All six saved party records, whatever the saved party count.
+    pub(super) party: &'a [Pokemon],
+    /// The owned lead, whose live HP and level override its saved slot.
+    pub(super) lead: Option<&'a LoadedLead>,
+}
+
+impl<'a> StepEncounterInputs<'a> {
+    /// The inputs for a step on `save1`'s party, with the owned `lead` over its saved slot.
+    pub(super) fn new(
+        rate_modifiers: EncounterRateModifiers,
+        save1: &'a SaveBlock1,
+        lead: Option<&'a LoadedLead>,
+    ) -> Self {
+        Self {
+            rate_modifiers,
+            event_data: &save1.event_data,
+            party: &save1.player_party,
+            lead,
+        }
+    }
+}
+
+impl StepEncounterInputs<'_> {
+    /// `IsWildLevelAllowedByRepel`'s input (`src/wild_encounter.c:874-895`): a zero saved
+    /// counter reads no party, otherwise the first usable member's level is looked up.
+    fn repel_gate(&self) -> RepelGate {
+        let steps = self
+            .event_data
+            .var_get(VAR_REPEL_STEP_COUNT)
+            .expect("VAR_REPEL_STEP_COUNT is an ordinary variable id");
+        if steps == 0 {
+            return RepelGate::Inactive;
+        }
+        RepelGate::Active {
+            first_qualifying_level: first_repel_qualifying_level(self.party, self.lead),
+        }
+    }
+}
+
 pub(super) fn roll_for_step(
     state: &mut WildEncounterState,
     rng: &mut Rng,
     map: assets::MapId,
     runtime: &MapRuntime<'_>,
     eligible_landing: Option<TilePos>,
+    slot_zero_ability: Option<assets::AbilityId>,
+    inputs: &StepEncounterInputs<'_>,
 ) -> Option<WildEncounter> {
     let (x, y) = eligible_landing?;
     let metatile_behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
     let encounter_header = assets::WildEncounterTable::new().get_by_map(map);
-    state.check_standard_wild_encounter(metatile_behavior, encounter_header, rng)
+    state.check_standard_wild_encounter_with_repel(
+        metatile_behavior,
+        encounter_header,
+        slot_zero_ability,
+        inputs.rate_modifiers,
+        inputs.repel_gate(),
+        rng,
+    )
 }
 
 /// The completed step `CheckStandardWildEncounter` (`:162`) is allowed to
@@ -131,6 +199,28 @@ pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
 
     let dex = Dex::new();
     for wild_slot in &land_encounters.mons {
+        // The driver's standing Run selection is refused by a trapping
+        // opponent (`battle::escape::ensure_admissible`), which would silently
+        // drop an ongoing encounter, so a table that can roll one is not
+        // fightable yet either.
+        if let Some(trapper) = dex.species(wild_slot.species).ok().and_then(|species| {
+            species.abilities.into_iter().find(|ability| {
+                matches!(
+                    *ability,
+                    assets::AbilityId::SHADOW_TAG
+                        | assets::AbilityId::ARENA_TRAP
+                        | assets::AbilityId::MAGNET_PULL
+                )
+            })
+        }) {
+            eprintln!(
+                "wild encounter: {}'s land table can roll species {:?} with {trapper:?}, \
+                 whose trap refuses the driver's Run -- no encounters will roll on this map",
+                map.name(),
+                wild_slot.species,
+            );
+            return false;
+        }
         for level in wild_slot.min_level..=wild_slot.max_level {
             if let Err(error) = battle::ensure_wild_startable(&dex, wild_slot.species, level) {
                 eprintln!(
@@ -155,7 +245,8 @@ fn consume_unmodelled_wild_held_item_draw(rng: &mut Rng) {
 }
 
 #[cfg(test)]
-/// [`start_wild_battle_with_lead_effects`] for a party whose slot 0 is `player_lead`.
+/// [`start_wild_battle_with_lead_effects`] for a party that is only `player_lead`, whose
+/// slot is 0.
 pub(super) fn start_wild_battle(
     player_lead: BattlePokemon,
     encounter: WildEncounter,
@@ -168,6 +259,7 @@ pub(super) fn start_wild_battle(
         crate::party::live_lead_cute_charm_wild_gender(&Dex::new(), &player_lead);
     start_wild_battle_with_lead_effects(
         player_lead,
+        Vec::new(),
         synchronize_nature,
         cute_charm_gender,
         encounter,
@@ -186,8 +278,12 @@ pub(super) fn start_wild_battle(
 /// `cute_charm_gender` is the gender slot 0 hands the wild mon when it is a non-egg
 /// Cute Charm holder (`CreateWildMon`, `wild_encounter.c:395-412`). Slot 0 need not be
 /// the battle lead `player_lead` when it is fainted.
+///
+/// `player_reserves` are the other saved party members that may be sent out, in slot
+/// order ([`Battle::new_with_player_reserves`]).
 pub(super) fn start_wild_battle_with_lead_effects(
     player_lead: BattlePokemon,
+    player_reserves: Vec<BattlePokemon>,
     synchronize_nature: Option<Nature>,
     cute_charm_gender: Option<Gender>,
     encounter: WildEncounter,
@@ -211,23 +307,33 @@ pub(super) fn start_wild_battle_with_lead_effects(
     consume_unmodelled_wild_held_item_draw(rng);
 
     let is_scripted_first_battle = false;
-    Battle::new(
+    Battle::new_with_player_reserves(
         dex,
         player_lead,
+        player_reserves,
         wild_opponent,
         is_scripted_first_battle,
         &mut SharedRng::new(rng),
     )
 }
 
+/// The wild flow's one player action, an attempt to run, as a single turn of `battle`.
+pub(super) fn take_run_turn(
+    battle: &mut Battle,
+    rng: &mut Rng,
+) -> Result<Vec<BattleEvent>, TurnError> {
+    battle.take_turn(PlayerAction::Run, &mut SharedRng::new(rng))
+}
+
+/// Plays one turn of `battle_slot`. A battle that ends, or whose turn fails, leaves the slot
+/// empty and is returned with its whole player-side party; an ongoing one, or an empty
+/// slot, returns `None`.
 pub(super) fn advance_wild_battle(
     battle_slot: &mut Option<Battle>,
-    player_lead: &mut Option<BattlePokemon>,
     rng: &mut Rng,
-) -> Option<BattleOutcome> {
+) -> Option<PartyBattleEnd> {
     let battle = battle_slot.as_mut()?;
-    let player_action = PlayerAction::Run;
-    let turn_failed = match battle.take_turn(player_action, &mut SharedRng::new(rng)) {
+    let turn_failed = match take_run_turn(battle, rng) {
         Ok(_) => false,
         Err(error) => {
             eprintln!("wild battle: turn failed ({error:?}) -- ending the encounter");
@@ -235,7 +341,7 @@ pub(super) fn advance_wild_battle(
         }
     };
     let _ = settle_move_learn_prompts(battle, rng);
-    finalize_battle_turn(battle_slot, turn_failed, player_lead)
+    finalize_party_battle_turn(battle_slot, turn_failed)
 }
 
 #[cfg(test)]
@@ -245,9 +351,17 @@ mod completed_turn_tests;
 #[cfg(test)]
 mod cute_charm_gender_tests;
 #[cfg(test)]
+mod encounter_rate_modifier_tests;
+#[cfg(test)]
 mod encounter_roll_tests;
 #[cfg(test)]
 mod first_battle_recovery_tests;
+#[cfg(test)]
+mod full_party_tests;
+#[cfg(test)]
+mod repel_tests;
+#[cfg(test)]
+mod slot_zero_level_bias_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

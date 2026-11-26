@@ -168,10 +168,22 @@ fn an_object_whose_script_has_no_faceplayer_keeps_its_facing() {
     )
     .expect("the Vigoroth carries a hide flag");
     phase.save1.event_data.flag_clear(hide_flag).unwrap();
+    run_camera_update(&mut phase);
     let vigoroth = phase.object_events.get(VIGOROTH_LOCAL_ID).unwrap();
-    assert_eq!(vigoroth.template().script, VIGOROTH_SCRIPT);
+    assert_eq!(
+        vigoroth.template().script.map(assets::ScriptRef::id),
+        Some(VIGOROTH_SCRIPT)
+    );
     assert_eq!(vigoroth.state().position(), (1, 3), "fixture precondition");
     assert_eq!(selected_local_id(&phase), Some(VIGOROTH_LOCAL_ID));
+    // The map patrols this Vigoroth; stand it still so the scheduler's own steps
+    // do not read as the interaction touching it.
+    phase
+        .object_events
+        .get_mut(VIGOROTH_LOCAL_ID)
+        .unwrap()
+        .state_mut()
+        .set_movement_type(assets::MovementType::FaceRight);
     let vigoroth_before = *phase.object_events.get(VIGOROTH_LOCAL_ID).unwrap().state();
     let mom_before = mom_facing(&phase);
 

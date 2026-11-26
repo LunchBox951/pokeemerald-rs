@@ -423,6 +423,11 @@ pub struct TrainerPartyMon<'a> {
 /// [`BattleError::UnsupportedHeldItem`] when a member's held item has an
 /// effect no pipeline models, or [`BattleError::UnsupportedTrainerBagItem`]
 /// when the trainer's bag holds any item.
+///
+/// The Trace copies `Battle::new_trainer` projects are screened last, on a
+/// temporary party built without RNG from the same personalities, so a
+/// refusal that screen would raise (for example a burned Trace lead that can
+/// copy a Water Veil member) is returned here with the same error value.
 /// Only the lead is screened; reserves are screened by `Battle::new_trainer`.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
@@ -440,10 +445,11 @@ pub fn ensure_trainer_party_startable(
         super::admission::ensure_selected_ability_admissible(dex, mon.species, mon.personality)?;
     }
     super::trainer_ai::ensure_supported_flags(data.ai_flags)?;
+    let mut built = Vec::with_capacity(party.len());
     for mon in party {
         // `BattlePokemon::new` draws no RNG; the OT-ID roll is the only draw
-        // `build_trainer_pokemon` adds, and the screen never reads it. IVs do
-        // not affect the ability or any secondary-effect screen.
+        // `build_trainer_pokemon` adds, and no screen reads it. IVs do not
+        // affect the ability or any secondary-effect screen.
         let attacker = BattlePokemon::new(
             dex,
             mon.species,
@@ -451,7 +457,8 @@ pub fn ensure_trainer_party_startable(
             fixed_ivs(0),
             mon.personality,
             mon.moves.to_vec(),
-        )?;
+        )?
+        .with_held_item(mon.held_item);
         for slot in attacker.moves() {
             ensure_move_playable(dex, slot.move_id, data.ai_flags)?;
             if slot.pp > 0 {
@@ -459,10 +466,20 @@ pub fn ensure_trainer_party_startable(
             }
         }
         super::held_item::ensure_held_item_playable(mon.held_item)?;
+        built.push(attacker);
     }
     if data.ai_flags.contains(AiFlags::CHECK_BAD_MOVE) {
         super::trainer_ai::ensure_target_ability_unambiguous(player_lead)?;
     }
+    // `Battle::new_trainer` screens the Trace copies last, against the lead as
+    // it enters: a battle never starts holding a type change carried from an
+    // earlier one (`restore_entrant_species_types`). Every fact the screen
+    // reads (species, level, moves, personality-selected ability) is fixed in
+    // `party` and the lead, so the verdict is known before any OT-ID draw.
+    let mut entrant = player_lead.clone();
+    entrant.reset_temporary_types();
+    let usable_party: Vec<&BattlePokemon> = built.iter().filter(|mon| !mon.is_fainted()).collect();
+    super::trace::ensure_copies_admissible(dex, &usable_party, &entrant, &[])?;
     Ok(())
 }
 
@@ -636,8 +653,6 @@ mod tests {
         let dex = Dex::new();
         let moves = [MoveId::TACKLE];
         for (species, personality, ability) in [
-            (SpeciesId::SLAKOTH, SLOT_0, assets::AbilityId::TRUANT),
-            (SpeciesId::SLAKING, SLOT_1, assets::AbilityId::TRUANT),
             (SpeciesId::TAUROS, SLOT_1, assets::AbilityId::INTIMIDATE),
             (SpeciesId::GYARADOS, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::GRANBULL, SLOT_0, assets::AbilityId::INTIMIDATE),
@@ -649,15 +664,6 @@ mod tests {
             (SpeciesId::EKANS, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::SNUBBULL, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::MAWILE, SLOT_1, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::NINJASK, SLOT_0, assets::AbilityId::SPEED_BOOST),
-            (SpeciesId::YANMA, SLOT_0, assets::AbilityId::SPEED_BOOST),
-            (SpeciesId::KECLEON, SLOT_0, assets::AbilityId::COLOR_CHANGE),
-            (SpeciesId::KECLEON, SLOT_1, assets::AbilityId::COLOR_CHANGE),
-            (SpeciesId::PORYGON, SLOT_0, assets::AbilityId::TRACE),
-            (SpeciesId::PORYGON2, SLOT_1, assets::AbilityId::TRACE),
-            (SpeciesId::RALTS, SLOT_1, assets::AbilityId::TRACE),
-            (SpeciesId::KIRLIA, SLOT_1, assets::AbilityId::TRACE),
-            (SpeciesId::GARDEVOIR, SLOT_1, assets::AbilityId::TRACE),
             (SpeciesId::KYOGRE, SLOT_0, assets::AbilityId::DRIZZLE),
             (SpeciesId::GROUDON, SLOT_0, assets::AbilityId::DROUGHT),
             (SpeciesId::TYRANITAR, SLOT_0, assets::AbilityId::SAND_STREAM),
@@ -694,12 +700,48 @@ mod tests {
     }
 
     #[test]
+    fn the_pre_flight_admits_a_color_change_holder_in_either_party_position() {
+        let dex = Dex::new();
+        let moves = [MoveId::TACKLE];
+        for personality in [SLOT_0, SLOT_1] {
+            let kecleon = TrainerPartyMon {
+                species: SpeciesId::KECLEON,
+                level: 20,
+                moves: &moves,
+                personality,
+                held_item: ItemId::NONE,
+            };
+            let ok = TrainerPartyMon {
+                species: SpeciesId::MUDKIP,
+                level: 20,
+                moves: &moves,
+                personality: SLOT_0,
+                held_item: ItemId::NONE,
+            };
+            for party in [[kecleon, ok], [ok, kecleon]] {
+                assert_eq!(
+                    ensure_trainer_party_startable(
+                        &dex,
+                        &lead(SpeciesId::MUDKIP),
+                        MAY_ROUTE_103_MUDKIP,
+                        &party,
+                    ),
+                    Ok(()),
+                    "personality {personality:#x}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_pre_flight_admits_a_mixed_pool_species_whose_selected_slot_is_supported() {
         let dex = Dex::new();
         let moves = [MoveId::TACKLE];
         for (species, personality) in [
             (SpeciesId::EKANS, SLOT_1),
             (SpeciesId::MAWILE, SLOT_0),
+            (SpeciesId::NINJASK, SLOT_0),
+            (SpeciesId::YANMA, SLOT_0),
             (SpeciesId::YANMA, SLOT_1),
             (SpeciesId::RALTS, SLOT_0),
             (SpeciesId::KIRLIA, SLOT_0),
@@ -708,6 +750,15 @@ mod tests {
             (SpeciesId::PARASECT, SLOT_1),
             (SpeciesId::SHROOMISH, SLOT_0),
             (SpeciesId::BRELOOM, SLOT_1),
+            (SpeciesId::SLAKOTH, SLOT_0),
+            (SpeciesId::SLAKING, SLOT_1),
+            // Miguel's Skitty carries Cute Charm in both slots, which the
+            // turn engine now models (`ABILITY_CUTE_CHARM`,
+            // `battle_util.c:2851`-`:2870`).
+            (SpeciesId::SKITTY, SLOT_0),
+            (SpeciesId::SKITTY, SLOT_1),
+            (SpeciesId::DELCATTY, SLOT_0),
+            (SpeciesId::CLEFAIRY, SLOT_0),
         ] {
             assert!(ensure_trainer_party_startable(
                 &dex,
@@ -788,9 +839,9 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            screen(&[member(ItemId::NONE), member(ItemId::ORAN_BERRY)]),
+            screen(&[member(ItemId::NONE), member(ItemId::SITRUS_BERRY)]),
             Err(crate::error::BattleError::UnsupportedHeldItem(
-                ItemId::ORAN_BERRY
+                ItemId::SITRUS_BERRY
             ))
         );
     }
@@ -1057,6 +1108,111 @@ mod tests {
             Err(crate::error::BattleError::AmbiguousPlayerAbility(VOLTORB))
         ));
         assert_eq!(rng.draws(), 0);
+    }
+
+    /// A flagless trainer's native Porygon2 (Trace) with Psybeam would copy a
+    /// Serene Grace lead's ability: `Battle::new_trainer` refuses that
+    /// projection, so the pre-flight must return the same error without a draw.
+    #[test]
+    fn the_pre_flight_refuses_a_trace_projection_new_trainer_refuses() {
+        let dex = Dex::new();
+        let moves = [MoveId::PSYBEAM];
+        let party = [TrainerPartyMon {
+            species: SpeciesId::PORYGON2,
+            level: 20,
+            moves: &moves,
+            personality: SLOT_0,
+            held_item: ItemId::NONE,
+        }];
+        let dunsparce = lead(SpeciesId::DUNSPARCE);
+        assert_eq!(dunsparce.ability(), assets::AbilityId::SERENE_GRACE);
+        assert_eq!(
+            trainer_data(TrainerId::JANI).unwrap().ai_flags,
+            assets::trainers::AiFlags::NONE
+        );
+        let refusal = Err(crate::error::BattleError::UnportedAbilityInteraction(
+            assets::AbilityId::SERENE_GRACE,
+        ));
+        assert_eq!(
+            ensure_trainer_party_startable(&dex, &dunsparce, TrainerId::JANI, &party),
+            refusal
+        );
+
+        let porygon2 = crate::pokemon::BattlePokemon::new(
+            &dex,
+            SpeciesId::PORYGON2,
+            20,
+            fixed_ivs(0),
+            SLOT_0,
+            moves.to_vec(),
+        )
+        .expect("a valid Trace attacker");
+        assert_eq!(porygon2.native_ability(), assets::AbilityId::TRACE);
+        let mut rng = SequenceRng::new([]);
+        let constructed = crate::battle::Battle::new_trainer(
+            Dex::new(),
+            dunsparce,
+            TrainerId::JANI,
+            vec![porygon2],
+            &mut rng,
+        );
+        assert_eq!(constructed.map(|_| ()), refusal);
+        assert_eq!(rng.draws(), 0);
+    }
+
+    /// A Trace lead copies the member's Water Veil only when burned, and the
+    /// pre-flight then agrees with `Battle::new_trainer` in both directions.
+    #[test]
+    fn the_pre_flight_trace_screen_tracks_the_leads_status() {
+        let dex = Dex::new();
+        let moves = [MoveId::TACKLE];
+        let party = [TrainerPartyMon {
+            species: SpeciesId::WAILMER,
+            level: 20,
+            moves: &moves,
+            personality: SLOT_0,
+            held_item: ItemId::NONE,
+        }];
+        let wailmer = || {
+            crate::pokemon::BattlePokemon::new(
+                &Dex::new(),
+                SpeciesId::WAILMER,
+                20,
+                fixed_ivs(0),
+                SLOT_0,
+                moves.to_vec(),
+            )
+            .expect("a valid party member")
+        };
+        for (status, refused) in [
+            (crate::status1::Status1::Healthy, false),
+            (crate::status1::Status1::Burned, true),
+        ] {
+            let mut porygon2 = lead(SpeciesId::PORYGON2);
+            assert_eq!(porygon2.ability(), assets::AbilityId::TRACE);
+            porygon2.set_status1(status);
+            let verdict = if refused {
+                Err(crate::error::BattleError::UnportedAbilityInteraction(
+                    assets::AbilityId::WATER_VEIL,
+                ))
+            } else {
+                Ok(())
+            };
+            assert_eq!(
+                ensure_trainer_party_startable(&dex, &porygon2, TrainerId::JANI, &party),
+                verdict,
+                "{status:?}"
+            );
+            let mut rng = SequenceRng::new([0; 16]);
+            let constructed = crate::battle::Battle::new_trainer(
+                Dex::new(),
+                porygon2,
+                TrainerId::JANI,
+                vec![wailmer()],
+                &mut rng,
+            );
+            assert_eq!(constructed.map(|_| ()), verdict, "{status:?}");
+        }
     }
 
     #[test]

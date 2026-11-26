@@ -262,6 +262,54 @@ fn git_sha_marks_a_dirty_worktree_and_leaves_a_clean_one_bare() {
     );
 }
 
+#[test]
+fn git_sha_marks_edits_hidden_by_assume_unchanged_or_skip_worktree_dirty() {
+    for (label, flag) in [
+        ("assume-unchanged", "--assume-unchanged"),
+        ("skip-worktree", "--skip-worktree"),
+    ] {
+        let repo = scratch_path(&format!("hidden-index-repo-{label}"));
+        let _guard = ScratchGuard(repo.clone());
+        init_committed_repo(&repo, b"one");
+        let clean = git_sha(&repo).expect("a freshly committed repo has a HEAD");
+        assert!(!clean.ends_with("-dirty"), "{clean}");
+
+        let flagged = git_command(&repo)
+            .args(["update-index", flag, "tracked.txt"])
+            .output()
+            .expect("git must be on PATH");
+        assert!(flagged.status.success(), "git update-index {flag} failed");
+        std::fs::write(repo.join("tracked.txt"), b"two").unwrap();
+
+        // The hazard itself: git status is blind to the edit.
+        let status = super::git_output(&repo, &["status", "--porcelain"]).unwrap();
+        assert!(
+            status.trim().is_empty(),
+            "{label} must hide the edit from git status: {status:?}"
+        );
+        assert_eq!(
+            git_sha(&repo),
+            Some(format!("{clean}-dirty")),
+            "an edit hidden by {label} must not be recorded as a clean SHA"
+        );
+    }
+}
+
+#[test]
+fn git_sha_marks_a_hidden_index_entry_dirty_even_before_it_is_edited() {
+    let repo = scratch_path("hidden-index-unedited-repo");
+    let _guard = ScratchGuard(repo.clone());
+    init_committed_repo(&repo, b"one");
+    let clean = git_sha(&repo).expect("a freshly committed repo has a HEAD");
+    let flagged = git_command(&repo)
+        .args(["update-index", "--assume-unchanged", "tracked.txt"])
+        .output()
+        .expect("git must be on PATH");
+    assert!(flagged.status.success());
+    // Git no longer verifies the file, so the tree cannot be shown clean.
+    assert_eq!(git_sha(&repo), Some(format!("{clean}-dirty")));
+}
+
 /// Initialises a repository at `repo` holding one commit of `content`.
 fn init_committed_repo(repo: &std::path::Path, content: &[u8]) {
     std::fs::create_dir_all(repo).unwrap();

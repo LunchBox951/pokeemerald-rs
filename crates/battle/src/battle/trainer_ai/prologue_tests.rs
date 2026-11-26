@@ -3,9 +3,9 @@
 //! Focus Energy handlers.
 
 use super::{
-    choose_trainer_action, ensure_scoreable, fold_ai_type_effectiveness, score_bad_move,
-    score_bad_move_prologue, MoveScores, ScoreableEffect, AI_EFFECTIVENESS_NEUTRAL,
-    UNCHANGED_AFTER_PROLOGUE_EFFECTS,
+    ai_get_ability, choose_trainer_action, ensure_scoreable, ensure_target_ability_unambiguous,
+    fold_ai_type_effectiveness, score_bad_move, score_bad_move_prologue, MoveScores,
+    ScoreableEffect, AI_EFFECTIVENESS_NEUTRAL, UNCHANGED_AFTER_PROLOGUE_EFFECTS,
 };
 use crate::battle::opponent_ai::EnemyAction;
 use crate::dex::Dex;
@@ -129,6 +129,10 @@ fn wonder_guard_cancels_everything_but_an_exactly_super_effective_hit() {
     let shedinja = mon(SHEDINJA, &[MoveId::POUND]);
     assert_eq!(prologue(MoveId::WATER_GUN, &shedinja), (true, MINUS_10));
     assert_eq!(prologue(MoveId::WING_ATTACK, &shedinja), (false, FULL));
+    // Rollout shares Ice Ball's effect: Rock is super effective against
+    // Shedinja's Bug typing, Ice is not.
+    assert_eq!(prologue(MoveId::ROLLOUT, &shedinja), (false, FULL));
+    assert_eq!(prologue(MoveId::ICE_BALL, &shedinja), (true, MINUS_10));
 }
 
 #[test]
@@ -165,11 +169,19 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
         MoveId::DRAGON_RAGE,
         MoveId::SLASH,
         MoveId::MUD_SHOT,
+        MoveId::MUD_SLAP,
         MoveId::CONFUSION,
         MoveId::VITAL_THROW,
         MoveId::SPLASH,
         MoveId::QUICK_ATTACK,
         MoveId::CHARGE,
+        MoveId::BITE,
+        MoveId::HEADBUTT,
+        MoveId::ASTONISH,
+        MoveId::FLAME_WHEEL,
+        MoveId::SACRED_FIRE,
+        MoveId::ROLLOUT,
+        MoveId::ICE_BALL,
     ];
     for move_id in moves {
         let effect = Dex::new().move_data(move_id).unwrap().effect;
@@ -183,17 +195,22 @@ fn the_audited_row_set_is_exact() {
     let effects = [
         MoveEffect::ABSORB,
         MoveEffect::POISON_HIT,
+        MoveEffect::THAW_HIT,
         MoveEffect::ALWAYS_HIT,
         MoveEffect::MULTI_HIT,
         MoveEffect::DRAGON_RAGE,
         MoveEffect::HIGH_CRITICAL,
         MoveEffect::SPEED_DOWN_HIT,
+        MoveEffect::ACCURACY_DOWN_HIT,
         MoveEffect::EVASION_DOWN_HIT,
         MoveEffect::CONFUSE_HIT,
         MoveEffect::VITAL_THROW,
         MoveEffect::SPLASH,
         MoveEffect::QUICK_ATTACK,
         MoveEffect::CHARGE,
+        MoveEffect::FLINCH_HIT,
+        MoveEffect::FLINCH_MINIMIZE_HIT,
+        MoveEffect::ROLLOUT,
     ];
     let raw: Vec<u8> = effects.iter().map(|effect| effect.0).collect();
     let mut expected: Vec<u8> = UNCHANGED_AFTER_PROLOGUE_EFFECTS
@@ -223,6 +240,7 @@ fn admission_is_flag_aware() {
         MoveId::SWIFT,
         MoveId::SLASH,
         MoveId::MUD_SHOT,
+        MoveId::MUD_SLAP,
         MoveId::VITAL_THROW,
         MoveId::QUICK_ATTACK,
         MoveId::SPLASH,
@@ -233,27 +251,47 @@ fn admission_is_flag_aware() {
             "{move_id:?}"
         );
     }
-    for move_id in [
-        MoveId::ABSORB,
-        MoveId::SWIFT,
-        MoveId::SLASH,
-        MoveId::MUD_SHOT,
-        MoveId::VITAL_THROW,
-    ] {
-        assert_eq!(
-            ensure_scoreable(&dex, move_id, only_cbm.union(AiFlags::CHECK_VIABILITY)),
-            Err(BattleError::UnscoreableMoveEffect(move_id))
-        );
-    }
+    assert_eq!(
+        ensure_scoreable(
+            &dex,
+            MoveId::SLASH,
+            only_cbm.union(AiFlags::CHECK_VIABILITY)
+        ),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::SLASH))
+    );
+    // `AI_CV_Absorb` is ported, so a draining move passes `CHECK_VIABILITY`.
+    assert_eq!(
+        ensure_scoreable(
+            &dex,
+            MoveId::ABSORB,
+            only_cbm.union(AiFlags::CHECK_VIABILITY)
+        ),
+        Ok(())
+    );
+    // `AI_CheckViability` has no `EFFECT_ACCURACY_DOWN_HIT` branch
+    // (`data/battle_ai_scripts.s:655-743`), unlike Speed Down Hit's at `:706`.
+    assert_eq!(
+        ensure_scoreable(
+            &dex,
+            MoveId::MUD_SLAP,
+            only_cbm.union(AiFlags::CHECK_VIABILITY)
+        ),
+        Ok(())
+    );
     assert_eq!(
         ensure_scoreable(
             &dex,
             MoveId::QUICK_ATTACK,
             only_cbm.union(AiFlags::TRY_TO_FAINT)
         ),
-        Err(BattleError::UnscoreableMoveEffect(MoveId::QUICK_ATTACK))
+        Ok(())
     );
-    for move_id in [MoveId::SPLASH, MoveId::POISON_STING] {
+    for move_id in [
+        MoveId::SPLASH,
+        MoveId::POISON_STING,
+        MoveId::FLAME_WHEEL,
+        MoveId::SACRED_FIRE,
+    ] {
         assert_eq!(
             ensure_scoreable(
                 &dex,
@@ -267,11 +305,11 @@ fn admission_is_flag_aware() {
             "{move_id:?}"
         );
     }
-    assert_eq!(
-        ensure_scoreable(&dex, MoveId::CHARGE, only_cbm.union(AiFlags::TRY_TO_FAINT)),
-        Err(BattleError::UnscoreableMoveEffect(MoveId::CHARGE))
-    );
-    for flags in [only_cbm, only_cbm.union(AiFlags::CHECK_VIABILITY)] {
+    for flags in [
+        only_cbm,
+        only_cbm.union(AiFlags::CHECK_VIABILITY),
+        only_cbm.union(AiFlags::TRY_TO_FAINT),
+    ] {
         assert_eq!(ensure_scoreable(&dex, MoveId::CHARGE, flags), Ok(()));
     }
     assert_eq!(
@@ -367,6 +405,24 @@ fn a_two_ability_target_is_refused_without_a_guess_draw() {
         Err(BattleError::AmbiguousPlayerAbility(VOLTORB))
     );
     assert_eq!(rng.draws(), 0);
+}
+
+#[test]
+fn a_traced_trapping_ability_does_not_make_a_two_ability_target_readable() {
+    let mut player = mon(SpeciesId::RALTS, &[MoveId::POUND]);
+    player.trace_ability(AbilityId::SHADOW_TAG);
+    assert_eq!(
+        ensure_target_ability_unambiguous(&player),
+        Err(BattleError::AmbiguousPlayerAbility(SpeciesId::RALTS))
+    );
+}
+
+#[test]
+fn a_single_ability_trace_holder_reads_as_the_ability_it_copied() {
+    let mut player = mon(SpeciesId::PORYGON2, &[MoveId::POUND]);
+    assert_eq!(ai_get_ability(&player), Ok(AbilityId::TRACE));
+    player.trace_ability(AbilityId::FLASH_FIRE);
+    assert_eq!(ai_get_ability(&player), Ok(AbilityId::FLASH_FIRE));
 }
 
 #[test]
@@ -602,12 +658,10 @@ fn status_handler_admission_is_flag_aware_and_exact() {
         ensure_scoreable(&dex, MoveId::FOCUS_ENERGY, viability),
         Ok(())
     );
-    for move_id in [MoveId::THUNDER_WAVE, MoveId::CONFUSE_RAY] {
-        assert_eq!(
-            ensure_scoreable(&dex, move_id, viability),
-            Err(BattleError::UnscoreableMoveEffect(move_id))
-        );
-    }
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::CONFUSE_RAY, viability),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::CONFUSE_RAY))
+    );
     for move_id in [
         MoveId::SAFEGUARD,
         MoveId::TOXIC,
@@ -661,6 +715,36 @@ fn sonic_boom_is_admitted_for_check_bad_move_alone() {
                 AiFlags::CHECK_BAD_MOVE.union(extra)
             ),
             Err(BattleError::UnscoreableMoveEffect(MoveId::SONIC_BOOM)),
+        );
+    }
+}
+
+/// False Swipe executes through the ordinary hit script, but no trainer AI
+/// script scores `EFFECT_FALSE_SWIPE`, so a scoring trainer holding it stays
+/// refused under every flag combination; a flagless trainer runs no script.
+#[test]
+fn false_swipe_stays_unscoreable_under_every_scoring_flag() {
+    let dex = Dex::new();
+    let scripts = [
+        AiFlags::CHECK_BAD_MOVE,
+        AiFlags::TRY_TO_FAINT,
+        AiFlags::CHECK_VIABILITY,
+        AiFlags::SETUP_FIRST_TURN,
+    ];
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::FALSE_SWIPE, AiFlags::NONE),
+        Ok(())
+    );
+    for mask in 1_u8..16 {
+        let flags = scripts
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| mask & (1 << bit) != 0)
+            .fold(AiFlags::NONE, |all, (_, script)| all.union(*script));
+        assert_eq!(
+            ensure_scoreable(&dex, MoveId::FALSE_SWIPE, flags),
+            Err(BattleError::UnscoreableMoveEffect(MoveId::FALSE_SWIPE)),
+            "mask {mask:#06b}"
         );
     }
 }

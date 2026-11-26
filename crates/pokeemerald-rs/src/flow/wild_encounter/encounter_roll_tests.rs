@@ -21,7 +21,7 @@ use super::test_support::{
     ROUTE_101, TEST_PLAYER_TRAINER_ID, WURMPLE,
 };
 use crate::flow::lead_screen::loaded_holding;
-use crate::flow::overworld_phase::{ActiveBattle, OverworldPhase};
+use crate::flow::overworld_phase::{ActiveBattle, OverworldPhase, WildBattle};
 use assets::items::ItemId;
 use assets::{MoveId, SpeciesId};
 use battle::{BattleError, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction, MAX_IV};
@@ -94,7 +94,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
          has not been observed yet (issue #1039)"
     );
     phase.step(ButtonState::new());
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("the seeded roll fires an encounter on the first rolled step");
     };
     assert_eq!(battle.enemy().species(), WURMPLE);
@@ -305,6 +305,67 @@ fn route_101s_table_is_fightable_and_route_102s_is_not_yet() {
     )));
 }
 
+/// Route 102's real Lotad slots (levels 3 and 4,
+/// `wild_encounters.json:108-141`) know Astonish, which used to refuse them
+/// outright. The map as a whole stays gated by its Seedot's Bide
+/// ([`route_101s_table_is_fightable_and_route_102s_is_not_yet`]), so this pins
+/// Lotad on its own, with its real learnset rather than a substituted moveset.
+#[test]
+fn route_102s_real_lotad_slots_pass_the_battle_preflight_and_start() {
+    let header = assets::WildEncounterTable::new()
+        .get_by_map(assets::MapId("MAP_ROUTE102"))
+        .expect("Route 102 has a wild header");
+    let land = header.land.expect("Route 102 has a land table");
+    let lotad_slots: Vec<_> = land
+        .mons
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| slot.species == SpeciesId::LOTAD)
+        .collect();
+    assert!(!lotad_slots.is_empty(), "Route 102 rolls Lotad");
+
+    let dex = Dex::new();
+    for (index, wild_slot) in lotad_slots {
+        for level in wild_slot.min_level..=wild_slot.max_level {
+            assert!(
+                battle::initial_moveset(SpeciesId::LOTAD, level).contains(&MoveId::ASTONISH),
+                "level {level}"
+            );
+            assert_eq!(
+                battle::ensure_wild_startable(&dex, SpeciesId::LOTAD, level),
+                Ok(()),
+                "level {level}"
+            );
+            let mut rng = Rng::new(ENCOUNTER_SEED);
+            let encounter = WildEncounter {
+                species: SpeciesId::LOTAD,
+                level,
+                slot: index,
+            };
+            let lead = player_mon(277, 50, vec![MoveId::POUND]);
+            let battle = start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng)
+                .unwrap_or_else(|error| panic!("level {level}: {error:?}"));
+            assert_eq!(battle.enemy().species(), SpeciesId::LOTAD);
+            assert!(battle
+                .enemy()
+                .moves()
+                .iter()
+                .any(|slot| slot.move_id == MoveId::ASTONISH));
+        }
+    }
+}
+
+/// Mirage Tower 1F rolls Trapinch (Arena Trap), whose trap refuses the
+/// driver's standing Run; Bite made its moveset fightable, so the screen
+/// itself now refuses the table
+/// ([`no_fightable_land_table_can_roll_a_trapping_opponent`]).
+#[test]
+fn a_table_that_can_roll_a_trapping_opponent_is_not_fightable() {
+    assert!(!super::map_wild_table_fightable(assets::MapId(
+        "MAP_MIRAGE_TOWER_1F"
+    )));
+}
+
 /// On a map whose table fails the screen, a grass step must draw **nothing
 /// at all** -- not roll-and-reject, which would spend `CreateWildMon`'s draws
 /// on a battle that cannot start (upstream never rejects one, so those
@@ -326,7 +387,8 @@ fn an_unfightable_map_table_disables_the_roll_without_drawing() {
         assets::MapId("MAP_ROUTE102"),
         PlayerState::new((2, 5), 3, Direction::East),
         None,
-    );
+    )
+    .with_private_object_event_rng();
     phase.rng = Rng::new(ENCOUNTER_SEED);
     phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
     assert!(
@@ -467,7 +529,7 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
         assert!(steps < 100, "100 steps in grass without an encounter");
     }
 
-    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+    let Some(ActiveBattle::Wild(WildBattle { battle, .. })) = phase.active_battle.as_ref() else {
         panic!("an encounter fired");
     };
     let land = assets::WildEncounterTable::new()
@@ -594,20 +656,20 @@ fn a_run_onto_an_encounter_returns_from_battle_standing() {
     );
 }
 
-/// A Truant lead (`battle_util.c:2086-2097`) disables the roll like an unfightable
+/// An Intimidate lead (`battle_util.c:3003-3016`, a switch-in effect admission refuses) disables the roll like an unfightable
 /// table, so no encounter or `CreateWildMon` draw is spent on a refused battle.
 #[test]
 fn an_inadmissible_lead_disables_the_roll_without_drawing() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    let slakoth = player_mon(SpeciesId::SLAKOTH.0, 50, vec![MoveId::SCRATCH]);
+    let mightyena = player_mon(SpeciesId::MIGHTYENA.0, 50, vec![MoveId::SCRATCH]);
     assert_eq!(
-        battle::ensure_participant_admissible(&slakoth),
+        battle::ensure_participant_admissible(&mightyena),
         Err(BattleError::UnportedAbilityInteraction(
-            assets::AbilityId::TRUANT
+            assets::AbilityId::INTIMIDATE
         )),
     );
-    phase.set_fresh_lead_for_test(slakoth);
+    phase.set_fresh_lead_for_test(mightyena);
     let immunity_before = phase.wild.immunity_steps();
     let behavior_before = phase.wild.prev_metatile_behavior();
 
@@ -625,7 +687,7 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
     assert_eq!(
         phase.wild_lead_refusal,
         Some(BattleError::UnportedAbilityInteraction(
-            assets::AbilityId::TRUANT
+            assets::AbilityId::INTIMIDATE
         )),
         "the refusal is reported, and remembered so it reports once"
     );
@@ -641,29 +703,29 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
 #[test]
 fn start_wild_battle_refuses_an_inadmissible_lead_before_any_draw() {
     let mut rng = Rng::new(ENCOUNTER_SEED);
-    let slakoth = player_mon(SpeciesId::SLAKOTH.0, 50, vec![MoveId::SCRATCH]);
+    let mightyena = player_mon(SpeciesId::MIGHTYENA.0, 50, vec![MoveId::SCRATCH]);
     let encounter = WildEncounter {
         slot: 0,
         species: WURMPLE,
         level: 2,
     };
     assert_eq!(
-        start_wild_battle(slakoth, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
+        start_wild_battle(mightyena, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
         Some(BattleError::UnportedAbilityInteraction(
-            assets::AbilityId::TRUANT
+            assets::AbilityId::INTIMIDATE
         )),
     );
     assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
 }
 
-/// A loaded lead holding Oran Berry (`HoldEffect` it does not model) disables the roll
-/// like a Truant lead: refused and reported, never silently played without the effect.
+/// A loaded lead holding Sitrus Berry (`HoldEffect` it does not model) disables the roll
+/// like an Intimidate lead: refused and reported, never silently played without the effect.
 #[test]
 fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
     phase.rng = Rng::new(ENCOUNTER_SEED);
     let treecko = player_mon(277, 50, vec![MoveId::POUND]);
-    let lead = loaded_holding(&treecko, ItemId::ORAN_BERRY);
+    let lead = loaded_holding(&treecko, ItemId::SITRUS_BERRY);
     phase.set_fresh_lead_for_test(lead.clone());
     let immunity_before = phase.wild.immunity_steps();
 
@@ -684,7 +746,7 @@ fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
     );
     assert_eq!(
         phase.wild_lead_refusal,
-        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+        Some(BattleError::UnsupportedHeldItem(ItemId::SITRUS_BERRY)),
     );
 
     phase.set_fresh_lead_for_test(loaded_holding(&treecko, ItemId::NUGGET));
@@ -692,12 +754,42 @@ fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
     assert_eq!(phase.wild_lead_refusal, None);
 }
 
+/// Taking the refused item through the start menu's hook re-enables the roll, and the
+/// handoff then builds the battle with the same lead.
+#[test]
+fn taking_a_refused_item_lets_the_wild_roll_and_battle_proceed() {
+    let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
+    let treecko = player_mon(277, 50, vec![MoveId::POUND]);
+    phase.set_fresh_lead_for_test(loaded_holding(&treecko, ItemId::SITRUS_BERRY));
+    assert!(!phase.wild_lead_admissible(), "setup: the item is refused");
+
+    assert_eq!(
+        phase.take_lead_held_item(),
+        Some(crate::party::TakeHeldItem::Took(ItemId::SITRUS_BERRY))
+    );
+
+    assert!(phase.wild_lead_admissible());
+    assert_eq!(phase.wild_lead_refusal, None);
+    let lead = phase.lead_for_test().cloned().expect("the lead stays home");
+    assert_eq!(lead.held_item(), ItemId::NONE);
+
+    // The same grass walk the refused lead blocked now rolls and starts the
+    // battle with that lead.
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    walk_east_and_land(&mut phase, 5);
+    assert_eq!(phase.player.position(), (7, 5));
+    assert!(
+        phase.is_wild_battle_active(),
+        "the grass roll must start a battle once the item is gone"
+    );
+}
+
 #[test]
 fn start_wild_battle_refuses_a_battle_item_before_any_draw() {
     let mut rng = Rng::new(ENCOUNTER_SEED);
     let lead = loaded_holding(
         &player_mon(277, 50, vec![MoveId::POUND]),
-        ItemId::ORAN_BERRY,
+        ItemId::SITRUS_BERRY,
     );
     let encounter = WildEncounter {
         slot: 0,
@@ -706,7 +798,7 @@ fn start_wild_battle_refuses_a_battle_item_before_any_draw() {
     };
     assert_eq!(
         start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
-        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+        Some(BattleError::UnsupportedHeldItem(ItemId::SITRUS_BERRY)),
     );
     assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
 }

@@ -1,7 +1,7 @@
 //! Active-battle ownership, dispatch, completion, and starter wiring.
 
 use super::test_support::*;
-use super::{ActiveBattle, OverworldPhase};
+use super::{ActiveBattle, OverworldPhase, PartyReserves, WildBattle};
 use crate::new_game;
 use engine::overworld::{Direction, PlayerState};
 use engine::rng::Rng;
@@ -84,15 +84,17 @@ fn active_battle_reports_exactly_one_frame_owner_for_each_variant() {
     .expect("the stand-in trainer must always construct");
 
     let variants = [
-        ActiveBattle::Wild(wild_battle),
+        ActiveBattle::Wild(WildBattle::without_reserves(wild_battle)),
         ActiveBattle::First(first_battle),
         ActiveBattle::Rival {
             battle: rival_battle,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
         ActiveBattle::SightTrainer {
             battle: sight_battle,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
     ];
 
@@ -178,15 +180,17 @@ fn step_dispatches_each_active_battle_variant_to_its_own_driver() {
     let rival = mk_npc(&mut rng);
     let sight = mk_npc(&mut rng);
     let variants = [
-        ActiveBattle::Wild(wild),
+        ActiveBattle::Wild(WildBattle::without_reserves(wild)),
         ActiveBattle::First(first),
         ActiveBattle::Rival {
             battle: rival,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
         ActiveBattle::SightTrainer {
             battle: sight,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
     ];
     for variant in variants {
@@ -244,15 +248,17 @@ fn step_drives_each_active_battle_variant_to_completion() {
     let rival = mk_npc(&mut rng);
     let sight = mk_npc(&mut rng);
     let variants = [
-        ActiveBattle::Wild(wild),
+        ActiveBattle::Wild(WildBattle::without_reserves(wild)),
         ActiveBattle::First(first),
         ActiveBattle::Rival {
             battle: rival,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
         ActiveBattle::SightTrainer {
             battle: sight,
             trainer_id: stand_in_trainer,
+            reserves: PartyReserves::default(),
         },
     ];
     for variant in variants {

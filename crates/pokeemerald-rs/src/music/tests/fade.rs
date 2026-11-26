@@ -18,6 +18,7 @@ fn sustained_cgb_song() -> Song {
         sweep: 0,
         adsr: CgbAdsr::flat(),
         fixed_rate: false,
+        length: 0,
     })];
     let track = vec![
         Event::Voice(0),

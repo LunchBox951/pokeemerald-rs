@@ -225,10 +225,11 @@ fn the_drain_visits_every_slot_and_both_poison_kinds() {
     );
 }
 
-/// An exact decrement of the saved HP, even when the zero-EV model hides
-/// points of it: the saved record is what upstream decrements.
+/// An exact decrement of the saved HP, even for a record whose stored maximum
+/// is above the zero-EV formula's: the loaded battler adopts the stored block
+/// and HP verbatim, so the one point comes off the saved value.
 #[test]
-fn an_ev_trained_leads_hidden_hp_is_drained_one_point_at_a_time() {
+fn a_stored_maximum_above_the_formula_drains_one_point_at_a_time() {
     let mut record = member(1, Status1::Poisoned, 0);
     record.max_hp += 7;
     record.hp = record.max_hp;
@@ -243,22 +244,23 @@ fn an_ev_trained_leads_hidden_hp_is_drained_one_point_at_a_time() {
     assert!(live > 0, "the lead is alive");
 }
 
-/// A battle left the lead at one live HP with seven hidden by the zero-EV
-/// load clamp, which saves as eight. Poison takes one saved point, leaving
-/// seven: the lead is not fainted by the live model's last point.
+/// A battle left the lead at eight HP of a stored maximum above the zero-EV
+/// formula's. The loaded battler holds the stored HP verbatim, so the save
+/// files those eight, and poison takes one, leaving seven: the lead is not
+/// fainted.
 #[test]
-fn poison_takes_a_saved_point_not_the_live_models_last_one() {
+fn poison_drains_one_point_from_a_damaged_leads_stored_hp() {
     let mut record = member(1, Status1::Poisoned, 0);
     record.max_hp += 7;
     record.hp = record.max_hp;
     let mut phase = phase_with_party(&[record]);
     let live = phase.lead_for_test().unwrap().current_hp();
-    phase.lead_mut_for_test().unwrap().apply_damage(live - 1);
+    phase.lead_mut_for_test().unwrap().apply_damage(live - 8);
     set_counter(&mut phase, 3);
 
     complete_step(&mut phase);
 
-    assert_eq!(hp(&phase, 0), 7, "8 saved HP, minus the one poison point");
+    assert_eq!(hp(&phase, 0), 7, "8 HP, minus the one poison point");
     assert!(!phase.lead_for_test().unwrap().is_fainted());
     assert_eq!(phase.save1.player_party[0].status, POISON);
 }
@@ -268,6 +270,76 @@ fn poison_takes_a_saved_point_not_the_live_models_last_one() {
 #[test]
 fn a_lead_cured_in_battle_is_not_drained_off_its_stale_record() {
     let record = member(1, Status1::Poisoned, 5);
+    let mut phase = phase_with_party(&[record]);
+    phase
+        .lead_mut_for_test()
+        .unwrap()
+        .set_status1(Status1::Healthy);
+    set_counter(&mut phase, 3);
+
+    complete_step(&mut phase);
+
+    assert_eq!(hp(&phase, 0), record.hp);
+    assert_eq!(phase.save1.player_party[0].status, 0, "the cure is filed");
+}
+
+/// A badly poisoned lead loads, drains one HP like any poison
+/// (`STATUS1_PSN_ANY`, `field_poison.c:128-140`), and keeps its stored toxic
+/// word, counter included: the field effect never touches bits 8-11.
+#[test]
+fn a_badly_poisoned_lead_drains_one_hp_and_keeps_its_stored_word() {
+    for word in [0x80u32, 0x580, 0xF80] {
+        let mut record = member(1, Status1::Healthy, 5);
+        record.status = word;
+        let start = record.hp;
+        let mut phase = phase_with_party(&[record]);
+        set_counter(&mut phase, 3);
+
+        complete_step(&mut phase);
+
+        assert_eq!(hp(&phase, 0), start - 1, "word {word:#x}");
+        assert_eq!(phase.save1.player_party[0].status, word);
+        let lead = phase.lead_for_test().expect("the lead survives");
+        assert_eq!(
+            lead.status1(),
+            Status1::BadPoisoned {
+                counter: u8::try_from((word >> 8) & 0xF).unwrap()
+            }
+        );
+        assert_eq!(u16::try_from(lead.current_hp()).unwrap(), start - 1);
+    }
+}
+
+/// The live battler, not the stored record, may be the only side that says
+/// poisoned: the flush must still file it, so the drain sees the toxic word.
+/// A raw-word-only test cannot tell, as the stored word already satisfies the
+/// second half of the check.
+#[test]
+fn a_live_bad_poison_lead_with_a_healthy_record_is_filed_then_drained() {
+    let record = member(1, Status1::Healthy, 5);
+    let start = record.hp;
+    let mut phase = phase_with_party(&[record]);
+    phase
+        .lead_mut_for_test()
+        .unwrap()
+        .set_status1(Status1::BadPoisoned { counter: 5 });
+    assert_eq!(
+        phase.save1.player_party[0].status, 0,
+        "fixture: not yet filed"
+    );
+    set_counter(&mut phase, 3);
+
+    complete_step(&mut phase);
+
+    assert_eq!(phase.save1.player_party[0].status, 0x580);
+    assert_eq!(hp(&phase, 0), start - 1);
+}
+
+/// A toxic lead cured in battle is not drained off its stale toxic record.
+#[test]
+fn a_bad_poison_lead_cured_in_battle_is_not_drained_off_its_stale_record() {
+    let mut record = member(1, Status1::Healthy, 5);
+    record.status = 0x580;
     let mut phase = phase_with_party(&[record]);
     phase
         .lead_mut_for_test()

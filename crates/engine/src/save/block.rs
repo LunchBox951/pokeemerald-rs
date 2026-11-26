@@ -3,11 +3,48 @@
 //! Decoding ignores unmodeled bytes. [`SaveBlock1::patch_bytes`] and
 //! [`SaveBlock2::patch_bytes`] preserve them, while `to_bytes` serializes the
 //! modeled fields over a zero-filled payload.
+//!
+//! # The saved player object's elevation pair
+//!
+//! Upstream copies every `ObjectEvent` in and out of `SaveBlock1::objectEvents`
+//! whole (`SaveObjectEvents`/`LoadObjectEvents`, `src/load_save.c:180-194`), so
+//! the player's `(currentElevation, previousElevation)` pair -- including the
+//! `previousElevation` that `ObjectEventUpdateElevation` leaves untouched on a
+//! transition cell (`src/event_object_movement.c:7759-7771`) -- survives a save
+//! and continue. [`SaveBlock1::from_bytes`] decodes that pair as trusted
+//! ([`SavedObjectEvent::active`]) in two cases:
+//!
+//! * A record this port's writer stored: `active` and a marker bit in the
+//!   `padding:4` bits upstream never writes
+//!   (`include/global.fieldmap.h:224`) both set, `currentCoords` equal to
+//!   `pos` plus `MAP_OFFSET`, and (checked by [`SaveStore::load`]) the
+//!   initialCoords stamp equal to the slot's save counter. This is the strong
+//!   signal; any one failing withdraws trust.
+//! * A pristine upstream record with no marker: `active` and `isPlayer` set,
+//!   `currentCoords` equal to `pos` plus `MAP_OFFSET`, the `padding:4` bits
+//!   zero, and a pair `ObjectEventUpdateElevation` could have produced (neither
+//!   nibble is the multi-level value, which it never assigns).
+//!
+//! A record whose coordinates disagree with `pos` -- the shape an earlier port
+//! writer left when it moved `pos` but preserved the stored player object --
+//! is rejected either way.
+//!
+//! Unmarked records are **not** reliably identifiable. A record that an earlier
+//! port writer re-saved at an unchanged `pos` without setting the marker keeps
+//! matching coordinates, `isPlayer`, zero padding and a legal pair, so it is
+//! indistinguishable from the upstream record and is now adopted; its pair is
+//! then whatever the upstream image held, and the continue's
+//! cell-compatibility check in the game crate is the only remaining filter.
+//!
+//! [`SaveStore::load`]: super::store::SaveStore::load
 
 use super::bag::{Bag, BAG_LEN};
+use super::coins::Coins;
 use super::game_stats::GameStats;
+use super::mail::{Mail, MAIL_COUNT};
 use super::pokemon::{Pokemon, POKEMON_LEN};
 use crate::event_data::{self, EventData};
+use crate::overworld::ELEVATION_MULTI_LEVEL;
 use assets::items::ItemId;
 
 const PLAYER_NAME_OFFSET: usize = 0x00;
@@ -53,8 +90,10 @@ const LAST_HEAL_LOCATION_OFFSET: usize = 0x1C;
 const PARTY_COUNT_OFFSET: usize = 0x234;
 const PARTY_OFFSET: usize = 0x238;
 const MONEY_OFFSET: usize = 0x490;
+const COINS_OFFSET: usize = 0x494;
 // `SaveBlock1::registeredItem` follows `money` (u32 at 0x490) and `coins` (u16
-// at 0x494) as a plain, unencrypted u16 (`pokeemerald/include/global.h:1002-1004`).
+// at 0x494, key-encrypted) as a plain, unencrypted u16
+// (`pokeemerald/include/global.h:1002-1004`).
 const REGISTERED_ITEM_OFFSET: usize = 0x496;
 const BAG_ITEMS_OFFSET: usize = 0x560;
 const POKEBLOCKS_OFFSET: usize = 0x848;
@@ -62,6 +101,10 @@ const FLAGS_OFFSET: usize = 0x1270;
 const VARS_OFFSET: usize = 0x139C;
 // `SaveBlock1::gameStats` (`pokeemerald/include/global.h:1022`).
 const GAME_STATS_OFFSET: usize = 0x159C;
+/// `SaveBlock1::mail` (`pokeemerald/include/global.h:1053`); the array ends
+/// where `unlockedTrendySayings` begins, at `0x2E20` (`:1054`).
+const MAIL_OFFSET: usize = 0x2BE0;
+const _: () = assert!(MAIL_OFFSET + MAIL_COUNT * Mail::LEN == 0x2E20);
 const OBJECT_EVENTS_OFFSET: usize = 0xA30;
 const OBJECT_EVENT_LEN: usize = 0x24;
 const OBJECT_EVENT_DIRECTIONS_OFFSET: usize = 0x18;
@@ -79,18 +122,28 @@ const PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
     + OBJECT_EVENT_ELEVATIONS_OFFSET;
 // `ObjectEvent`'s `active:1`, the low bit of its first byte
-// (include/global.fieldmap.h:213).
+// (include/global.fieldmap.h:196).
 const PLAYER_OBJECT_EVENT_ACTIVE_OFFSET: usize =
     OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN;
 const OBJECT_EVENT_ACTIVE_BIT: u8 = 0x01;
 // The top bit of `ObjectEvent`'s third bitfield byte, inside the
-// `u32 padding:4` upstream leaves unused (include/global.fieldmap.h:227-228).
-// Only this port's writer sets it, so an upstream-origin image -- whose
-// `active` bit is set but whose elevation byte predates this position -- is
-// told apart from a save whose elevation pair was written with its position.
+// `u32 padding:4` upstream leaves unused (include/global.fieldmap.h:224).
+// Only this port's writer sets it. Set, it is the strong signal that the
+// elevation pair was written with its position; clear, a record is adopted
+// only by the pristine-upstream rule ([`pristine_upstream_player_object`]).
 const PLAYER_OBJECT_EVENT_MARKER_OFFSET: usize =
     OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN + 0x03;
 const OBJECT_EVENT_MARKER_BIT: u8 = 0x80;
+// The whole `u32 padding:4` field: the high nibble of the third bitfield byte
+// (include/global.fieldmap.h:224). Upstream never writes it, so a real
+// upstream record reads zero here.
+const OBJECT_EVENT_PADDING_MASK: u8 = 0xF0;
+// `ObjectEvent`'s `isPlayer:1`, the low bit of its second bitfield byte
+// (include/global.fieldmap.h:212), set on the player's object by
+// `InitPlayerAvatar` (field_player_avatar.c:1401).
+const PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET: usize =
+    OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN + 0x02;
+const OBJECT_EVENT_IS_PLAYER_BIT: u8 = 0x01;
 // `ObjectEvent::currentCoords` (include/global.fieldmap.h:235), map-local plus
 // `MAP_OFFSET` (include/fieldmap.h:18), as upstream keeps it against
 // `SaveBlock1::pos`. Written from `pos` with the elevation pair, so a writer
@@ -101,7 +154,7 @@ const PLAYER_OBJECT_EVENT_COORDS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + OBJECT_EVENT_CURRENT_COORDS_OFFSET;
 const MAP_OFFSET: i16 = 7;
 // `ObjectEvent::initialCoords` (include/global.fieldmap.h:234): four bytes
-// the model never reads and the pre-#801 writer never touched, reused to hold
+// the model never reads and an earlier port writer never touched, reused to hold
 // the save counter of the write that stored the pair. Every writer advances
 // the counter, so a save by a build that does not stamp it leaves a stale one.
 const OBJECT_EVENT_INITIAL_COORDS_OFFSET: usize = 0x0C;
@@ -343,7 +396,8 @@ pub enum BattleStyle {
 
 /// `playTimeHours`/`Minutes`/`Seconds`/`VBlanks`
 /// (`pokeemerald/include/global.h:514-517`), stored as loaded: ticking and
-/// clamping belong to the play-time producer (`pokeemerald/src/play_time.c`).
+/// clamping belong to [`super::play_time::PlayTimeCounter`]
+/// (`pokeemerald/src/play_time.c`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PlayTime {
     /// `playTimeHours`.
@@ -546,15 +600,14 @@ impl SaveBlock2 {
 /// The player object's raw saved direction and elevation nibbles.
 ///
 /// Raw values include the no-direction value from a zero-filled entry, which
-/// has no equivalent walking direction. `active` marks an entry this
-/// port wrote, since a zero elevation pair is valid and cannot mark it.
+/// has no equivalent walking direction. `active` marks an entry whose
+/// elevation pair is trusted, since a zero elevation pair is valid and cannot
+/// mark it (see the module documentation for the rule).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SavedObjectEvent {
-    /// `active` and this port's marker bit both set: the slot holds a live
-    /// object whose elevation pair this port wrote with its position.
-    /// Zero-filled entries, and images (including upstream-origin ones) not
-    /// written by this port's elevation writer, decode it clear, which is what
-    /// tells a real `(0, 0)` elevation pair from a stale or unwritten byte.
+    /// The slot holds a live player object whose elevation pair is trusted
+    /// under the module documentation's rule. Clear, it tells a zero-filled or
+    /// untrusted entry from a real `(0, 0)` pair.
     pub active: bool,
     /// Facing direction stored in the low nibble.
     pub facing_direction: u8,
@@ -626,6 +679,10 @@ pub struct SaveBlock1 {
     pub player_party: [Pokemon; PARTY_SIZE],
     /// Plaintext money.
     pub money: u32,
+    /// Plaintext Game Corner coin balance, stored at 0x494 as a `u16` xor-ed
+    /// with the key's low 16 bits (`coins`,
+    /// `pokeemerald/include/global.h:1003`, `pokeemerald/src/coins.c:41-49`).
+    pub coins: Coins,
     /// Item registered for use with SELECT, stored unencrypted at 0x496
     /// (`registeredItem`, `pokeemerald/include/global.h:1004`);
     /// [`ItemId::NONE`] means nothing is registered.
@@ -638,6 +695,8 @@ pub struct SaveBlock1 {
     pub player_object_event: SavedObjectEvent,
     /// Plaintext `gameStats` counters.
     pub game_stats: GameStats,
+    /// `mail`: six party slots, then the PC mailbox's ten (see [`super::mail`]).
+    pub mail: [Mail; MAIL_COUNT],
 }
 
 impl Default for SaveBlock1 {
@@ -650,11 +709,13 @@ impl Default for SaveBlock1 {
             player_party_count: 0,
             player_party: [Pokemon::default(); PARTY_SIZE],
             money: 0,
+            coins: Coins::default(),
             registered_item: ItemId::NONE,
             bag: Bag::default(),
             event_data: EventData::default(),
             player_object_event: SavedObjectEvent::default(),
             game_stats: GameStats::default(),
+            mail: [Mail::default(); MAIL_COUNT],
         }
     }
 }
@@ -669,10 +730,16 @@ impl SaveBlock1 {
         }
     }
 
-    /// Withdraws trust in the saved elevation pair unless the stamp in `bytes`
-    /// equals `counter`, the counter of the slot they were read from.
+    /// Withdraws trust in a marked saved elevation pair unless the stamp in
+    /// `bytes` equals `counter`, the counter of the slot they were read from.
+    ///
+    /// Only the port's own writer stamps, and it also sets the marker, so an
+    /// unmarked record (a pristine upstream one adopted by
+    /// [`Self::from_bytes`]) carries no stamp to check: its `initialCoords`
+    /// hold upstream's own spawn coordinates.
     pub(crate) fn require_generation(&mut self, bytes: &[u8], counter: u32) {
-        if read_u32(bytes, PLAYER_OBJECT_EVENT_GENERATION_OFFSET) != counter {
+        let marked = bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0;
+        if marked && read_u32(bytes, PLAYER_OBJECT_EVENT_GENERATION_OFFSET) != counter {
             self.player_object_event.active = false;
         }
     }
@@ -681,7 +748,7 @@ impl SaveBlock1 {
     pub const PAYLOAD_LEN: usize = 0x3D88;
 
     /// Serializes modeled fields over a zero-filled payload.
-    /// Money and bag quantities are encrypted with `encryption_key`.
+    /// Money, coins and bag quantities are encrypted with `encryption_key`.
     #[must_use]
     pub fn to_bytes(&self, encryption_key: u32) -> [u8; Self::PAYLOAD_LEN] {
         let mut out = [0u8; Self::PAYLOAD_LEN];
@@ -691,7 +758,7 @@ impl SaveBlock1 {
 
     /// Writes modeled fields at their fixed offsets, preserving every other byte.
     ///
-    /// Money and bag quantities are encrypted with `encryption_key`. The base
+    /// Money, coins and bag quantities are encrypted with `encryption_key`. The base
     /// must share that key's save lineage because unmodeled encrypted fields
     /// remain untouched; use [`Self::to_bytes`] for a zero-filled base.
     pub fn patch_bytes(&self, base: &mut [u8; Self::PAYLOAD_LEN], encryption_key: u32) {
@@ -707,6 +774,8 @@ impl SaveBlock1 {
         }
         base[MONEY_OFFSET..MONEY_OFFSET + SERIALIZED_U32_LEN]
             .copy_from_slice(&(self.money ^ encryption_key).to_le_bytes());
+        base[COINS_OFFSET..COINS_OFFSET + SERIALIZED_U16_LEN]
+            .copy_from_slice(&(self.coins.get() ^ key_low16(encryption_key)).to_le_bytes());
         base[REGISTERED_ITEM_OFFSET..REGISTERED_ITEM_OFFSET + SERIALIZED_U16_LEN]
             .copy_from_slice(&self.registered_item.index().to_le_bytes());
         base[BAG_ITEMS_OFFSET..BAG_ITEMS_OFFSET + BAG_LEN]
@@ -719,6 +788,10 @@ impl SaveBlock1 {
         }
         base[GAME_STATS_OFFSET..GAME_STATS_OFFSET + GameStats::LEN]
             .copy_from_slice(&self.game_stats.to_bytes(encryption_key));
+        for (index, mail) in self.mail.iter().enumerate() {
+            let offset = MAIL_OFFSET + index * Mail::LEN;
+            base[offset..offset + Mail::LEN].copy_from_slice(&mail.to_bytes());
+        }
         base[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET] = self.player_object_event.to_direction_byte();
         base[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = self.player_object_event.to_elevation_byte();
         // Only bit 0 is modeled; the byte's other bitfields stay as loaded.
@@ -734,7 +807,7 @@ impl SaveBlock1 {
         }
     }
 
-    /// Decodes modeled fields and decrypts money and bag quantities.
+    /// Decodes modeled fields and decrypts money, coins and bag quantities.
     ///
     /// # Errors
     ///
@@ -759,6 +832,12 @@ impl SaveBlock1 {
             *value = read_u16(bytes, VARS_OFFSET + index * SERIALIZED_U16_LEN);
         }
 
+        let mail = std::array::from_fn(|index| {
+            let offset = MAIL_OFFSET + index * Mail::LEN;
+            let mut raw = [0u8; Mail::LEN];
+            raw.copy_from_slice(&bytes[offset..offset + Mail::LEN]);
+            Mail::from_bytes(&raw)
+        });
         let pos = Coords16::from_bytes(&bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]);
         Ok(Self {
             pos,
@@ -774,6 +853,7 @@ impl SaveBlock1 {
             player_party_count: bytes[PARTY_COUNT_OFFSET],
             player_party,
             money: read_u32(bytes, MONEY_OFFSET) ^ encryption_key,
+            coins: Coins::new(read_u16(bytes, COINS_OFFSET) ^ key_low16(encryption_key)),
             registered_item: ItemId(read_u16(bytes, REGISTERED_ITEM_OFFSET)),
             bag: Bag::from_bytes(bag_bytes, encryption_key),
             event_data: EventData::from_saved_state(flags, vars),
@@ -785,15 +865,42 @@ impl SaveBlock1 {
                 bytes[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET],
             )
             .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET])
-            .with_active(
-                bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] & OBJECT_EVENT_ACTIVE_BIT != 0
-                    && bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0
-                    && Coords16::from_bytes(
-                        &bytes[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN],
-                    ) == object_event_coords(pos),
-            ),
+            .with_active(trusted_player_object(bytes, pos)),
+            mail,
         })
     }
+}
+
+/// Whether the player object in `bytes` holds an elevation pair to trust for
+/// a save at `pos`: `active` set, `currentCoords` equal to `pos` plus
+/// `MAP_OFFSET`, and either the port's marker bit (the strong signal) or the
+/// shape of a pristine upstream record ([`pristine_upstream_player_object`]).
+fn trusted_player_object(bytes: &[u8], pos: Coords16) -> bool {
+    bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] & OBJECT_EVENT_ACTIVE_BIT != 0
+        && Coords16::from_bytes(&bytes[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN])
+            == object_event_coords(pos)
+        && (bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0
+            || pristine_upstream_player_object(bytes))
+}
+
+/// Whether the unmarked player object in `bytes` could be one upstream's
+/// `SaveObjectEvents` copied out (`src/load_save.c:180-186`): `isPlayer` set,
+/// the unused `padding:4` bits zero, and an elevation pair
+/// `ObjectEventUpdateElevation` could have left
+/// (`src/event_object_movement.c:7759-7771`). The player spawns with
+/// elevation 0 (`InitPlayerAvatar`, `src/field_player_avatar.c:1391`) and that
+/// function returns early on [`ELEVATION_MULTI_LEVEL`], so neither field is
+/// ever assigned the multi-level value.
+///
+/// This cannot tell a pristine record from one an earlier port writer
+/// re-saved at an unchanged `pos`; see the module documentation.
+fn pristine_upstream_player_object(bytes: &[u8]) -> bool {
+    let elevations = SavedObjectEvent::default()
+        .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET]);
+    bytes[PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET] & OBJECT_EVENT_IS_PLAYER_BIT != 0
+        && bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_PADDING_MASK == 0
+        && elevations.current_elevation != ELEVATION_MULTI_LEVEL
+        && elevations.previous_elevation != ELEVATION_MULTI_LEVEL
 }
 
 fn require_len(bytes: &[u8], expected: usize) -> Result<(), SaveError> {
@@ -825,6 +932,14 @@ fn write_warp(out: &mut [u8], offset: usize, warp: WarpData) {
 
 fn read_i16(bytes: &[u8], offset: usize) -> i16 {
     i16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+/// The key's low 16 bits, which encrypt `coins`
+/// (`pokeemerald/src/coins.c:41-49`: the `u16` field XOR the `u32` key,
+/// narrowed back to 16 bits).
+fn key_low16(key: u32) -> u16 {
+    let [low, high, ..] = key.to_le_bytes();
+    u16::from_le_bytes([low, high])
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> u16 {
@@ -1175,6 +1290,26 @@ mod tests {
         assert_eq!(&keyless.to_bytes(0)[0x1640..0x1644], &[0xFF; 4]);
     }
 
+    /// `GAME_STAT_STEPS` is word 5 of `gameStats` (`game_stat.h:9`), at
+    /// `0x159C + 5 * 4` in the key-XORed image.
+    #[test]
+    fn the_steps_stat_round_trips_at_its_slot_and_caps_at_the_ceiling() {
+        let key = 0x1234_5678;
+        let mut block = SaveBlock1::default();
+        block.game_stats.set(GameStat::Steps, 0x00AB_CDEF);
+        let bytes = block.to_bytes(key);
+        assert_eq!(&bytes[0x15B0..0x15B4], &(0x00AB_CDEF ^ key).to_le_bytes());
+        let decoded = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(decoded.game_stats.get(GameStat::Steps), 0x00AB_CDEF);
+
+        let mut capped = decoded;
+        capped.game_stats.set(GameStat::Steps, 0xFF_FFFE);
+        capped.game_stats.increment(GameStat::Steps);
+        capped.game_stats.increment(GameStat::Steps);
+        let reloaded = SaveBlock1::from_bytes(&capped.to_bytes(key), key).unwrap();
+        assert_eq!(reloaded.game_stats.get(GameStat::Steps), 0xFF_FFFF);
+    }
+
     #[test]
     fn game_stats_patch_a_loaded_image_changing_only_the_selected_word() {
         let key = 0xDEAD_BEEF;
@@ -1369,14 +1504,111 @@ mod tests {
             0xEE & !OBJECT_EVENT_MARKER_BIT
         );
 
-        // An upstream-origin image: `active` set, no marker, stale elevation.
+        // A zero-filled image with only `active` and a stale elevation byte:
+        // not a player object (`isPlayer` clear, coordinates unset).
         let mut upstream = [0u8; SaveBlock1::PAYLOAD_LEN];
         upstream[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] = OBJECT_EVENT_ACTIVE_BIT;
         upstream[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = 0x30;
         let decoded = SaveBlock1::from_bytes(&upstream, key).unwrap();
         assert!(
             !decoded.player_object_event.active,
-            "no marker, not trusted"
+            "no marker and not a pristine upstream record, not trusted"
+        );
+    }
+
+    /// A player object as upstream's `SaveObjectEvents` copies it out
+    /// (`src/load_save.c:180-186`) for a save at `pos`: `active` and
+    /// `isPlayer` set, `currentCoords` equal to `pos` plus `MAP_OFFSET`,
+    /// `padding:4` zero, elevation byte `elevations`.
+    fn pristine_upstream_image(pos: Coords16, elevations: u8) -> [u8; SaveBlock1::PAYLOAD_LEN] {
+        let mut bytes = SaveBlock1 {
+            pos,
+            ..SaveBlock1::default()
+        }
+        .to_bytes(0xA1B2_C3D4);
+        bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] = OBJECT_EVENT_ACTIVE_BIT;
+        bytes[PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET] = OBJECT_EVENT_IS_PLAYER_BIT;
+        bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] = 0;
+        bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = elevations;
+        bytes[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN]
+            .copy_from_slice(&object_event_coords(pos).to_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_pristine_upstream_player_object_is_adopted_with_its_elevation_pair() {
+        let key = 0xA1B2_C3D4;
+        let pos = Coords16 { x: 4, y: 4 };
+        // Walked from an elevation-4 floor onto a transition cell: (0, 4).
+        let image = pristine_upstream_image(pos, 0x40);
+        let event = SaveBlock1::from_bytes(&image, key)
+            .unwrap()
+            .player_object_event;
+        assert!(event.active, "an unmarked pristine upstream record");
+        assert_eq!((event.current_elevation, event.previous_elevation), (0, 4));
+        // The marker is the port's own signal, absent here.
+        assert_eq!(
+            image[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT,
+            0
+        );
+    }
+
+    #[test]
+    fn an_unmarked_player_object_that_upstream_could_not_have_written_is_not_adopted() {
+        let key = 0xA1B2_C3D4;
+        let pos = Coords16 { x: 4, y: 4 };
+        let adopted = |image: &[u8; SaveBlock1::PAYLOAD_LEN]| {
+            SaveBlock1::from_bytes(image, key)
+                .unwrap()
+                .player_object_event
+                .active
+        };
+
+        // Coordinates left behind by a writer that moved `pos` but kept the slot.
+        let mut stale = pristine_upstream_image(pos, 0x30);
+        stale[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN]
+            .copy_from_slice(&object_event_coords(Coords16 { x: 3, y: 4 }).to_bytes());
+        assert!(!adopted(&stale), "coords disagree with pos");
+
+        let mut not_player = pristine_upstream_image(pos, 0x30);
+        not_player[PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET] = 0;
+        assert!(!adopted(&not_player), "isPlayer clear");
+
+        let mut inactive = pristine_upstream_image(pos, 0x30);
+        inactive[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] = 0;
+        assert!(!adopted(&inactive), "active clear");
+
+        for padding in [0x10, 0x20, 0x40] {
+            let mut dirty = pristine_upstream_image(pos, 0x30);
+            dirty[PLAYER_OBJECT_EVENT_MARKER_OFFSET] = padding;
+            assert!(!adopted(&dirty), "padding bits {padding:#x} set");
+        }
+
+        // `ObjectEventUpdateElevation` never assigns the multi-level value.
+        for elevations in [0x0F, 0xF0, 0xFF] {
+            let illegal = pristine_upstream_image(pos, elevations);
+            assert!(!adopted(&illegal), "elevation byte {elevations:#x}");
+        }
+        assert!(adopted(&pristine_upstream_image(pos, 0x00)));
+        assert!(adopted(&pristine_upstream_image(pos, 0xEE)));
+    }
+
+    #[test]
+    fn a_marked_record_keeps_trust_despite_a_clear_is_player_bit() {
+        // The port's writer does not set `isPlayer`; the marker stands alone.
+        let key = 0xA1B2_C3D4;
+        let mut block = SaveBlock1 {
+            pos: Coords16 { x: 4, y: 4 },
+            ..SaveBlock1::default()
+        };
+        block.player_object_event.active = true;
+        let bytes = block.to_bytes(key);
+        assert_eq!(bytes[PLAYER_OBJECT_EVENT_IS_PLAYER_OFFSET], 0);
+        assert!(
+            SaveBlock1::from_bytes(&bytes, key)
+                .unwrap()
+                .player_object_event
+                .active
         );
     }
 
@@ -1399,7 +1631,7 @@ mod tests {
             "a fresh save is trusted"
         );
 
-        // The pre-#801 writer: new position and directions over the loaded
+        // An earlier port writer: new position and directions over the loaded
         // bytes, every other byte -- marker, elevations, coords -- preserved.
         bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]
             .copy_from_slice(&Coords16 { x: 5, y: 4 }.to_bytes());
@@ -1445,9 +1677,13 @@ mod tests {
             .event_data
             .var_set(event_data::VARS_END, 0xBEEF)
             .unwrap();
+        block.mail[0] = sample_mail(1);
+        block.mail[MAIL_COUNT - 1] = sample_mail(2);
 
         let bytes = block.to_bytes(key);
         assert_eq!(bytes.len(), 0x3D88);
+        assert_eq!(&bytes[0x2BE0..0x2BE0 + 0x24], &sample_mail(1).to_bytes());
+        assert_eq!(&bytes[0x2E20 - 0x24..0x2E20], &sample_mail(2).to_bytes());
         assert_eq!(&bytes[0x00..0x04], &block.pos.to_bytes());
         assert_eq!(&bytes[0x04..0x0C], &block.location.to_bytes());
         assert_eq!(&bytes[0x0C..0x14], &block.continue_game_warp.to_bytes());
@@ -1494,6 +1730,47 @@ mod tests {
             Ok(0xBEEF)
         );
         assert_eq!(restored.player_object_event, block.player_object_event);
+        assert_eq!(restored.mail, block.mail);
+    }
+
+    fn sample_mail(seed: u8) -> Mail {
+        Mail {
+            words: [u16::from(seed) << 8 | 0x34; 9],
+            player_name: [seed; 8],
+            trainer_id: [seed + 1; 4],
+            species: 0x0100 + u16::from(seed),
+            item_id: ItemId::ORANGE_MAIL,
+            padding: [seed + 2, seed + 3],
+        }
+    }
+
+    #[test]
+    fn patching_the_mail_array_leaves_its_neighbours_alone() {
+        let key = 0xA1B2_C3D4;
+        let mut block = SaveBlock1::default();
+        block.mail[3] = sample_mail(7);
+        let mut base = [0x5A_u8; SaveBlock1::PAYLOAD_LEN];
+        block.patch_bytes(&mut base, key);
+        assert_eq!(base[0x2BDF], 0x5A, "easyChatBattleLost's last byte");
+        assert_eq!(base[0x2E20], 0x5A, "unlockedTrendySayings");
+        assert_eq!(
+            &base[0x2BE0 + 3 * 0x24..0x2BE0 + 4 * 0x24],
+            &sample_mail(7).to_bytes()
+        );
+        assert_eq!(
+            SaveBlock1::from_bytes(&base, key).unwrap().mail[3],
+            sample_mail(7)
+        );
+    }
+
+    #[test]
+    fn a_zeroed_mail_region_loads_as_sixteen_empty_slots() {
+        let block = SaveBlock1::from_bytes(&[0; SaveBlock1::PAYLOAD_LEN], 0).unwrap();
+        assert!(block.mail.iter().all(Mail::is_empty));
+        assert_eq!(
+            block.mail[0].words, [0; 9],
+            "loaded zeros are not rewritten"
+        );
     }
 
     #[test]
@@ -1569,6 +1846,96 @@ mod tests {
             &[0, 0],
             "clearing the registration writes the empty item"
         );
+    }
+
+    #[test]
+    fn coins_encode_at_0x494_xored_with_the_keys_low_sixteen_bits() {
+        let key = 0xA1B2_C3D4;
+        let mut block = SaveBlock1::default();
+        block.coins.set(0x1234);
+        let bytes = block.to_bytes(key);
+        // 0x1234 ^ 0xC3D4 = 0xD1E0, little-endian; the key's high half is unused.
+        assert_eq!(&bytes[0x494..0x496], &[0xE0, 0xD1]);
+        assert_eq!(&bytes[0x490..0x494], &key.to_le_bytes());
+        assert_eq!(&bytes[0x496..0x498], &[0, 0]);
+
+        let decoded = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(decoded.coins.get(), 0x1234);
+    }
+
+    #[test]
+    fn a_new_game_holds_zero_coins_which_serialize_as_the_bare_key() {
+        let key = 0xA1B2_C3D4;
+        assert_eq!(SaveBlock1::default().coins.get(), 0);
+        let bytes = SaveBlock1::default().to_bytes(key);
+        assert_eq!(&bytes[0x494..0x496], &[0xD4, 0xC3]);
+        assert_eq!(SaveBlock1::from_bytes(&bytes, key).unwrap().coins.get(), 0);
+        assert_eq!(&SaveBlock1::default().to_bytes(0)[0x494..0x496], &[0, 0]);
+    }
+
+    #[test]
+    fn coin_balances_round_trip_under_a_nonzero_key() {
+        let key = 0x89AB_CDEF;
+        for amount in [0, 1, 9999, 0x7FFF, 0xFFFF] {
+            let mut block = SaveBlock1::default();
+            block.coins.set(amount);
+            let bytes = block.to_bytes(key);
+            assert_eq!(
+                &bytes[0x494..0x496],
+                &(amount ^ 0xCDEF).to_le_bytes(),
+                "balance {amount}"
+            );
+            assert_eq!(
+                SaveBlock1::from_bytes(&bytes, key).unwrap().coins.get(),
+                amount
+            );
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_imported_balance_decodes_unnormalised() {
+        let key = 0x0000_1111;
+        let mut bytes = [0u8; SaveBlock1::PAYLOAD_LEN];
+        bytes[0x494..0x496].copy_from_slice(&(0xFFFF_u16 ^ 0x1111).to_le_bytes());
+        let block = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(block.coins.get(), 0xFFFF);
+        block.patch_bytes(&mut bytes, key);
+        assert_eq!(&bytes[0x494..0x496], &(0xFFFF_u16 ^ 0x1111).to_le_bytes());
+    }
+
+    #[test]
+    fn patching_the_coin_balance_leaves_its_neighbouring_bytes_unchanged() {
+        let key = 0xDEAD_BEEF;
+        let mut image = SaveBlock1::default().to_bytes(key);
+        image[0x480..0x4A0].fill(0x77);
+        let before = image;
+        let mut block = SaveBlock1::from_bytes(&image, key).unwrap();
+        let (money, registered) = (block.money, block.registered_item);
+        block.coins.set(0x0141);
+        block.patch_bytes(&mut image, key);
+
+        assert_eq!(&image[0x494..0x496], &(0x0141_u16 ^ 0xBEEF).to_le_bytes());
+        assert_eq!(block.money, money);
+        assert_eq!(block.registered_item, registered);
+        let changed: Vec<usize> = (0..image.len())
+            .filter(|&i| image[i] != before[i])
+            .collect();
+        assert!(
+            changed.iter().all(|i| (0x494..0x496).contains(i)),
+            "only the coin bytes may change, got {changed:#X?}"
+        );
+        assert!(!changed.is_empty());
+    }
+
+    #[test]
+    fn coin_operations_survive_a_serialize_and_reload() {
+        let key = 0x0102_0304;
+        let mut block = SaveBlock1::default();
+        assert!(block.coins.add(9998));
+        assert!(block.coins.add(5));
+        assert!(block.coins.remove(99));
+        let reloaded = SaveBlock1::from_bytes(&block.to_bytes(key), key).unwrap();
+        assert_eq!(reloaded.coins.get(), 9900);
     }
 
     #[test]

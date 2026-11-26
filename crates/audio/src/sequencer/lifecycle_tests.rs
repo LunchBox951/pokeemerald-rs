@@ -400,7 +400,7 @@ fn a_control_from_an_earlier_tick_in_the_same_frame_as_fine_must_not_reach_the_r
     let before = seq.mixer.voices()[0].base_volume();
 
     // Frame 2 runs two ticks: the first reaches `Pan`, the second `Fine`.
-    seq.tempo_i = 2 * TEMPO_UNIT;
+    seq.tempo.set_base(2 * TEMPO_UNIT);
     seq.render_frame(&mut out);
     assert!(
         seq.tracks[0].ended,
@@ -538,6 +538,7 @@ fn a_terminal_fade_step_retires_a_sustained_cgb_voice() {
         sweep: 0,
         adsr: CgbAdsr::flat(),
         fixed_rate: false,
+        length: 0,
     })];
     let track = vec![Event::Voice(0), tied_note(60), Event::Wait(200)];
     let mut seq = Sequencer::new(Song::new(voices, vec![track], 150));

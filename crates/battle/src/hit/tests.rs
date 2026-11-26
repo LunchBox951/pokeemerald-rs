@@ -566,7 +566,6 @@ fn powered_moves_with_other_execution_rules_are_rejected_before_rng() {
         COUNTER,
         SEISMIC_TOSS,
         ABSORB,
-        FALSE_SWIPE,
         PURSUIT,
     ];
 
@@ -585,7 +584,7 @@ fn powered_moves_with_other_execution_rules_are_rejected_before_rng() {
 #[test]
 fn ordinary_hit_shaped_moves_and_struggle_are_accepted() {
     let dex = Dex::new();
-    for move_id in [TACKLE, SLASH, SWIFT, QUICK_ATTACK] {
+    for move_id in [TACKLE, SLASH, SWIFT, QUICK_ATTACK, FALSE_SWIPE] {
         let effect = dex.move_data(move_id).unwrap().effect;
         assert!(is_ordinary_hit_effect(effect), "{move_id:?}");
         assert_eq!(ensure_resolvable(&dex, move_id), Ok(()));
@@ -1493,6 +1492,24 @@ fn flash_fire_absorbs_a_fire_move_without_drawing_and_latches_once() {
 }
 
 #[test]
+fn a_frozen_flash_fire_holder_takes_a_fire_move_like_any_other_target() {
+    // `ABILITY_FLASH_FIRE` requires `!(status1 & STATUS1_FREEZE)`
+    // (`battle_util.c:2703-2704`), so the move is not absorbed, latches
+    // nothing, and spends the ordinary crit and damage draws.
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 20, vec![EMBER]);
+    let mut vulpix = mon(&dex, VULPIX, 20, vec![TACKLE]);
+    vulpix.set_status1(crate::Status1::Frozen);
+    let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW, BEST_DAMAGE_DRAW]);
+
+    let outcome = damage_core(&dex, EMBER, &attacker, &vulpix, false, &mut rng).unwrap();
+
+    assert!(matches!(outcome, HitOutcome::Hit { .. }), "{outcome:?}");
+    assert_eq!(rng.draws(), 2);
+    assert!(!vulpix.volatiles().flash_fire, "nothing latched");
+}
+
+#[test]
 fn a_latched_flash_fire_boosts_ember_before_the_final_plus_two() {
     let dex = Dex::new();
     let control = mon(&dex, VULPIX, 20, vec![EMBER]);
@@ -1670,4 +1687,309 @@ fn levitate_blocked_mud_shot_applies_no_speed_drop() {
     assert_eq!(resolution.outcome, HitOutcome::LevitateBlocked);
     assert_eq!(rng.draws(), ORDINARY_NON_CRITICAL_DRAWS.len());
     assert_eq!(resolution.secondary_effect, SecondaryApplication::None);
+}
+
+/// `MOVE_HEADBUTT` and `MOVE_BITE` (`EFFECT_FLINCH_HIT`) and `MOVE_ASTONISH`
+/// (`EFFECT_FLINCH_MINIMIZE_HIT`), each with a 30% secondary chance.
+const FLINCH_MOVES: [MoveId; 3] = [MoveId::HEADBUTT, MoveId::BITE, MoveId::ASTONISH];
+
+#[test]
+fn the_flinch_wrappers_are_admitted_though_not_ordinary() {
+    let dex = Dex::new();
+    for move_id in FLINCH_MOVES {
+        let effect = dex.move_data(move_id).unwrap().effect;
+        assert!(!is_ordinary_hit_effect(effect), "{move_id:?}");
+        assert_eq!(ensure_resolvable(&dex, move_id), Ok(()), "{move_id:?}");
+    }
+}
+
+#[test]
+fn fake_out_and_twister_stay_rejected_despite_sharing_the_flinch_byte() {
+    let dex = Dex::new();
+    for move_id in [MoveId::FAKE_OUT, MoveId::TWISTER] {
+        assert!(dex.move_data(move_id).unwrap().power > 0, "{move_id:?}");
+        let attacker = mon(&dex, BULBASAUR, 10, vec![move_id]);
+        let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+        let mut rng = SequenceRng::new([]);
+        assert_eq!(
+            ensure_resolvable(&dex, move_id),
+            Err(BattleError::UnsupportedMoveEffect(move_id))
+        );
+        assert_eq!(
+            resolve_hit(&dex, move_id, &attacker, &defender, false, &mut rng),
+            Err(BattleError::UnsupportedMoveEffect(move_id)),
+            "{move_id:?}"
+        );
+        assert_eq!(rng.draws(), 0, "{move_id:?}");
+    }
+}
+
+#[test]
+fn a_landed_flinch_hit_spends_four_draws_and_residues_29_and_30_split_apply_from_no_apply() {
+    let dex = Dex::new();
+    for move_id in FLINCH_MOVES {
+        let attacker = mon(&dex, BULBASAUR, 10, vec![move_id]);
+        let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+        assert_eq!(dex.move_data(move_id).unwrap().secondary_effect_chance, 30);
+        // 129 and 130 wrap onto the same residues as 29 and 30.
+        for (chance, expected) in [
+            (29, SecondaryApplication::Flinch),
+            (30, SecondaryApplication::None),
+            (129, SecondaryApplication::Flinch),
+            (130, SecondaryApplication::None),
+        ] {
+            let mut rng = SequenceRng::new([
+                ACCURACY_HIT_DRAW,
+                ORDINARY_NO_CRIT_DRAW,
+                BEST_DAMAGE_DRAW,
+                chance,
+            ]);
+            let resolution =
+                resolve_hit(&dex, move_id, &attacker, &defender, false, &mut rng).unwrap();
+            assert!(
+                matches!(resolution.outcome, HitOutcome::Hit { .. }),
+                "{move_id:?}"
+            );
+            assert_eq!(
+                resolution.secondary_effect, expected,
+                "{move_id:?} {chance}"
+            );
+            assert_eq!(rng.draws(), 4, "{move_id:?} {chance}");
+            rng.assert_exhausted();
+        }
+    }
+}
+
+/// Upstream `Cmd_adjustnormaldamage` (`battle_script_commands.c:1682-1686`):
+/// `EFFECT_FALSE_SWIPE` caps the HP lost at `hp - 1`, after the variance roll.
+mod false_swipe {
+    use super::*;
+
+    const FALSE_SWIPE_NON_CRITICAL_DRAWS: [u16; 4] = ORDINARY_NON_CRITICAL_DRAWS;
+    /// A draw of 15 rolls the 85% damage multiplier.
+    const WORST_DAMAGE_DRAW: u16 = 15;
+    /// L5 Bulbasaur's False Swipe against L5 Squirtle, best roll.
+    const FALSE_SWIPE_DAMAGE: u32 = TACKLE_DAMAGE;
+
+    fn defender_at(dex: &Dex, hp: u32) -> BattlePokemon {
+        let mut defender = mon(dex, SQUIRTLE, 5, vec![TACKLE]);
+        let max_hp = defender.stats().max_hp;
+        defender.apply_damage(max_hp - hp);
+        assert_eq!(defender.current_hp(), hp);
+        defender
+    }
+
+    fn resolve(
+        dex: &Dex,
+        defender: &BattlePokemon,
+        draws: &[u16],
+        critical_hits_suppressed: bool,
+    ) -> (super::super::HitResolution, usize) {
+        let attacker = mon(dex, BULBASAUR, 5, vec![FALSE_SWIPE]);
+        let mut rng = SequenceRng::new(draws.iter().copied());
+        let resolution = resolve_hit(
+            dex,
+            FALSE_SWIPE,
+            &attacker,
+            defender,
+            critical_hits_suppressed,
+            &mut rng,
+        )
+        .unwrap();
+        rng.assert_exhausted();
+        (resolution, rng.draws())
+    }
+
+    #[test]
+    fn a_non_lethal_hit_deals_its_ordinary_damage() {
+        let dex = Dex::new();
+        let full = defender_at(&dex, 20);
+        let (resolution, draws) = resolve(&dex, &full, &FALSE_SWIPE_NON_CRITICAL_DRAWS, false);
+        assert_eq!(
+            resolution.outcome,
+            HitOutcome::Hit {
+                damage: FALSE_SWIPE_DAMAGE,
+                is_critical: false
+            }
+        );
+        assert_eq!(draws, 4);
+
+        // The same damage as Tackle, which shares the script.
+        let attacker = mon(&dex, BULBASAUR, 5, vec![TACKLE]);
+        let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+        let tackle = resolve_hit(&dex, TACKLE, &attacker, &full, false, &mut rng).unwrap();
+        assert_eq!(tackle.outcome, resolution.outcome);
+    }
+
+    #[test]
+    fn a_hit_that_would_exactly_faint_leaves_one_hp() {
+        let dex = Dex::new();
+        let defender = defender_at(&dex, FALSE_SWIPE_DAMAGE);
+        let (resolution, draws) = resolve(&dex, &defender, &FALSE_SWIPE_NON_CRITICAL_DRAWS, false);
+        assert_eq!(
+            resolution.outcome,
+            HitOutcome::Hit {
+                damage: FALSE_SWIPE_DAMAGE - 1,
+                is_critical: false
+            }
+        );
+        assert_eq!(resolution.secondary_effect, SecondaryApplication::None);
+        assert_eq!(draws, 4);
+    }
+
+    #[test]
+    fn an_overkill_hit_leaves_one_hp() {
+        let dex = Dex::new();
+        let defender = defender_at(&dex, 3);
+        let (resolution, draws) = resolve(&dex, &defender, &FALSE_SWIPE_NON_CRITICAL_DRAWS, false);
+        assert_eq!(
+            resolution.outcome,
+            HitOutcome::Hit {
+                damage: 2,
+                is_critical: false
+            }
+        );
+        assert_eq!(draws, 4);
+    }
+
+    #[test]
+    fn the_clamp_follows_the_variance_roll() {
+        let dex = Dex::new();
+        let defender = defender_at(&dex, 4);
+        let (resolution, draws) = resolve(
+            &dex,
+            &defender,
+            &[
+                ACCURACY_HIT_DRAW,
+                ORDINARY_NO_CRIT_DRAW,
+                WORST_DAMAGE_DRAW,
+                DISCARDED_EFFECT_DRAW,
+            ],
+            false,
+        );
+        // 85% of the best roll is 3 HP, which is still below the target's 4.
+        assert_eq!(
+            resolution.outcome,
+            HitOutcome::Hit {
+                damage: 3,
+                is_critical: false
+            }
+        );
+        assert_eq!(draws, 4);
+    }
+
+    #[test]
+    fn a_target_at_one_hp_loses_nothing_but_spends_every_draw() {
+        let dex = Dex::new();
+        let defender = defender_at(&dex, 1);
+        let (resolution, draws) = resolve(&dex, &defender, &FALSE_SWIPE_NON_CRITICAL_DRAWS, false);
+        assert_eq!(
+            resolution.outcome,
+            HitOutcome::Hit {
+                damage: 0,
+                is_critical: false
+            }
+        );
+        assert_eq!(resolution.secondary_effect, SecondaryApplication::None);
+        assert_eq!(draws, 4);
+    }
+
+    #[test]
+    fn critical_hits_keep_their_flag_and_the_clamp() {
+        let dex = Dex::new();
+        let healthy = defender_at(&dex, 20);
+        let (resolution, draws) = resolve(&dex, &healthy, &ORDINARY_CRITICAL_DRAWS, false);
+        assert_eq!(
+            resolution.outcome,
+            HitOutcome::Hit {
+                damage: TACKLE_CRITICAL_DAMAGE,
+                is_critical: true
+            }
+        );
+        assert_eq!(draws, 4);
+
+        for (hp, expected) in [(4, 3), (1, 0)] {
+            let defender = defender_at(&dex, hp);
+            let (resolution, draws) = resolve(&dex, &defender, &ORDINARY_CRITICAL_DRAWS, false);
+            assert_eq!(
+                resolution.outcome,
+                HitOutcome::Hit {
+                    damage: expected,
+                    is_critical: true
+                },
+                "hp {hp}"
+            );
+            assert_eq!(draws, 4);
+        }
+    }
+
+    #[test]
+    fn suppressed_critical_hits_omit_only_the_critical_draw_at_one_hp() {
+        let dex = Dex::new();
+        let defender = defender_at(&dex, 1);
+        let (resolution, draws) = resolve(&dex, &defender, &CRITICAL_SUPPRESSED_DRAWS, true);
+        assert_eq!(
+            resolution.outcome,
+            HitOutcome::Hit {
+                damage: 0,
+                is_critical: false
+            }
+        );
+        assert_eq!(draws, 3);
+    }
+
+    #[test]
+    fn a_missed_roll_draws_once_and_leaves_the_target_alone() {
+        let dex = Dex::new();
+        let mut attacker = mon(&dex, BULBASAUR, 5, vec![FALSE_SWIPE]);
+        attacker.stages_mut().accuracy = StatStage::new(-1).unwrap();
+        let defender = defender_at(&dex, 1);
+        let mut rng = SequenceRng::new([75]);
+
+        let resolution =
+            resolve_hit(&dex, FALSE_SWIPE, &attacker, &defender, false, &mut rng).unwrap();
+
+        assert_eq!(resolution.outcome, HitOutcome::Miss);
+        assert_eq!(resolution.secondary_effect, SecondaryApplication::None);
+        rng.assert_exhausted();
+        assert_eq!(rng.draws(), 1);
+    }
+
+    #[test]
+    fn ghost_immunity_stays_no_effect_even_at_one_hp() {
+        let dex = Dex::new();
+        let attacker = mon(&dex, BULBASAUR, 5, vec![FALSE_SWIPE]);
+        for at_one_hp in [false, true] {
+            let mut ghost = mon(&dex, GASTLY, 5, vec![TACKLE]);
+            if at_one_hp {
+                let max_hp = ghost.stats().max_hp;
+                ghost.apply_damage(max_hp - 1);
+            }
+            let mut rng = SequenceRng::new(FALSE_SWIPE_NON_CRITICAL_DRAWS);
+
+            let resolution =
+                resolve_hit(&dex, FALSE_SWIPE, &attacker, &ghost, false, &mut rng).unwrap();
+
+            assert_eq!(resolution.outcome, HitOutcome::NoEffect);
+            rng.assert_exhausted();
+        }
+    }
+
+    #[test]
+    fn the_adjustment_applies_only_to_false_swipe() {
+        let dex = Dex::new();
+        let attacker = mon(&dex, BULBASAUR, 5, vec![TACKLE]);
+        let defender = defender_at(&dex, 1);
+        let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+
+        let resolution = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+
+        assert_eq!(
+            resolution.outcome,
+            HitOutcome::Hit {
+                damage: TACKLE_DAMAGE,
+                is_critical: false
+            }
+        );
+    }
 }

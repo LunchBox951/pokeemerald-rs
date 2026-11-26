@@ -94,18 +94,26 @@ fn move_priority_beats_speed_for_either_side() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::QUICK_ATTACK
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::QUICK_ATTACK,
                 damage: 6,
                 is_critical: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
                 damage: 9,
                 is_critical: false,
-            },
+            }
         ],
         "the +1-priority mover acts first despite being slower"
     );
@@ -124,18 +132,26 @@ fn move_priority_beats_speed_for_either_side() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::QUICK_ATTACK
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::QUICK_ATTACK,
                 damage: 6,
                 is_critical: false,
             },
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::TACKLE,
                 damage: 9,
                 is_critical: false,
-            },
+            }
         ],
         "the wild mon's +1-priority pick acts first despite being slower"
     );
@@ -181,18 +197,26 @@ fn a_mid_turn_speed_tie_draws_once_between_selection_and_the_first_hit() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::TACKLE,
                 damage: 7,
                 is_critical: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::SCRATCH
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::SCRATCH,
                 damage: 7,
                 is_critical: false,
-            },
+            }
         ],
         "tie draw 0 puts the player first; selection draw 1 picked Scratch"
     );
@@ -230,18 +254,26 @@ fn an_always_hit_move_makes_a_full_turn_cost_ten_draws_not_eleven() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::SWIFT
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::SWIFT,
                 damage: 10,
                 is_critical: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
                 damage: 5,
                 is_critical: false,
-            },
+            }
         ]
     );
     assert_eq!(

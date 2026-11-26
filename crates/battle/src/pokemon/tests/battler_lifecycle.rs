@@ -2,13 +2,15 @@
 //! speed, and the damage/heal/faint/reset lifecycle.
 
 use super::super::{
-    compute_stats, BattlePokemon, Evs, Ivs, MoveSlot, StatStages, MAX_IV, MAX_LEVEL, MAX_MON_MOVES,
-    MIN_LEVEL, MOVE_NONE, SPECIES_NONE, SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z, SPECIES_SHEDINJA,
+    compute_stats, BattlePokemon, Evs, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL,
+    MAX_MON_MOVES, MIN_LEVEL, MOVE_NONE, SPECIES_NONE, SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z,
+    SPECIES_SHEDINJA,
 };
 use super::shared::{
     sample_mon, BULBASAUR, FIRST_UNREPRESENTABLE_IV, HARDY_PERSONALITY, MAX_IVS, TACKLE,
 };
 use crate::ability::LIQUID_OOZE;
+use crate::badge_boosts::BadgeBoosts;
 use crate::damage::MoveCategory;
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -16,7 +18,7 @@ use crate::nature::Nature;
 use crate::stat_change::CLEAR_BODY;
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
-use assets::{AbilityId, MoveId, SpeciesId, SpeciesTable};
+use assets::{AbilityId, MoveId, SpeciesId, SpeciesTable, Type};
 
 const TACKLE_BASE_PP: u8 = 35;
 const SCRATCH: MoveId = MoveId::SCRATCH;
@@ -492,6 +494,67 @@ fn speed_for_turn_order_scales_the_stage_before_quartering_not_after() {
     assert_ne!(mon.speed_for_turn_order(), WRONG_QUARTER_FIRST_ORDER);
 }
 
+/// Stage, then badge, then paralysis quarter (`battle_main.c:4639`-`:4651`).
+#[test]
+fn the_speed_badge_sits_between_the_stage_and_the_paralysis_quarter() {
+    let dex = Dex::new();
+    let planted = Stats {
+        max_hp: 100,
+        attack: 11,
+        defense: 11,
+        speed: 11,
+        sp_attack: 11,
+        sp_defense: 11,
+    };
+    let mut mon = sample_mon(&dex)
+        .with_cached_stats(planted, 100)
+        .with_stat_badges(BadgeBoosts::from_badges([false, true, false, false]));
+    assert_eq!(mon.speed_for_turn_order(), 12, "11 * 110 / 100");
+    assert_eq!(mon.effective_speed(), 11, "the badge is not a stat stage");
+
+    mon.stages_mut().speed = StatStage::new(1).unwrap();
+    assert_eq!(
+        mon.speed_for_turn_order(),
+        17,
+        "11 -> 16 at +1, then 16 * 110 / 100; boosting first would give 18"
+    );
+
+    mon.stages_mut().speed = StatStage::new(0).unwrap();
+    mon.set_status1(Status1::Paralysed);
+    assert_eq!(
+        mon.speed_for_turn_order(),
+        3,
+        "12 / 4; quartering first would give 2"
+    );
+    assert_eq!(mon.stats().speed, 11, "the stored Speed is untouched");
+    assert_eq!(mon.cached_stats().speed, 11);
+}
+
+#[test]
+fn the_damage_stat_reads_apply_the_badge_and_the_plain_accessors_do_not() {
+    let dex = Dex::new();
+    let planted = Stats {
+        max_hp: 100,
+        attack: 11,
+        defense: 11,
+        speed: 11,
+        sp_attack: 11,
+        sp_defense: 11,
+    };
+    let mon = sample_mon(&dex)
+        .with_cached_stats(planted, 100)
+        .with_stat_badges(BadgeBoosts::from_badges([true; 4]));
+    for category in [MoveCategory::Physical, MoveCategory::Special] {
+        assert_eq!(mon.damage_attacking_stat(category).0, 12, "{category:?}");
+        assert_eq!(mon.damage_defending_stat(category).0, 12, "{category:?}");
+        assert_eq!(mon.attacking_stat(category).0, 11, "{category:?}");
+        assert_eq!(mon.defending_stat(category).0, 11, "{category:?}");
+    }
+    let unbadged = mon.with_stat_badges(BadgeBoosts::NONE);
+    assert_eq!(unbadged.damage_attacking_stat(MoveCategory::Physical).0, 11);
+    assert_eq!(unbadged.damage_defending_stat(MoveCategory::Special).0, 11);
+}
+
 #[test]
 fn deduct_pp_decrements_and_reports_exhaustion() {
     let dex = Dex::new();
@@ -556,6 +619,7 @@ fn clear_battle_scratch_resets_stages_and_volatiles_but_not_status1() {
     let mut mon = sample_mon(&dex);
     mon.stages_mut().speed = StatStage::new(2).unwrap();
     mon.volatiles_mut().set_confusion(3);
+    mon.volatiles_mut().set_yawn();
     mon.set_status1(Status1::Paralysed);
     mon.clear_battle_scratch();
     assert_eq!(mon.stages(), StatStages::default());
@@ -563,12 +627,45 @@ fn clear_battle_scratch_resets_stages_and_volatiles_but_not_status1() {
         !mon.volatiles().confused(),
         "confusion is battle-only scratch, cleared with every other volatile"
     );
+    assert!(
+        !mon.volatiles().drowsy(),
+        "Yawn's drowsiness is STATUS3_YAWN, zeroed with the rest of status3"
+    );
     assert_eq!(
         mon.status1(),
         Status1::Paralysed,
         "paralysis outlives an ordinary win -- only a faint's own cleanup or \
          a heal cures it, and this method is shared with the post-battle \
          return-to-overworld path where the battler did not faint"
+    );
+}
+
+#[test]
+fn a_temporary_type_is_battle_scratch_apart_from_species_typing() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    let species_types = mon.types();
+    let untouched = mon.clone();
+    mon.set_temporary_type(Type::Ghost);
+
+    assert_eq!(mon.types(), [Type::Ghost, Type::Ghost]);
+    assert_eq!(mon.species_types(), species_types);
+    assert_eq!(mon.clone().types(), [Type::Ghost, Type::Ghost]);
+    assert_ne!(
+        mon, untouched,
+        "a live type change is battle-state, not identity"
+    );
+
+    mon.clear_battle_scratch();
+    assert_eq!(mon.types(), species_types);
+    assert_eq!(mon, untouched);
+
+    mon.set_temporary_type(Type::Ghost);
+    mon.clear_fainted_scratch();
+    assert_eq!(
+        mon.types(),
+        species_types,
+        "FaintClearSetData restores the species types (battle_main.c:3350-3351)"
     );
 }
 
@@ -657,7 +754,8 @@ fn deoxys_speed_forme_stats_read_its_adopted_evs() {
     assert_eq!(stats.attack, 147);
     assert_eq!(stats.defense, 110);
     assert_eq!(stats.speed, 200);
-    // Max HP is never a `GetDeoxysStat` read, so it keeps the zero-EV floor.
+    // Max HP is never a `GetDeoxysStat` read, and `with_evs` only adopts the
+    // EVs: it does not recalculate the stored block.
     assert_eq!(stats.max_hp, 125);
 }
 
@@ -675,7 +773,65 @@ fn deoxys_speed_forme_stats_keep_their_evs_across_a_level_up() {
     // ((95*2 + 31 + 63) * 55) / 100 + 5.
     assert_eq!(stats.attack, 161);
     assert_eq!(stats.defense, 121);
-    assert_eq!(stats.max_hp, 137);
+    // The level-up is a full `CalculateMonStats`, so the HP EVs count too:
+    // ((2*50 + 31 + 252/4) * 55) / 100 + 55 + 10.
+    assert_eq!(stats.max_hp, 171);
+    // The stored block stays Normal Forme (base 150 Attack / 150 Speed):
+    // ((2*150 + 31 + 63) * 55) / 100 + 5 and ((2*150 + 31) * 55) / 100 + 5.
+    let stored = mon.cached_stats();
+    assert_eq!(
+        (stored.attack, stored.speed, stored.max_hp),
+        (221, 187, 171)
+    );
+}
+
+#[test]
+fn deoxys_stored_block_is_normal_forme_at_construction_and_after_adopting_evs() {
+    let dex = Dex::new();
+    let fresh = BattlePokemon::new(&dex, SPECIES_DEOXYS, 50, MAX_IVS, 0, vec![SCRATCH]).unwrap();
+    let stored = fresh.cached_stats();
+    assert_eq!(
+        (
+            stored.max_hp,
+            stored.attack,
+            stored.defense,
+            stored.speed,
+            stored.sp_attack,
+            stored.sp_defense
+        ),
+        (125, 170, 70, 170, 170, 70),
+        "`CalculateMonStats` writes the raw Normal Forme block"
+    );
+    assert_eq!(fresh.stats().speed, 200, "the live view reads Speed Forme");
+
+    let trained = fresh.with_evs(DEOXYS_ATTACK_TRAINED);
+    assert_eq!(
+        trained.cached_stats(),
+        stored,
+        "adopting EVs never rewrites the stored block"
+    );
+    assert_eq!(trained.stats().attack, 147);
+}
+
+#[test]
+fn deoxys_adopted_cache_is_stored_verbatim_while_the_live_view_reads_its_evs() {
+    let dex = Dex::new();
+    let fresh = BattlePokemon::new(&dex, SPECIES_DEOXYS, 50, MAX_IVS, 0, vec![SCRATCH]).unwrap();
+    let stale = Stats {
+        attack: 99,
+        ..fresh.cached_stats()
+    };
+    let mon = fresh
+        .with_cached_stats(stale, 100)
+        .with_evs(DEOXYS_ATTACK_TRAINED);
+    assert_eq!(mon.cached_stats(), stale);
+    assert_eq!(mon.current_hp(), 100);
+    assert_eq!(
+        mon.stats().attack,
+        147,
+        "the live view still derives from the EVs"
+    );
+    assert_eq!(mon.stats().max_hp, stale.max_hp);
 }
 
 #[test]
@@ -684,4 +840,102 @@ fn other_species_live_stats_stay_zero_ev_after_adopting_evs() {
     let untrained = sample_mon(&dex);
     let trained = sample_mon(&dex).with_evs(DEOXYS_ATTACK_TRAINED);
     assert_eq!(trained.stats(), untrained.stats());
+}
+
+/// `ENDTURN_BAD_POISON` advances only the battle copy's counter; the party's
+/// stored word is what a switch-in reloads and a save writes
+/// (`pokeemerald/src/battle_util.c:1536`-`:1549`,
+/// `pokeemerald/src/battle_script_commands.c:4606`-`:4657`).
+#[test]
+fn the_toxic_residual_advances_a_battle_counter_the_stored_word_never_sees() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.set_status1(Status1::BadPoisoned { counter: 5 });
+
+    assert_eq!(mon.advance_toxic_turns(), Some(6));
+    assert_eq!(mon.advance_toxic_turns(), Some(7));
+    assert_eq!(
+        mon.status1(),
+        Status1::BadPoisoned { counter: 5 },
+        "no status write-back"
+    );
+
+    mon.clear_battle_scratch();
+    assert_eq!(
+        mon.status1(),
+        Status1::BadPoisoned { counter: 5 },
+        "the stored word survives the scratch clear"
+    );
+    assert_eq!(mon.advance_toxic_turns(), Some(6), "re-entry reloads five");
+}
+
+#[test]
+fn the_toxic_battle_counter_saturates_at_fifteen() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.set_status1(Status1::BadPoisoned { counter: 13 });
+
+    assert_eq!(mon.advance_toxic_turns(), Some(14));
+    assert_eq!(mon.advance_toxic_turns(), Some(15));
+    assert_eq!(mon.advance_toxic_turns(), Some(15), "not 16, not zero");
+    assert_eq!(mon.advance_toxic_turns(), Some(15));
+}
+
+#[test]
+fn a_battler_without_bad_poison_has_no_toxic_counter_to_advance() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    for status in [Status1::Healthy, Status1::Poisoned, Status1::Burned] {
+        mon.set_status1(status);
+        assert_eq!(mon.advance_toxic_turns(), None, "{status:?}");
+    }
+}
+
+#[test]
+fn a_cure_or_a_fresh_toxic_drops_the_battle_counter() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.set_status1(Status1::BadPoisoned { counter: 5 });
+    mon.advance_toxic_turns();
+
+    mon.set_status1(Status1::Healthy);
+    mon.set_status1(Status1::BadPoisoned { counter: 0 });
+    assert_eq!(
+        mon.advance_toxic_turns(),
+        Some(1),
+        "a fresh toxic starts over"
+    );
+
+    mon.set_status1(Status1::BadPoisoned { counter: 9 });
+    mon.advance_toxic_turns();
+    mon.heal(&dex).unwrap();
+    assert_eq!(mon.status1(), Status1::Healthy);
+    mon.set_status1(Status1::BadPoisoned { counter: 0 });
+    assert_eq!(
+        mon.advance_toxic_turns(),
+        Some(1),
+        "a heal leaves no scratch"
+    );
+}
+
+#[test]
+fn the_battle_counter_is_part_of_a_battlers_identity() {
+    let dex = Dex::new();
+    let mut ticked = sample_mon(&dex);
+    ticked.set_status1(Status1::BadPoisoned { counter: 0 });
+    let fresh = ticked.clone();
+    assert_eq!(ticked, fresh);
+
+    ticked.advance_toxic_turns();
+    assert_ne!(ticked, fresh, "the next tick would deal different damage");
+
+    ticked.clear_battle_scratch();
+    assert_eq!(ticked, fresh);
+}
+
+#[test]
+#[should_panic(expected = "four bits")]
+fn a_toxic_counter_beyond_four_bits_is_refused() {
+    let mut mon = sample_mon(&Dex::new());
+    mon.set_status1(Status1::BadPoisoned { counter: 16 });
 }

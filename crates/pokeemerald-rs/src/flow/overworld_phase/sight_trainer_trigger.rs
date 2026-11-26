@@ -38,14 +38,15 @@
 //! (`TRSEE_REVEAL_DISGUISE`/`_BURIED`) are unreachable without one.
 
 use assets::trainers::TrainerId;
-use assets::{ObjectEvent, TrainerType};
+use assets::TrainerType;
 use engine::event_data::EventData;
-use engine::overworld::{trainer_can_see_player, MapRuntime, ObjectEventState, PlayerState};
+use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
+use engine::overworld::{trainer_can_see_player, MapRuntime, PlayerState};
 
 use crate::flow::npc_trainer_battle;
 
 use super::sight_trainer_approach::SightApproach;
-use super::{ActiveBattle, OverworldPhase};
+use super::{ActiveBattle, OverworldPhase, PartyReserves};
 
 /// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`): the base of the
 /// per-trainer "already fought" flag range `HasTrainerBeenFought` /
@@ -180,15 +181,14 @@ fn already_defeated(trainer_id: TrainerId, event_data: &EventData) -> bool {
 /// nothing else on this route.
 ///
 /// Upstream's own gate (`GetMonsStateToDoubles_2() !=
-/// PLAYER_HAS_TWO_USABLE_MONS`) refuses even a doubles-capable game unless
-/// the player's party holds two usable mons. This port has no doubles
-/// support in the `battle` crate at all and, separately, tracks at most one
-/// party mon (the phase's lead owner docs), so that gate can
-/// never pass here -- the same real outcome upstream produces for a
-/// permanently-one-mon party, not a bespoke port-only carve-out. Both twins'
-/// cones are still checked every frame, and the scan simply continues to the
-/// next candidate exactly as `CheckTrainer`'s own `return 0` does. Recorded
-/// on the ledger's `data/maps/Route103#Route103_SightTrainers` artifact.
+/// PLAYER_HAS_TWO_USABLE_MONS`) lets the double battle start once the
+/// player's party holds two usable mons. The `battle` crate has no doubles
+/// support, so a double-battle trainer is refused whatever the party holds
+/// and that gate is not evaluated: with two usable mons upstream starts the
+/// fight and this port does not. Both twins' cones are still checked every
+/// frame, and the scan continues to the next candidate as `CheckTrainer`'s
+/// own `return 0` does. Recorded on the ledger's
+/// `data/maps/Route103#Route103_SightTrainers` artifact.
 ///
 /// `false` (proceed to attempt construction, which separately fails closed)
 /// for an id [`battle::trainer_data`] does not recognize; unreachable for
@@ -202,9 +202,10 @@ fn trainer_data_wants_double_battle(trainer_id: TrainerId) -> bool {
 /// because the caller's *logging* needs to know whether the player is still
 /// standing in any cone at all ([`SightTrainerLog`]).
 #[derive(Debug, Default)]
-struct SightScan<'a> {
-    /// The first eligible candidate, in scan order, or `None`.
-    selected: Option<(&'a ObjectEvent, &'static SightTrainer)>,
+struct SightScan {
+    /// The first eligible candidate, in scan order, or `None`: its live
+    /// entry (carrying the local ID a later approach keeps) and table row.
+    selected: Option<(LiveObjectEvent, &'static SightTrainer)>,
     /// Whether *any* not-yet-defeated `TRAINER_TYPE_NORMAL` cone reached the
     /// player this scan, selected or refused. `false` is "the player is
     /// outside every cone", the one fact that resets [`SightTrainerLog`].
@@ -214,15 +215,15 @@ struct SightScan<'a> {
     doubles_refused: Vec<TrainerId>,
 }
 
-/// Scan `runtime`'s object events for the first `TRAINER_TYPE_NORMAL` sight
+/// Scan `objects`' admitted entries, in object-slot order, for the first `TRAINER_TYPE_NORMAL` sight
 /// trainer whose cone reaches `player` and who is currently eligible to
 /// fight.
 ///
 /// This is `CheckForTrainersWantingBattle` (`trainer_see.c:189-222`) plus
-/// `CheckTrainer` (`:224-256`): the scan order is
-/// `data/maps/Route103/map.json`'s own `object_events` declaration order --
-/// the order [`MapRuntime::object_events_at`]'s own docs cite for every
-/// other scan in this crate -- an already-defeated trainer is skipped
+/// `CheckTrainer` (`:224-256`): the scan order is the live object slot
+/// ([`LiveObjectEvent::object_slot`], upstream's `gObjectEvents` index) --
+/// not the map's `object_events` declaration order -- an already-defeated
+/// trainer is skipped
 /// ([`already_defeated`]), and the geometry itself
 /// (`GetTrainerApproachDistance` + `CheckPathBetweenTrainerAndPlayer`) lives
 /// in [`engine::overworld::trainer_can_see_player`].
@@ -232,23 +233,39 @@ struct SightScan<'a> {
 /// gate can decide what is worth saying on a check that reruns sixty times a
 /// second.
 #[must_use]
-fn find_sight_trainer<'a>(
-    runtime: &MapRuntime<'a>,
+fn find_sight_trainer(
+    objects: &ObjectEventCollection,
+    runtime: &MapRuntime<'_>,
     player: &PlayerState,
     event_data: &EventData,
-) -> SightScan<'a> {
+) -> SightScan {
     let mut scan = SightScan::default();
-    for event in runtime.events().object_events {
+    // `CheckForTrainersWantingBattle` walks `gObjectEvents` by index and skips
+    // inactive slots (`trainer_see.c:198-204`), so visit the admitted entries
+    // in object-slot order. Declaration order is not that order: an object
+    // takes the lowest free slot when it spawns (`GetAvailableObjectEventId`,
+    // `event_object_movement.c:1358-1380`). The slots are distinct, so the
+    // sort is total.
+    let mut slotted: Vec<(usize, &LiveObjectEvent)> = objects
+        .entries()
+        .filter_map(|live| live.object_slot().map(|slot| (slot, live)))
+        .collect();
+    slotted.sort_unstable_by_key(|&(slot, _)| slot);
+    for (_, live) in slotted {
+        let event = live.template();
         if event.trainer_type != TrainerType::Normal {
             continue;
         }
-        let Some(entry) = sight_trainer_for_script(event.script) else {
+        let Some(entry) = event
+            .script
+            .and_then(|script| sight_trainer_for_script(script.id()))
+        else {
             continue;
         };
         if already_defeated(entry.id, event_data) {
             continue;
         }
-        if !trainer_can_see_player(event, runtime, player, event_data) {
+        if !trainer_can_see_player(live, objects, runtime, player) {
             continue;
         }
         scan.any_cone_reached = true;
@@ -257,7 +274,7 @@ fn find_sight_trainer<'a>(
             continue;
         }
         if scan.selected.is_none() {
-            scan.selected = Some((event, entry));
+            scan.selected = Some((*live, entry));
         }
     }
     scan
@@ -423,21 +440,27 @@ impl OverworldPhase {
     /// by this module's
     /// `refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`:
     ///
-    /// - **Four trainers fight**: Andrew, Rhett, Marcos and Pete carry
-    ///   `NoItemDefaultMoves` parties -- real level-up movesets
+    /// - **Six trainers fight**: Daisy, Andrew, Rhett, Marcos, Pete and
+    ///   Isabelle carry `NoItemDefaultMoves` parties -- real level-up movesets
     ///   ([`battle::initial_moveset`]) whose every move the engine executes
     ///   and the trainer AI scores.
     /// - **Held items are carried, not dropped**:
     ///   [`crate::flow::npc_trainer_battle`] threads each member's item onto
     ///   its `BattlePokemon`, and the battle crate refuses only an item whose
     ///   effect it does not model ([`battle::ensure_held_item_playable`]).
-    ///   Miguel's Skitty holds an Oran Berry and is refused earlier still,
-    ///   for its selected Cute Charm.
-    /// - **Daisy, Isabelle, Miguel and Amy & Liv** stop on a move, an
-    ///   ability or (for Amy & Liv) a double battle this port does not field.
+    ///   Miguel's Skitty holds an Oran Berry, which the battle crate admits,
+    ///   and its selected Cute Charm is modelled; a move screen refuses it.
+    /// - **Miguel and Amy & Liv** stop on a move the engine does not execute
+    ///   (Miguel's Sing) or (for Amy & Liv) a double battle this port does not
+    ///   field.
     pub(super) fn begin_sight_trainer_approach_if_seen(&mut self) -> SightTrainerOutcome {
         let runtime = self.scene.runtime();
-        let scan = find_sight_trainer(&runtime, &self.player, &self.save1.event_data);
+        let scan = find_sight_trainer(
+            &self.object_events,
+            &runtime,
+            &self.player,
+            &self.save1.event_data,
+        );
         if !scan.any_cone_reached {
             self.sight_trainer_log.left_every_cone();
             return SightTrainerOutcome::Refused;
@@ -446,13 +469,12 @@ impl OverworldPhase {
             if self.sight_trainer_log.should_log(refused) {
                 eprintln!(
                     "sight trainer: trainer {refused:?}'s cone reached the player, but its \
-                     real party is a double battle -- this port has no doubles support and \
-                     tracks at most one party mon, so `GetMonsStateToDoubles_2` can never pass \
-                     here; skipping to the next candidate"
+                     real party is a double battle -- this port has no doubles support; \
+                     skipping to the next candidate"
                 );
             }
         }
-        let Some((object, entry)) = scan.selected else {
+        let Some((live, entry)) = scan.selected else {
             return SightTrainerOutcome::Refused;
         };
         let trainer_id = entry.id;
@@ -482,16 +504,33 @@ impl OverworldPhase {
         // exactly like every other construction refusal (that function's own
         // module docs, "Nothing is built before the whole party is
         // screened").
-        match npc_trainer_battle::start_npc_trainer_battle(lead, trainer_id, &mut self.rng) {
-            Ok(battle) => {
-                let trainer = ObjectEventState::from_template(object);
-                let walk_tiles = approach_walk_tiles(trainer.position(), self.player.position());
+        // The pre-flight refuses a trainer this cone cannot fight before the saved party is
+        // inspected, and a healthy saved member that cannot join refuses the fight next. The
+        // per-frame retry of a refused cone logs nothing and draws nothing either way.
+        let started =
+            npc_trainer_battle::preflight_npc_trainer_battle(&lead, trainer_id).and_then(|()| {
+                let (player_reserves, reserves) = self.trainer_party_reserves(trainer_id)?;
+                npc_trainer_battle::start_npc_trainer_battle_with_reserves(
+                    lead,
+                    player_reserves,
+                    trainer_id,
+                    &mut self.rng,
+                )
+                .map(|battle| (battle, reserves))
+            });
+        match started {
+            Ok((battle, reserves)) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
+                let walk_tiles =
+                    approach_walk_tiles(live.state().position(), self.player.position());
                 self.sight_approach = Some(SightApproach::new(
-                    trainer,
+                    live.template().local_id,
+                    live.carried_from(),
                     walk_tiles,
                     entry.intro,
                     battle,
                     trainer_id,
+                    reserves,
                 ));
                 SightTrainerOutcome::ApproachStarted
             }
@@ -500,7 +539,7 @@ impl OverworldPhase {
                     eprintln!(
                         "sight trainer: can't start against trainer {trainer_id:?} ({error}) -- \
                          refused before any draw (a held-item party or lead, an unimplemented \
-                         moveset, or a fainted lead)"
+                         moveset, a fainted lead, or a healthy saved member that cannot join)"
                     );
                 }
                 SightTrainerOutcome::Refused
@@ -519,19 +558,25 @@ impl OverworldPhase {
         &mut self,
         battle: battle::Battle,
         trainer_id: TrainerId,
+        reserves: PartyReserves,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
-        let mut returned_lead = None;
-        let outcome = npc_trainer_battle::advance_npc_trainer_battle(
+        let end = npc_trainer_battle::advance_npc_trainer_party_battle(
             &mut slot,
-            &mut returned_lead,
             &mut self.save1.money,
             &mut self.rng,
         );
-        // Back with the owner before the flags, the white-out or any routing.
-        if let Some(lead) = returned_lead {
-            self.restore_lead_battler(lead);
-        }
+        let Some(end) = end else {
+            // Ongoing: the whole variant stays, party included.
+            return slot.map(|battle| ActiveBattle::SightTrainer {
+                battle,
+                trainer_id,
+                reserves,
+            });
+        };
+        let outcome = end.outcome;
+        // Back with the owners before the flags, the white-out or any routing.
+        let filed = self.file_trainer_party(end, reserves);
         if let Some(outcome) = outcome {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
@@ -547,457 +592,13 @@ impl OverworldPhase {
                     );
                 }
             }
-            if outcome == battle::BattleOutcome::PlayerLost {
-                self.white_out();
-            }
         }
-        if slot.is_none() {
-            self.reinit_field_tileset_animations();
-        }
-        // `trainer_id` is dropped along with the rest of
-        // `ActiveBattle::SightTrainer` the instant `slot` empties -- an
-        // abort clears it too, not only a reported outcome.
-        slot.map(|battle| ActiveBattle::SightTrainer { battle, trainer_id })
+        self.settle_trainer_party(outcome, filed);
+        self.reinit_field_tileset_animations();
+        // The slot emptied, an abort included: `trainer_id` goes with the variant.
+        None
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// [`SIGHT_TRAINERS`] must cover exactly Route 103's own nine
-    /// `TRAINER_TYPE_NORMAL` object events, by script name -- pinned against
-    /// the real extracted map data (that table's own citation).
-    #[test]
-    fn sight_trainers_table_covers_every_route_103_normal_trainer_by_script_name() {
-        let events = assets::MapEventsTable::new()
-            .resolve(assets::MapId("MAP_ROUTE103"))
-            .expect("MAP_ROUTE103 is bundled map data, not pack-extracted");
-        let normal_trainer_scripts: Vec<&str> = events
-            .object_events
-            .iter()
-            .filter(|e| e.trainer_type == assets::TrainerType::Normal)
-            .map(|e| e.script)
-            .collect();
-        assert_eq!(
-            normal_trainer_scripts.len(),
-            9,
-            "Route 103 must carry exactly nine TRAINER_TYPE_NORMAL object events"
-        );
-        for script in normal_trainer_scripts {
-            assert!(
-                sight_trainer_for_script(script).is_some(),
-                "SIGHT_TRAINERS is missing a mapping for {script}"
-            );
-        }
-    }
-
-    /// Every id in [`SIGHT_TRAINERS`] resolves in the extracted `gTrainers`
-    /// table, and the double/single split is exactly the one
-    /// [`trainer_data_wants_double_battle`] describes: Amy & Liv's shared id
-    /// is a double battle, the other seven (Daisy, Andrew, Rhett, Marcos,
-    /// Isabelle, Pete, and Miguel) are not.
-    #[test]
-    fn every_sight_trainer_id_resolves_with_the_expected_double_battle_flag() {
-        for entry in SIGHT_TRAINERS {
-            let data = battle::trainer_data(entry.id)
-                .unwrap_or_else(|e| panic!("{} -> {:?} must resolve: {e}", entry.script, entry.id));
-            let expected_double = entry.script == "Route103_EventScript_Amy"
-                || entry.script == "Route103_EventScript_Liv";
-            assert_eq!(
-                data.double_battle, expected_double,
-                "{} -> {:?} double_battle mismatch",
-                entry.script, entry.id
-            );
-        }
-    }
-
-    /// Every transcribed intro speech is real, printable text: non-empty,
-    /// Gen-3 encodable (`POKéMON`'s `é` and Pete's `…` included), and --
-    /// since issue #410 -- carrying *no* trailing `{P}`, exactly like the
-    /// upstream strings it transcribes ([`SightTrainer::intro`]'s own docs).
-    ///
-    /// The button wait is the script's, not the text's: `waitbuttonpress`
-    /// (`data/scripts/trainer_battle.inc:104`) is
-    /// [`crate::overworld::dialog::NpcDialog::with_waitbuttonpress`] here. A
-    /// trailing `{P}` on top of it would be a *second*, earlier wait that
-    /// clears the box first, stranding the player on a blank box until a
-    /// further fresh confirm edge landed -- see
-    /// [`crate::overworld::dialog`]'s own "Script-level `waitbuttonpress`"
-    /// module docs.
-    #[test]
-    fn every_intro_speech_is_encodable_and_leaves_the_button_wait_to_the_script() {
-        for entry in SIGHT_TRAINERS {
-            let tokens =
-                crate::authored_message::parse_message(entry.intro).unwrap_or_else(|err| {
-                    panic!("{}'s intro speech is malformed: {err}", entry.script)
-                });
-            engine::text::encode(&tokens).unwrap_or_else(|err| {
-                panic!(
-                    "{}'s intro speech is not Gen-3 encodable: {err}",
-                    entry.script
-                )
-            });
-            assert!(
-                tokens
-                    .iter()
-                    .filter(|t| matches!(t, engine::text::Token::Char(_)))
-                    .count()
-                    > 0,
-                "{}'s intro speech must contain visible text",
-                entry.script
-            );
-            assert_ne!(
-                tokens[tokens.len() - 2],
-                engine::text::Token::PromptClear,
-                "{}'s intro speech must not end in a synthetic `{{P}}` -- the wait before \
-                 `dotrainerbattle` is the script's `waitbuttonpress`, not a text control code",
-                entry.script
-            );
-            assert_eq!(tokens.last(), Some(&engine::text::Token::End));
-        }
-    }
-
-    /// `TRAINER_MIGUEL_1`'s real party is a single Oran Berry holder -- the
-    /// item the battle crate refuses by name -- so the refusal rows above
-    /// describe a party that really carries it.
-    #[test]
-    fn miguel_carries_an_oran_berry_party() {
-        let data = battle::trainer_data(TrainerId(293)).expect("TRAINER_MIGUEL_1 must resolve");
-        let assets::trainers::TrainerParty::ItemDefaultMoves(party) = data.party else {
-            panic!("Miguel's party is the held-item default-moves shape");
-        };
-        assert_eq!(party.len(), 1);
-        assert_eq!(party[0].species, assets::SpeciesId::SKITTY);
-        assert_eq!(party[0].held_item, assets::items::ItemId::ORAN_BERRY);
-    }
-
-    /// [`find_sight_trainer`] against the real Route 103 object events:
-    /// Rhett's own cone (`(67, 5)`, facing south, range 2) reaches a player
-    /// standing one tile south of him, and an already-defeated flag refuses
-    /// the same otherwise-qualifying geometry -- [`already_defeated`]'s gate,
-    /// pinned at the scan level rather than only through the full
-    /// `OverworldPhase` (`overworld_phase::sight_trainer_tests` covers the
-    /// end-to-end wiring; this is the narrower, `MapRuntime`-only slice
-    /// `find_sight_trainer` itself owns).
-    #[test]
-    fn find_sight_trainer_matches_rhett_and_is_gated_by_the_defeated_flag() {
-        let map_id = assets::MapId("MAP_ROUTE103");
-        let scene =
-            crate::overworld::test_support::synthetic_scene(80, 16).in_room_for_test(map_id);
-        let runtime = scene.runtime();
-        let player = PlayerState::new((67, 6), 3, engine::overworld::Direction::North);
-
-        let event_data = EventData::new();
-        let scan = find_sight_trainer(&runtime, &player, &event_data);
-        let (_, entry) = scan
-            .selected
-            .expect("Rhett's own south-facing cone must reach a player one tile south of him");
-        assert_eq!(entry.id, TrainerId(703), "must resolve to TRAINER_RHETT");
-        assert!(scan.any_cone_reached);
-
-        let mut defeated = EventData::new();
-        defeated
-            .flag_set(TRAINER_FLAGS_START + 703)
-            .expect("TRAINER_FLAGS_START + 703 is an ordinary ranged flag id");
-        let scan = find_sight_trainer(&runtime, &player, &defeated);
-        assert!(
-            scan.selected.is_none(),
-            "an already-defeated trainer must not be selected even though the geometry \
-             still qualifies"
-        );
-        assert!(
-            !scan.any_cone_reached,
-            "a defeated trainer is skipped before the geometry runs, so it cannot count as \
-             the player standing in a cone either"
-        );
-    }
-
-    /// A double-battle refusal is *reported*, not logged, and still counts
-    /// as the player standing inside a cone -- the distinction
-    /// [`SightTrainerLog`] resets on. Amy's own cone (`(64, 12)`, facing
-    /// south, range 1) reaches a player one tile south.
-    #[test]
-    fn a_double_battle_cone_is_reported_as_reached_but_never_selected() {
-        let map_id = assets::MapId("MAP_ROUTE103");
-        let scene =
-            crate::overworld::test_support::synthetic_scene(80, 16).in_room_for_test(map_id);
-        let runtime = scene.runtime();
-        let player = PlayerState::new((64, 13), 3, engine::overworld::Direction::North);
-
-        let scan = find_sight_trainer(&runtime, &player, &EventData::new());
-        assert_eq!(
-            scan.doubles_refused,
-            vec![TrainerId(481)],
-            "TRAINER_AMY_AND_LIV_1's cone reached and was refused"
-        );
-        assert!(scan.selected.is_none(), "no other cone reaches that tile");
-        assert!(
-            scan.any_cone_reached,
-            "a refused-but-reaching cone still means the player is standing in one"
-        );
-    }
-
-    /// `InitTrainerApproachTask`'s own `approachDistance - 1`
-    /// ([`approach_walk_tiles`]): an adjacent trainer walks nothing, and
-    /// each further tile of cone adds one step -- on either axis, in either
-    /// direction.
-    #[test]
-    fn the_walk_length_is_one_tile_short_of_the_approach_distance() {
-        assert_eq!(approach_walk_tiles((5, 5), (5, 6)), 0, "already adjacent");
-        assert_eq!(approach_walk_tiles((5, 5), (5, 8)), 2);
-        assert_eq!(approach_walk_tiles((5, 5), (5, 1)), 3);
-        assert_eq!(approach_walk_tiles((5, 5), (9, 5)), 3);
-        assert_eq!(approach_walk_tiles((5, 5), (1, 5)), 3);
-    }
-
-    /// The log gate itself: once per trainer per cone entry, and a fresh
-    /// entry after the player has left every cone ([`SightTrainerLog`]).
-    #[test]
-    fn the_log_gate_reports_each_trainer_once_per_cone_entry() {
-        let mut log = SightTrainerLog::default();
-        assert!(log.should_log(TrainerId(703)));
-        assert!(!log.should_log(TrainerId(703)), "still in the same cone");
-        assert!(
-            log.should_log(TrainerId(481)),
-            "a second, overlapping cone is its own event -- a single-slot memo would \
-             alternate between the two and log both forever"
-        );
-        assert!(!log.should_log(TrainerId(481)));
-
-        log.left_every_cone();
-        assert!(
-            log.should_log(TrainerId(703)),
-            "a fresh entry reports again"
-        );
-    }
-
-    /// Only [`SightTrainerOutcome::Refused`] leaves the frame to the rest of
-    /// [`super::step::OverworldPhase::step`]; the three preempting outcomes
-    /// all consume it.
-    #[test]
-    fn only_a_refusal_leaves_the_frame_alone() {
-        assert!(!SightTrainerOutcome::Refused.owns_frame());
-        assert!(SightTrainerOutcome::ApproachStarted.owns_frame());
-        assert!(SightTrainerOutcome::ApproachAdvanced.owns_frame());
-        assert!(SightTrainerOutcome::BattleStarted.owns_frame());
-    }
-
-    /// The construction wall that remains, pinned rather than left as prose:
-    /// every one of [`SIGHT_TRAINERS`]' distinct trainer ids except the four
-    /// that fight (Andrew, Rhett, Marcos, Pete: `real_party_outcome` below)
-    /// fails to construct through
-    /// [`npc_trainer_battle::start_npc_trainer_battle`], each for the first
-    /// move this battle engine does not yet implement or score, or for the
-    /// effect of a held item it does not model
-    /// ([`OverworldPhase::begin_sight_trainer_approach_if_seen`]'s "Refusals
-    /// cost nothing, forever").
-    ///
-    /// The **exact** refusal is pinned per trainer, not merely "it fails"
-    /// (issue #264 review): the reason a trainer is unreachable is the
-    /// interesting fact, and naming the offending move id is what forces a
-    /// future move-coverage slice to come back here -- scoring a
-    /// trainer's refusing move leaves one who fails on the next one, and a
-    /// bare `is_err()` would hide that.
-    ///
-    /// Each refusal must also cost **nothing**: the whole party is screened
-    /// before the first draw (`npc_trainer_battle`'s module docs), which is
-    /// what makes the per-frame sight check above safe to run forever.
-    #[test]
-    fn refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons() {
-        use battle::BattleError;
-        use npc_trainer_battle::NpcTrainerBattleError::Battle;
-
-        // Every distinct id in `SIGHT_TRAINERS` that does not fight, with the
-        // refusal its real extracted party currently produces. The move ids
-        // are the first move in that trainer's own level-up-derived moveset
-        // that some screen refuses. Miguel's Skitty is refused for its selected
-        // Cute Charm before the ability screen reaches its Attract or its Oran
-        // Berry, each of which the later screens would refuse in turn.
-        let expected = [
-            (
-                "Daisy",
-                TrainerId(36),
-                Battle(BattleError::NonDamagingMove(assets::MoveId::LEECH_SEED)),
-            ),
-            (
-                "Amy & Liv",
-                TrainerId(481),
-                Battle(BattleError::NonDamagingMove(assets::MoveId::HELPING_HAND)),
-            ),
-            (
-                "Miguel",
-                TrainerId(293),
-                Battle(BattleError::UnportedAbilityInteraction(
-                    assets::AbilityId::CUTE_CHARM,
-                )),
-            ),
-            (
-                "Isabelle",
-                TrainerId(736),
-                Battle(BattleError::UnsupportedMoveEffect(assets::MoveId::ROLLOUT)),
-            ),
-        ];
-
-        let distinct: std::collections::HashSet<u16> =
-            SIGHT_TRAINERS.iter().map(|entry| entry.id.0).collect();
-        let covered: std::collections::HashSet<u16> = expected
-            .iter()
-            .map(|(_, id, _)| id.0)
-            .chain(FIGHTING_TRAINERS.map(|id| id.0))
-            .collect();
-        assert_eq!(
-            distinct, covered,
-            "this table must cover exactly SIGHT_TRAINERS' distinct ids"
-        );
-
-        for (name, id, refusal) in expected {
-            let lead = battle::BattlePokemon::new(
-                &battle::Dex::new(),
-                assets::SpeciesId(277), // SPECIES_TREECKO
-                50,
-                battle::fixed_ivs(31),
-                0,
-                vec![assets::MoveId::SLASH],
-            )
-            .expect("Treecko/Slash is a valid pairing");
-            let mut rng = engine::rng::Rng::new(1);
-            let before = rng.state();
-            let result = npc_trainer_battle::start_npc_trainer_battle(lead, id, &mut rng);
-            assert_eq!(
-                result.err(),
-                Some(refusal),
-                "{name} -> {id:?} was expected to still fail to construct for exactly this \
-                 reason -- if move coverage has grown, update this row (or, if it now \
-                 succeeds, add a real construction-backed win/loss test)"
-            );
-            assert_eq!(
-                rng.state(),
-                before,
-                "{name} -> {id:?}: a refused construction must draw nothing at all"
-            );
-        }
-    }
-
-    const ANDREW: TrainerId = TrainerId(336);
-    const RHETT: TrainerId = TrainerId(703);
-    const MARCOS: TrainerId = TrainerId(702);
-    const PETE: TrainerId = TrainerId(735);
-    /// The four sight trainers whose real parties construct and fight.
-    const FIGHTING_TRAINERS: [TrainerId; 4] = [ANDREW, RHETT, MARCOS, PETE];
-
-    /// Plays `trainer`'s real party against a strong lead and returns the
-    /// outcome.
-    fn real_party_outcome(trainer: TrainerId) -> Option<battle::BattleOutcome> {
-        let lead = battle::BattlePokemon::new(
-            &battle::Dex::new(),
-            assets::SpeciesId(277), // SPECIES_TREECKO
-            50,
-            battle::fixed_ivs(31),
-            0,
-            vec![assets::MoveId::SLASH],
-        )
-        .expect("Treecko/Slash is a valid pairing");
-        let mut rng = engine::rng::Rng::new(1);
-        let mut slot = Some(
-            npc_trainer_battle::start_npc_trainer_battle(lead, trainer, &mut rng)
-                .expect("the party must construct"),
-        );
-        let mut written_back = None;
-        let mut money = 0;
-        let mut outcome = None;
-        for _turn in 0..64 {
-            outcome = npc_trainer_battle::advance_npc_trainer_battle(
-                &mut slot,
-                &mut written_back,
-                &mut money,
-                &mut rng,
-            );
-            if outcome.is_some() {
-                break;
-            }
-        }
-        outcome
-    }
-
-    /// Andrew (`CheckBadMove` only) has Supersonic on his Tentacool, which
-    /// the Confuse handler now scores, so his party constructs and plays out.
-    #[test]
-    fn andrews_real_party_constructs_and_plays_to_a_win() {
-        assert_eq!(
-            real_party_outcome(ANDREW),
-            Some(battle::BattleOutcome::PlayerWon)
-        );
-    }
-
-    /// Rhett's Sand-Attack is scored by the Accuracy-down label, so his whole
-    /// party constructs and plays out.
-    #[test]
-    fn rhetts_real_party_constructs_and_plays_to_a_win() {
-        assert_eq!(
-            real_party_outcome(RHETT),
-            Some(battle::BattleOutcome::PlayerWon)
-        );
-    }
-
-    /// Marcos's Sonic Boom and Pete's Constrict land when the player's lead
-    /// cannot end the fight quickly: a level-100 lead that only Splashes lets
-    /// the real party spend its whole moveset.
-    #[test]
-    fn marcoss_sonic_boom_and_petes_constrict_land_in_a_long_fight() {
-        let cases = [
-            (MARCOS, assets::MoveId::SONIC_BOOM),
-            (PETE, assets::MoveId::CONSTRICT),
-        ];
-        for (trainer, move_id) in cases {
-            let lead = battle::BattlePokemon::new(
-                &battle::Dex::new(),
-                assets::SpeciesId(280), // SPECIES_TORCHIC
-                100,
-                battle::fixed_ivs(31),
-                0,
-                vec![assets::MoveId::SPLASH],
-            )
-            .expect("Torchic/Splash is a valid pairing");
-            let mut rng = engine::rng::Rng::new(1);
-            let mut battle = npc_trainer_battle::start_npc_trainer_battle(lead, trainer, &mut rng)
-                .expect("the party must construct");
-            let mut used = false;
-            while battle.outcome().is_none() {
-                let events = crate::flow::first_usable_move::take_first_usable_move_turn(
-                    &mut battle,
-                    &mut rng,
-                )
-                .expect("every turn executes");
-                used |= events.iter().any(|event| {
-                    matches!(
-                        event,
-                        battle::BattleEvent::Hit { by_player: false, move_id: used, .. }
-                            if *used == move_id
-                    )
-                });
-            }
-            assert!(used, "{trainer:?} never landed {move_id:?}");
-        }
-    }
-
-    /// Marcos's Voltorb runs Sonic Boom through `AI_CBM_HighRiskForDamage`,
-    /// so his party constructs and plays out.
-    #[test]
-    fn marcoss_real_party_constructs_and_plays_to_a_win() {
-        assert_eq!(
-            real_party_outcome(MARCOS),
-            Some(battle::BattleOutcome::PlayerWon)
-        );
-    }
-
-    /// Pete's Tentacool carries Constrict, whose Speed-drop secondary the hit
-    /// pipeline now applies, so his party constructs and plays out.
-    #[test]
-    fn petes_real_party_constructs_and_plays_to_a_win() {
-        assert_eq!(
-            real_party_outcome(PETE),
-            Some(battle::BattleOutcome::PlayerWon)
-        );
-    }
-}
+mod tests;
