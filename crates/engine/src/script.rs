@@ -314,8 +314,7 @@ impl<'commands, 'script, H> ScriptContext<'commands, 'script, H> {
     /// Exhausted bytecode and unknown opcodes stop execution and return `false`.
     pub fn run(&mut self, host: &mut H) -> bool {
         match self.mode {
-            Mode::Stopped => false,
-            Mode::InStep => false,
+            Mode::Stopped | Mode::InStep => false,
             Mode::Native(step) => {
                 self.mode = Mode::InStep;
                 let ready = step(self, host);
