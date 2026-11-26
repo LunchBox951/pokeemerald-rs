@@ -22,22 +22,42 @@ const CLAIM_ATTEMPTS: u32 = 1_000;
 /// inside it goes too) and then calls the non-recursive `remove_dir`, which
 /// refuses a non-empty directory. A stranger that swaps itself in at the
 /// claimed name therefore survives, and so does any unrecorded top-level
-/// entry (the directory is then left behind rather than guessed at). On unix drop also
-/// checks the name still holds the claimed inode (device and inode number)
-/// before touching it. The residual is a same-user swap that recreates the
-/// exact recorded names between that check and the removals. Windows has no
-/// inode identity to check here (this crate does not depend on `win-fs`), so
-/// drop there skips the identity check and keeps the rest of the contract:
-/// it removes only the recorded entries by name, then the non-recursive
-/// `remove_dir`, never the root by name, and relies on the per-user
-/// temporary directory for the swapped-name case. On any other platform
-/// drop fails closed: it removes nothing and leaves the directory behind.
+/// entry (the directory is then left behind rather than guessed at).
+///
+/// Before any of that, drop checks the name still holds the directory the
+/// claim created, against an identity recorded at claim time, and touches
+/// nothing when it does not: a replacement directory keeps its entries even
+/// when one of them carries a recorded name.
+///
+/// - Unix: the identity is the directory's device and inode number, read
+///   without following a link. The root is then removed by the
+///   non-recursive `remove_dir`.
+/// - Windows: the identity is the `win_fs::WindowsFileIdentity` (volume
+///   serial and file ID) of a handle opened without following a reparse
+///   point. Drop reopens the name the same way, compares, and keeps that
+///   handle open across the removals, so the claimed directory's file ID
+///   cannot be recycled meanwhile; the root is then deleted through that
+///   verified handle (a delete the file system refuses for a non-empty
+///   directory), never by name. A volume whose file IDs are not stable
+///   identities (FAT, exFAT: `win_fs::volume_supports_open_by_file_id`
+///   answers no) yields no identity, and neither does a failed open or
+///   query, at claim or at drop; drop then removes nothing and leaves the
+///   directory behind rather than delete unverified.
+/// - Any other platform: drop fails closed, removing nothing.
+///
+/// The residual on both platforms is a same-user swap that recreates the
+/// exact recorded names between the identity check and the removals, which
+/// go by pathname.
 pub(crate) struct ScratchDir {
     path: PathBuf,
     /// The claimed directory's identity, so cleanup can tell it from
     /// whatever occupies the name afterwards.
     #[cfg(unix)]
     identity: (u64, u64),
+    /// As on unix; `None` when no trustworthy identity could be read, which
+    /// leaves everything in place at drop.
+    #[cfg(windows)]
+    identity: Option<win_fs::WindowsFileIdentity>,
     /// First path component of everything handed out by `join`.
     entries: Mutex<Vec<OsString>>,
 }
@@ -69,6 +89,8 @@ impl ScratchDir {
         Self {
             #[cfg(unix)]
             identity: identity_of(&path).expect("the directory just created"),
+            #[cfg(windows)]
+            identity: open_verifiable(&path).map(|(_handle, identity)| identity),
             path,
             entries: Mutex::new(Vec::new()),
         }
@@ -112,12 +134,39 @@ fn identity_of(path: &Path) -> Option<(u64, u64)> {
     meta.is_dir().then(|| (meta.dev(), meta.ino()))
 }
 
+/// Opens whatever `path` names, without following a reparse point, and
+/// reads its identity off that handle. `None` when the open or a query
+/// fails, or when the volume's file IDs are not stable identities (a
+/// replacement could then reuse the claimed ID), so the caller never
+/// deletes on an identity it cannot trust.
+#[cfg(windows)]
+fn open_verifiable(path: &Path) -> Option<(std::fs::File, win_fs::WindowsFileIdentity)> {
+    let handle = win_fs::open_for_verified_delete(path).ok()?;
+    if !win_fs::volume_supports_open_by_file_id(&handle).ok()? {
+        return None;
+    }
+    let identity = win_fs::WindowsFileIdentity::of(&handle).ok()?;
+    Some((handle, identity))
+}
+
 impl Drop for ScratchDir {
     fn drop(&mut self) {
         #[cfg(unix)]
         if identity_of(&self.path) != Some(self.identity) {
             return;
         }
+        // Held to the end of drop: it pins the verified directory's file ID
+        // and is the handle the root is deleted through.
+        #[cfg(windows)]
+        let root = {
+            let Some(claimed) = self.identity else {
+                return;
+            };
+            match open_verifiable(&self.path) {
+                Some((root, found)) if found == claimed => root,
+                _ => return,
+            }
+        };
         #[cfg(any(unix, windows))]
         {
             let entries = std::mem::take(&mut *self.entries.lock().expect("the entry list"));
@@ -131,7 +180,12 @@ impl Drop for ScratchDir {
                 };
             }
             // Non-recursive: a non-empty directory is left alone.
+            #[cfg(unix)]
             let _ = std::fs::remove_dir(&self.path);
+            // Through the verified handle, not the name; the file system
+            // refuses the delete for a non-empty directory.
+            #[cfg(windows)]
+            let _ = win_fs::delete_through_handle(&root);
         }
     }
 }
@@ -334,7 +388,7 @@ mod tests {
         assert_eq!(mode & 0o777, 0o700);
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn dropping_a_claim_spares_a_stranger_that_took_its_name() {
         let root = ScratchDir::new("scratch-replaced-root");
@@ -346,8 +400,33 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .expect("a utf-8 claim name"),
         );
-        // Moved, not removed: a freed inode number can be handed straight
-        // to the stranger, which would make the two indistinguishable.
+        // Moved, not removed: a freed inode number (or Windows file ID) can
+        // be handed straight to the stranger, which would make the two
+        // indistinguishable.
+        let moved = root.join("moved-claim");
+        std::fs::rename(&path, &moved).expect("the claim is moved behind its back");
+        std::fs::create_dir(&path).expect("a stranger takes the name");
+        std::fs::write(path.join("sentinel"), b"not yours").expect("the sentinel");
+
+        drop(claimed);
+        assert_eq!(std::fs::read(path.join("sentinel")).unwrap(), b"not yours");
+    }
+
+    // Unix and Windows both: each verifies the root's identity before it
+    // deletes a recorded name.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn dropping_a_claim_spares_a_stranger_holding_a_recorded_name() {
+        let root = ScratchDir::new("scratch-replaced-recorded-root");
+        let claimed = ScratchDir::new_in(root.path(), "probe");
+        let _ = claimed.join("sentinel");
+        let path = root.join(
+            claimed
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a utf-8 claim name"),
+        );
         let moved = root.join("moved-claim");
         std::fs::rename(&path, &moved).expect("the claim is moved behind its back");
         std::fs::create_dir(&path).expect("a stranger takes the name");
