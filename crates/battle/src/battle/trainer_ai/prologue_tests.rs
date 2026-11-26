@@ -251,18 +251,23 @@ fn admission_is_flag_aware() {
             "{move_id:?}"
         );
     }
-    for move_id in [
-        MoveId::ABSORB,
-        MoveId::SWIFT,
-        MoveId::SLASH,
-        MoveId::MUD_SHOT,
-        MoveId::VITAL_THROW,
-    ] {
-        assert_eq!(
-            ensure_scoreable(&dex, move_id, only_cbm.union(AiFlags::CHECK_VIABILITY)),
-            Err(BattleError::UnscoreableMoveEffect(move_id))
-        );
-    }
+    assert_eq!(
+        ensure_scoreable(
+            &dex,
+            MoveId::SLASH,
+            only_cbm.union(AiFlags::CHECK_VIABILITY)
+        ),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::SLASH))
+    );
+    // `AI_CV_Absorb` is ported, so a draining move passes `CHECK_VIABILITY`.
+    assert_eq!(
+        ensure_scoreable(
+            &dex,
+            MoveId::ABSORB,
+            only_cbm.union(AiFlags::CHECK_VIABILITY)
+        ),
+        Ok(())
+    );
     // `AI_CheckViability` has no `EFFECT_ACCURACY_DOWN_HIT` branch
     // (`data/battle_ai_scripts.s:655-743`), unlike Speed Down Hit's at `:706`.
     assert_eq!(
@@ -279,7 +284,7 @@ fn admission_is_flag_aware() {
             MoveId::QUICK_ATTACK,
             only_cbm.union(AiFlags::TRY_TO_FAINT)
         ),
-        Err(BattleError::UnscoreableMoveEffect(MoveId::QUICK_ATTACK))
+        Ok(())
     );
     for move_id in [
         MoveId::SPLASH,
@@ -300,11 +305,11 @@ fn admission_is_flag_aware() {
             "{move_id:?}"
         );
     }
-    assert_eq!(
-        ensure_scoreable(&dex, MoveId::CHARGE, only_cbm.union(AiFlags::TRY_TO_FAINT)),
-        Err(BattleError::UnscoreableMoveEffect(MoveId::CHARGE))
-    );
-    for flags in [only_cbm, only_cbm.union(AiFlags::CHECK_VIABILITY)] {
+    for flags in [
+        only_cbm,
+        only_cbm.union(AiFlags::CHECK_VIABILITY),
+        only_cbm.union(AiFlags::TRY_TO_FAINT),
+    ] {
         assert_eq!(ensure_scoreable(&dex, MoveId::CHARGE, flags), Ok(()));
     }
     assert_eq!(
@@ -653,12 +658,10 @@ fn status_handler_admission_is_flag_aware_and_exact() {
         ensure_scoreable(&dex, MoveId::FOCUS_ENERGY, viability),
         Ok(())
     );
-    for move_id in [MoveId::THUNDER_WAVE, MoveId::CONFUSE_RAY] {
-        assert_eq!(
-            ensure_scoreable(&dex, move_id, viability),
-            Err(BattleError::UnscoreableMoveEffect(move_id))
-        );
-    }
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::CONFUSE_RAY, viability),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::CONFUSE_RAY))
+    );
     for move_id in [
         MoveId::SAFEGUARD,
         MoveId::TOXIC,
@@ -712,6 +715,36 @@ fn sonic_boom_is_admitted_for_check_bad_move_alone() {
                 AiFlags::CHECK_BAD_MOVE.union(extra)
             ),
             Err(BattleError::UnscoreableMoveEffect(MoveId::SONIC_BOOM)),
+        );
+    }
+}
+
+/// False Swipe executes through the ordinary hit script, but no trainer AI
+/// script scores `EFFECT_FALSE_SWIPE`, so a scoring trainer holding it stays
+/// refused under every flag combination; a flagless trainer runs no script.
+#[test]
+fn false_swipe_stays_unscoreable_under_every_scoring_flag() {
+    let dex = Dex::new();
+    let scripts = [
+        AiFlags::CHECK_BAD_MOVE,
+        AiFlags::TRY_TO_FAINT,
+        AiFlags::CHECK_VIABILITY,
+        AiFlags::SETUP_FIRST_TURN,
+    ];
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::FALSE_SWIPE, AiFlags::NONE),
+        Ok(())
+    );
+    for mask in 1_u8..16 {
+        let flags = scripts
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| mask & (1 << bit) != 0)
+            .fold(AiFlags::NONE, |all, (_, script)| all.union(*script));
+        assert_eq!(
+            ensure_scoreable(&dex, MoveId::FALSE_SWIPE, flags),
+            Err(BattleError::UnscoreableMoveEffect(MoveId::FALSE_SWIPE)),
+            "mask {mask:#06b}"
         );
     }
 }

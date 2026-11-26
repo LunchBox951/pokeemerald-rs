@@ -15,6 +15,7 @@ mod run;
 #[cfg(test)]
 mod run_tests;
 
+use super::npc::DepthSprite;
 use super::obj_vram::SheetSprite;
 use super::{OverworldSceneError, METATILE_PX, PLAYER_VIEW_COL, PLAYER_VIEW_ROW, RESTING_SCROLL_Y};
 
@@ -243,6 +244,16 @@ pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> SheetSpr
             true,
         ),
         sheet_tile,
+    )
+}
+
+/// The player's sprite for depth sorting: drawn at its lifted OBJ, ranked by
+/// its grounded [`PLAYER_OBJ_Y`] (`event_object_movement.c:7773-7779`).
+pub(super) fn player_depth_sprite(player: &PlayerState, run_base_tile: u16) -> DepthSprite {
+    DepthSprite::single_over_ground(
+        player_entry(player, run_base_tile),
+        PLAYER_OBJ_Y,
+        player.previous_elevation(),
     )
 }
 

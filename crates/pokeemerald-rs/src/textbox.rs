@@ -14,10 +14,11 @@
 //! pacing and records the arrow in the same ordered [`WindowOp`] list as the
 //! glyphs, so a dialog and the intro scene share one path.
 
+use assets::fonts::GlyphSource;
 use assets::pack::{ImageRef, TextPrinterDownArrow};
 use assets::KeypadIconSheet;
 use engine::text::render::{
-    ClearedSpan, KeypadIconPlacement, RevealedGlyph, TextColors, TickEvent,
+    ClearedSpan, KeypadIconPlacement, Printer, RevealedGlyph, TextColors, TickEvent,
 };
 use engine::text::window::{self as msgwin, FrameTile};
 use rendering::{Bgr555, Framebuffer, Rgb888};
@@ -574,30 +575,70 @@ struct ArrowWait {
     frame: u8,
 }
 
+impl ArrowWait {
+    /// A wait that has not drawn yet (`TextPrinterInitDownArrowCounters`).
+    const fn at(cursor: (i32, i32)) -> Self {
+        Self {
+            x: cursor.0,
+            y: cursor.1,
+            delay: 0,
+            frame: 0,
+        }
+    }
+}
+
 /// The pacing of `TextPrinterWaitWithDownArrow` for one printer
 /// (`pokeemerald/src/text.c:787-882`).
 ///
-/// Feed it every [`TickEvent`] together with the printer's [`ArrowWindow`]
-/// and the owner's op list. The tick that reaches a `\p` or `\l` only arms the wait, as
+/// Feed [`Self::follow`] every [`TickEvent`] of the printer, with the owner's
+/// op list. The tick that reaches a `\p` or `\l` only arms the wait, as
 /// upstream's `RENDER_UPDATE` does; the arrow first draws one frame later and
 /// then redraws every ninth. Confirming a scroll erases the arrow
 /// (`TextPrinterClearDownArrow`) with a [`WindowOp::ScrollFill`], since
 /// `FillWindowPixelRect` writes a transparent background too
 /// (`pokeemerald/src/text.c:838-849`); confirming a page clear empties the
-/// window, so the owner's own clear removes it. The auto-scroll mode and the
-/// select sound effect of `TextPrinterWaitWithDownArrow` are not modelled.
+/// window, so the owner's own clear removes it.
+///
+/// An auto-scroll printer never gets an arrow, but still gets that erase. The
+/// select sound effect of `TextPrinterWaitWithDownArrow` is not modelled.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct PromptArrow {
     wait: Option<ArrowWait>,
 }
 
 impl PromptArrow {
+    /// Records the arrow effect of one frame of `printer`, which just
+    /// returned `event`, into `ops`: the one entry point for its owners.
+    pub(crate) fn follow<S: GlyphSource>(
+        &mut self,
+        printer: &Printer<S>,
+        event: &TickEvent,
+        content_height: i32,
+        sheet: &DownArrowSheet,
+        ops: &mut Vec<WindowOp>,
+    ) {
+        let window = ArrowWindow {
+            cursor: printer.cursor(),
+            colors: printer.colors(),
+            content_height,
+        };
+        let waiting = matches!(event, TickEvent::AwaitingScroll | TickEvent::AwaitingClear);
+        if printer.is_auto_scroll() && waiting {
+            // `TextPrinterWaitWithDownArrow` never draws in auto mode, but a
+            // scroll prompt's release still erases the arrow's rectangle at
+            // the cursor (`text.c:865-871`, `:1180-1183`): keep that spot.
+            self.wait.get_or_insert(ArrowWait::at(window.cursor));
+        } else {
+            self.tick(event, window, sheet, ops);
+        }
+    }
+
     /// Records the arrow effect of one printer frame into `ops`.
     ///
     /// `window.cursor` is the printer's cursor *after* the tick; a waiting
     /// printer does not move it until its confirm tick, which this reads from
     /// the wait it armed instead.
-    pub(crate) fn tick(
+    fn tick(
         &mut self,
         event: &TickEvent,
         window: ArrowWindow,
@@ -611,14 +652,7 @@ impl PromptArrow {
         } = window;
         match event {
             TickEvent::AwaitingScroll | TickEvent::AwaitingClear => match &mut self.wait {
-                None => {
-                    self.wait = Some(ArrowWait {
-                        x: cursor.0,
-                        y: cursor.1,
-                        delay: 0,
-                        frame: 0,
-                    });
-                }
+                None => self.wait = Some(ArrowWait::at(cursor)),
                 Some(wait) if wait.delay != 0 => wait.delay -= 1,
                 Some(wait) => {
                     Self::drop_trailing_arrow(ops);
@@ -1021,7 +1055,6 @@ mod tests {
             },
             colors: TextColors::default(),
             raster_height: 15,
-            paint_background: false,
         }
     }
 
@@ -1152,7 +1185,6 @@ mod tests {
             },
             colors: TextColors::default(),
             raster_height: 15,
-            paint_background: false,
         };
 
         blit_glyphs_colored(&mut fb, &[glyph], origin, (200, 100), &TEST_GLYPH_COLORS);

@@ -251,6 +251,7 @@ impl Battle {
         self.apply_color_change(attacker_is_player, move_id, events)?;
         self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_poison_point_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_flame_body_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_effect_spore_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_cute_charm_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_rough_skin_contact(attacker_is_player, move_id, events)
@@ -1291,7 +1292,7 @@ mod pipeline_agreement_tests {
         (
             &[
                 0, 2, 12, 14, 15, 17, 21, 22, 31, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96,
-                103, 110, 125, 131, 141, 150, 163,
+                101, 103, 110, 125, 131, 141, 150, 163,
             ],
             MovePipeline::OrdinaryHit,
         ),

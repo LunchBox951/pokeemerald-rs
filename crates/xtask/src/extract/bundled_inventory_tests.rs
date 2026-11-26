@@ -100,3 +100,13 @@ fn the_text_printer_down_arrow_is_pinned_in_the_manifest_and_the_profile() {
         .images()
         .any(|image| image.id == "interface/image/down_arrow"));
 }
+
+#[test]
+fn the_text_printer_dark_down_arrow_is_pinned_in_the_manifest_and_the_profile() {
+    // A literal, so dropping the dark arrow from the manifest and the profile
+    // together still fails here.
+    assert!(INTERFACE_IMAGE_IDS.contains(&"interface/image/down_arrow_alt"));
+    assert!(EMERALD_US_REV0_ROOTS
+        .images()
+        .any(|image| image.id == "interface/image/down_arrow_alt"));
+}

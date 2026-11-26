@@ -12,7 +12,7 @@ use assets::{
 use crate::event_data::EventData;
 use crate::rng::RandomSource;
 
-use super::map_runtime::MapRuntime;
+use super::map_runtime::{ConnectedMapData, MapRuntime, NoConnectedMaps};
 use super::object_event::{FrameContext, ObjectEventCollection};
 use super::player::TilePos;
 
@@ -28,6 +28,8 @@ pub(crate) const FLOOR_ELEVATION: u8 = 3;
 /// Metatile id `n` has behaviour `n`, so [`Self::set_behavior`] needs no attribute table of its
 /// own.
 pub(crate) struct Terrain {
+    width: u16,
+    connections: &'static [MapConnection],
     layout: &'static MapLayout,
     cells: Vec<MetatileCell>,
     /// `cells`, packed as the layout grid reads them.
@@ -39,6 +41,11 @@ pub(crate) struct Terrain {
 impl Terrain {
     /// A flat, passable [`TERRAIN_SIDE`] square.
     pub(crate) fn flat() -> Self {
+        Self::flat_sized(TERRAIN_SIDE, TERRAIN_SIDE)
+    }
+
+    /// A flat, passable map `width` by `height` tiles.
+    pub(crate) fn flat_sized(width: u16, height: u16) -> Self {
         static EVENTS: MapEvents = MapEvents {
             id: MapId("MAP_TEST"),
             shared_events_map: None,
@@ -50,8 +57,8 @@ impl Terrain {
         let layout = Box::leak(Box::new(MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
-            width: TERRAIN_SIDE,
-            height: TERRAIN_SIDE,
+            width,
+            height,
             primary_tileset: "gTileset_General",
             secondary_tileset: "gTileset_General",
         }));
@@ -63,8 +70,10 @@ impl Terrain {
         let attributes = (0..=u8::MAX)
             .flat_map(|behavior| u16::from(behavior).to_le_bytes())
             .collect();
-        let cell_count = usize::from(TERRAIN_SIDE) * usize::from(TERRAIN_SIDE);
+        let cell_count = usize::from(width) * usize::from(height);
         Self {
+            width,
+            connections: &[],
             layout,
             cells: vec![cell; cell_count],
             grid_bytes: cell.pack().to_le_bytes().repeat(cell_count),
@@ -75,10 +84,16 @@ impl Terrain {
 
     fn edit(&mut self, (x, y): TilePos, change: impl FnOnce(&mut MetatileCell)) {
         let index =
-            usize::try_from(y).unwrap() * usize::from(TERRAIN_SIDE) + usize::try_from(x).unwrap();
+            usize::try_from(y).unwrap() * usize::from(self.width) + usize::try_from(x).unwrap();
         change(&mut self.cells[index]);
         self.grid_bytes[index * 2..index * 2 + 2]
             .copy_from_slice(&self.cells[index].pack().to_le_bytes());
+    }
+
+    /// Connects this map to `connections`, as its header lists them.
+    pub(crate) fn with_connections(mut self, connections: Vec<MapConnection>) -> Self {
+        self.connections = Box::leak(connections.into_boxed_slice());
+        self
     }
 
     /// Makes `tile` solid (a nonzero collision field).
@@ -93,6 +108,12 @@ impl Terrain {
     /// Gives `tile` the metatile behaviour `behavior`.
     pub(crate) fn set_behavior(&mut self, tile: TilePos, behavior: u8) {
         self.edit(tile, |cell| cell.metatile_id = u16::from(behavior));
+    }
+
+    /// Gives metatile id `metatile` the behaviour `behavior` in this map's attribute table,
+    /// where every other id keeps behaviour equal to itself.
+    pub(crate) fn set_attribute(&mut self, metatile: u8, behavior: u8) {
+        self.attributes[usize::from(metatile) * 2] = behavior;
     }
 
     pub(crate) fn runtime(&self) -> MapRuntime<'_> {
@@ -115,9 +136,17 @@ impl Terrain {
             map_scripts: None,
             connections: &[] as &[MapConnection],
         };
+        let header: &MapHeader = if self.connections.is_empty() {
+            &HEADER
+        } else {
+            Box::leak(Box::new(MapHeader {
+                connections: self.connections,
+                ..HEADER
+            }))
+        };
         MapRuntime::new(
             MapId("MAP_TEST"),
-            &HEADER,
+            header,
             self.events,
             self.layout.grid(&self.grid_bytes).unwrap(),
             MetatileAttributeTable::new(&self.attributes),
@@ -213,6 +242,7 @@ pub(crate) fn admit(
             frozen: false,
             player_dashing: false,
             terrain: terrain.runtime(),
+            connected_maps: &NoConnectedMaps,
             player_previous_position: player,
             player_elevation: FLOOR_ELEVATION,
         },
@@ -242,6 +272,39 @@ pub(crate) struct Rig {
     pub(crate) frozen: bool,
     pub(crate) dashing: bool,
     pub(crate) rng: ScriptedRng,
+    /// The maps the rig's terrain connects to; none unless a test sets them.
+    pub(crate) connected_maps: Box<dyn ConnectedMapData>,
+}
+
+/// Flat synthetic maps by id, the neighbours a [`Rig`]'s terrain connects to.
+pub(crate) struct Neighbours(Vec<(MapId, Terrain)>);
+
+impl Neighbours {
+    pub(crate) fn new(maps: Vec<(MapId, Terrain)>) -> Self {
+        Self(maps)
+    }
+
+    fn terrain(&self, map: MapId) -> Option<&Terrain> {
+        self.0
+            .iter()
+            .find(|(id, _)| *id == map)
+            .map(|(_, terrain)| terrain)
+    }
+}
+
+impl ConnectedMapData for Neighbours {
+    fn dimensions(&self, map: MapId) -> Option<(u16, u16)> {
+        self.terrain(map)
+            .map(|terrain| (terrain.layout.width, terrain.layout.height))
+    }
+
+    fn metatile_cell(&self, map: MapId, x: i32, y: i32) -> Option<MetatileCell> {
+        self.terrain(map)?.runtime().metatile_cell(x, y)
+    }
+
+    fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8> {
+        self.terrain(map)?.runtime().metatile_behavior(x, y)
+    }
 }
 
 impl Rig {
@@ -257,6 +320,7 @@ impl Rig {
             frozen: false,
             dashing: false,
             rng: ScriptedRng::exhausted(),
+            connected_maps: Box::new(NoConnectedMaps),
         }
     }
 
@@ -268,6 +332,7 @@ impl Rig {
             frozen: self.frozen,
             player_dashing: self.dashing,
             terrain: self.terrain.runtime(),
+            connected_maps: &*self.connected_maps,
             player_previous_position: self.player_previous.unwrap_or(self.player),
             player_elevation: self.player_elevation,
         }
@@ -282,6 +347,7 @@ impl Rig {
                 frozen: self.frozen,
                 player_dashing: self.dashing,
                 terrain: self.terrain.runtime(),
+                connected_maps: &*self.connected_maps,
                 player_previous_position: self.player_previous.unwrap_or(self.player),
                 player_elevation: self.player_elevation,
             };

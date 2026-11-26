@@ -86,12 +86,15 @@ impl KeypadIconSheet {
 
     /// The window-palette index at offset `(x, y)` inside icon `id`, or
     /// `None` for an id outside the thirteen icons or an offset that leaves
-    /// the sheet. The caller bounds `(x, y)` by the icon's own size.
+    /// the sheet, including one so large that adding it to the icon's origin
+    /// overflows `u32`. The caller bounds `(x, y)` by the icon's own size.
     #[must_use]
     pub fn pixel(&self, id: u8, x: u32, y: u32) -> Option<u8> {
         let tile = u32::from(*TILE_OFFSETS.get(usize::from(id))?);
-        let sheet_x = (tile % SHEET_TILE_COLUMNS) * TILE_SIZE + x;
-        let sheet_y = (tile / SHEET_TILE_COLUMNS) * TILE_SIZE + y;
+        let sheet_x = (tile % SHEET_TILE_COLUMNS) * TILE_SIZE;
+        let sheet_y = (tile / SHEET_TILE_COLUMNS) * TILE_SIZE;
+        let sheet_x = sheet_x.checked_add(x)?;
+        let sheet_y = sheet_y.checked_add(y)?;
         if sheet_x >= SHEET_WIDTH || sheet_y >= SHEET_HEIGHT {
             return None;
         }

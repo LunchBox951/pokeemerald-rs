@@ -129,6 +129,45 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_profile_records_exactly_the_trainer_defeat_speech_inventory() {
+        use assets::TrainerDefeatSpeechContext;
+
+        let roots = EMERALD_US_REV0.roots.trainer_defeat_speeches;
+        assert_eq!(roots.len(), TrainerDefeatSpeechContext::ALL.len());
+        for (root, context) in roots.iter().zip(TrainerDefeatSpeechContext::ALL) {
+            assert_eq!(root.symbol, context.symbol());
+            assert_ne!(root.addr, crate::reader::GbaPtr::AT_BASE, "{context:?}");
+            // Only a speech whose text recurs in the image names its command.
+            assert_eq!(
+                root.script.is_some(),
+                crate::trainer_defeat_speech_witness_head(context).is_some(),
+                "{context:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_shipped_profile_records_exactly_the_sight_trainer_intro_inventory() {
+        use assets::SIGHT_TRAINER_INTRO_SCRIPTS;
+
+        let roots = EMERALD_US_REV0.roots.sight_trainer_intro_speeches;
+        assert_eq!(roots.len(), SIGHT_TRAINER_INTRO_SCRIPTS.len());
+        for (root, script) in roots.iter().zip(SIGHT_TRAINER_INTRO_SCRIPTS) {
+            assert_eq!(root.symbol, script);
+            assert_ne!(root.addr, crate::reader::GbaPtr::AT_BASE, "{script}");
+            assert_ne!(root.script, crate::reader::GbaPtr::AT_BASE, "{script}");
+            assert_ne!(root.script, root.addr, "{script}");
+        }
+    }
+
+    #[test]
+    fn the_shipped_profile_records_the_trainer_class_name_table() {
+        let table = EMERALD_US_REV0.roots.trainer_class_names;
+        let table = table.expect("the shipped profile locates gTrainerClassNames");
+        assert_ne!(table, crate::reader::GbaPtr::AT_BASE);
+    }
+
+    #[test]
     fn a_hash_that_matches_nothing_is_unsupported() {
         // The fixture is a synthetic image, so it can never match a shipped
         // profile however convincing its header is.

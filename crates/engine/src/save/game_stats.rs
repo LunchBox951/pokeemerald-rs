@@ -23,6 +23,18 @@ pub enum GameStat {
     /// (`pokeemerald/include/constants/game_stat.h:9`,
     /// `pokeemerald/src/field_control_avatar.c:89-122,155-163`).
     Steps = 5,
+    /// `GAME_STAT_TOTAL_BATTLES`, bumped with every wild or trainer battle
+    /// start (`pokeemerald/include/constants/game_stat.h:11`,
+    /// `pokeemerald/src/battle_setup.c:415-416,462-463,943-944`).
+    TotalBattles = 7,
+    /// `GAME_STAT_WILD_BATTLES`, bumped with every wild battle start,
+    /// including the scripted first battle
+    /// (`pokeemerald/include/constants/game_stat.h:12`).
+    WildBattles = 8,
+    /// `GAME_STAT_TRAINER_BATTLES`, bumped with every trainer battle start
+    /// (`pokeemerald/include/constants/game_stat.h:13`,
+    /// `pokeemerald/src/battle_setup.c:462-463`).
+    TrainerBattles = 9,
     /// `GAME_STAT_ENTERED_HOF`.
     EnteredHof = 10,
     /// `GAME_STAT_POKEMON_TRADES`.
@@ -140,5 +152,70 @@ mod tests {
         stats.set(GameStat::Steps, u32::MAX);
         stats.increment(GameStat::Steps);
         assert_eq!(stats.get(GameStat::Steps), 0xFF_FFFF);
+    }
+    const BATTLE_SLOTS: [(GameStat, usize); 3] = [
+        (GameStat::TotalBattles, 7),
+        (GameStat::WildBattles, 8),
+        (GameStat::TrainerBattles, 9),
+    ];
+
+    /// `GAME_STAT_TOTAL_BATTLES`, `_WILD_BATTLES` and `_TRAINER_BATTLES` are
+    /// slots 7, 8 and 9 (`pokeemerald/include/constants/game_stat.h:11-13`):
+    /// their words sit at those offsets of the saved array, encrypted by the
+    /// key like every other slot.
+    #[test]
+    fn the_battle_counters_sit_in_slots_7_8_and_9_of_the_encrypted_array() {
+        const KEY: u32 = 0x0BAD_F00D;
+        for (stat, slot) in BATTLE_SLOTS {
+            assert_eq!(stat as usize, slot);
+            let mut stats = GameStats::default();
+            stats.set(stat, 0x0001_0203);
+            let bytes = stats.to_bytes(KEY);
+            let at = slot * STAT_LEN;
+            assert_eq!(
+                bytes[at..at + STAT_LEN],
+                (0x0001_0203_u32 ^ KEY).to_le_bytes(),
+                "{stat:?} is saved XOR the encryption key at its own slot"
+            );
+            let neighbours_zero = bytes
+                .chunks_exact(STAT_LEN)
+                .enumerate()
+                .filter(|(i, _)| *i != slot)
+                .all(|(_, word)| word == KEY.to_le_bytes());
+            assert!(neighbours_zero, "{stat:?} writes no other slot");
+            assert_eq!(GameStats::from_bytes(&bytes, KEY).unwrap(), stats);
+        }
+    }
+
+    /// `0xFFFFFE -> 0xFFFFFF -> 0xFFFFFF`, and a stored value above the
+    /// ceiling reads back as the ceiling after one increment, for each battle
+    /// slot, leaving every other slot as it was
+    /// (`pokeemerald/src/overworld.c:433-445`).
+    #[test]
+    fn each_battle_counter_saturates_and_normalises_without_touching_its_neighbours() {
+        for (stat, slot) in BATTLE_SLOTS {
+            let mut stats = GameStats::default();
+            for (other, _) in BATTLE_SLOTS {
+                stats.set(other, 0x12_3456);
+            }
+            stats.set(GameStat::Steps, 0xAB_CDEF);
+            stats.set(stat, 0xFF_FFFE);
+            let others = stats.clone();
+
+            stats.increment(stat);
+            assert_eq!(stats.get(stat), 0xFF_FFFF, "slot {slot}: 0xFFFFFE + 1");
+            stats.increment(stat);
+            assert_eq!(stats.get(stat), 0xFF_FFFF, "slot {slot}: held at ceiling");
+
+            stats.set(stat, 0x0100_0000);
+            stats.increment(stat);
+            assert_eq!(stats.get(stat), 0xFF_FFFF, "slot {slot}: 0x1000000");
+            stats.set(stat, 0xFFFF_FFFF);
+            stats.increment(stat);
+            assert_eq!(stats.get(stat), 0xFF_FFFF, "slot {slot}: 0xFFFFFFFF");
+
+            stats.set(stat, others.get(stat));
+            assert_eq!(stats, others, "slot {slot}: no neighbour moved");
+        }
     }
 }
