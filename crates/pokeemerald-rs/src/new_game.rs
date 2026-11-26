@@ -453,8 +453,61 @@ fn apply_truck_intro_flags(block1: &mut SaveBlock1, gender: PlayerGender) {
     }
 }
 
-/// Deterministic seed for new-game runtime state.
+/// Deterministic seed for new-game runtime state: the fixed seed every test,
+/// every headless scenario ([`RngSeedSource::FIXED`]), and
+/// [`init_save_blocks_for_new_game`] use.
 pub const NEW_GAME_RNG_SEED: u32 = 0;
+
+/// Where a session's RNG seed comes from.
+///
+/// Upstream reseeds `gRngValue` and generates the trainer ID's low half from
+/// the free-running `REG_TM1CNT_L` timer when the player naming screen exits
+/// (`pokeemerald/src/naming_screen.c:700-701`, `pokeemerald/src/main.c:208-214`),
+/// so no two adventures start alike. This port has no such timer; a real
+/// session reads [`Self::Entropy`] at the same moment (the new game's start,
+/// and a continue's resume), while a headless scenario or test pins
+/// [`Self::Fixed`] so its run stays reproducible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RngSeedSource {
+    /// Always this seed.
+    Fixed(u32),
+    /// A fresh 16-bit seed per [`Self::draw`] from the standard library's
+    /// per-process hasher keys and the wall clock.
+    Entropy,
+}
+
+impl RngSeedSource {
+    /// Every headless scenario and test: [`NEW_GAME_RNG_SEED`].
+    pub(crate) const FIXED: Self = Self::Fixed(NEW_GAME_RNG_SEED);
+
+    /// The seed for one new game or one continue.
+    ///
+    /// [`Self::Entropy`] yields a 16-bit value, the width of the timer
+    /// `SeedRngAndSetTrainerId` reads and `SeedRng(u16)` accepts
+    /// (`pokeemerald/src/random.c:18-21`).
+    pub(crate) fn draw(self) -> u32 {
+        match self {
+            Self::Fixed(seed) => seed,
+            Self::Entropy => u32::from(entropy_seed_u16()),
+        }
+    }
+}
+
+/// A seed folded to 16 bits from `RandomState`'s per-process random keys
+/// (which also step per instance, so two calls in one instant differ) and the
+/// current wall-clock nanoseconds.
+fn entropy_seed_u16() -> u16 {
+    use std::hash::{BuildHasher, Hasher, RandomState};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let mut hasher = RandomState::new().build_hasher();
+    if let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) {
+        hasher.write_u128(elapsed.as_nanos());
+    }
+    let hash = hasher.finish();
+    let folded = hash ^ (hash >> 16) ^ (hash >> 32) ^ (hash >> 48);
+    u16::try_from(folded & u64::from(u16::MAX)).expect("masked to 16 bits")
+}
 
 /// Builds fresh save blocks without exposing the continuing RNG stream.
 #[must_use]
@@ -476,6 +529,38 @@ fn trainer_id_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_seed_source_always_draws_the_configured_seed() {
+        assert_eq!(RngSeedSource::FIXED.draw(), NEW_GAME_RNG_SEED);
+        assert_eq!(RngSeedSource::Fixed(0x1234).draw(), 0x1234);
+        assert_eq!(RngSeedSource::Fixed(0x1234).draw(), 0x1234);
+    }
+
+    #[test]
+    fn entropy_seed_source_varies_between_draws_within_the_timer_width() {
+        let draws: Vec<u32> = (0..32).map(|_| RngSeedSource::Entropy.draw()).collect();
+        assert!(
+            draws.iter().all(|&seed| u16::try_from(seed).is_ok()),
+            "SeedRng takes a u16: {draws:?}"
+        );
+        assert!(
+            draws.iter().any(|&seed| seed != draws[0]),
+            "32 consecutive draws were all {:#x}",
+            draws[0]
+        );
+    }
+
+    #[test]
+    fn distinct_entropy_seeds_give_distinct_trainer_ids() {
+        let id_for = |seed: u32| init_save_blocks(&mut Rng::new(seed)).1.player_trainer_id;
+        let mut seeds = (0..32).map(|_| RngSeedSource::Entropy.draw());
+        let first = seeds.next().expect("32 draws");
+        let other = seeds.find(|&seed| seed != first).expect("a differing draw");
+        assert_ne!(id_for(first), id_for(other));
+        // The low half is the seed itself (`sTrainerId`), the high half one draw.
+        assert_eq!(id_for(0x1234)[..2], 0x1234_u16.to_le_bytes());
+    }
 
     /// Upstream `SPECIES_TREECKO` (`pokeemerald/include/constants/species.h`),
     /// spelled as a literal rather than read back from production's

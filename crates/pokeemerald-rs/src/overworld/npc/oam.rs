@@ -130,35 +130,23 @@ impl DepthSprite {
     /// A 16x32 sprite whose single OBJ is `entry` at `elevation`.
     #[cfg(test)]
     pub(in crate::overworld) fn single(entry: SheetSprite, elevation: u8) -> Self {
-        Self {
-            height: 32,
-            ..Self::with_subpriority(
-                entry,
-                subpriority_from_bottom(
-                    i32::from(entry.y()) + 32,
-                    elevation,
-                    OBJECT_EVENT_SUBPRIORITY,
-                ),
-            )
-        }
+        Self::single_over_ground(entry, entry.y(), elevation)
     }
 
-    /// A 16x32 sprite drawn as `shown` while sorting by `base`'s depth: a
-    /// sprite's `x2`/`y2` displacement moves its OAM position, but its
-    /// subpriority follows the object event's own coordinates
-    /// (`pokeemerald/src/event_object_movement.c:7773-7786`). The final
-    /// on-screen `y` tie-break still reads the displaced position.
-    pub(in crate::overworld) fn single_displaced(
-        base: SheetSprite,
-        shown: SheetSprite,
+    /// [`Self::single`] whose subpriority comes from `ground_y`, the OBJ's top
+    /// before any lift: upstream's `sprite->y` excludes `y2`
+    /// (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7779`).
+    pub(in crate::overworld) fn single_over_ground(
+        entry: SheetSprite,
+        ground_y: u8,
         elevation: u8,
     ) -> Self {
         Self {
             height: 32,
             ..Self::with_subpriority(
-                shown,
+                entry,
                 subpriority_from_bottom(
-                    i32::from(base.y()) + 32,
+                    i32::from(ground_y) + 32,
                     elevation,
                     OBJECT_EVENT_SUBPRIORITY,
                 ),

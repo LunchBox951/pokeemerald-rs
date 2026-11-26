@@ -387,8 +387,17 @@ impl OverworldPhase {
             self.step_field_frame(buttons);
         }
         self.advance_object_events();
-        self.scene
-            .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
+        let maps = MapConnections::terrain_only(
+            &self.connection_pack,
+            self.pack_source.clone(),
+            self.map_id,
+        );
+        self.scene.advance_tall_grass(
+            &self.player,
+            &self.object_events,
+            &self.save1.event_data,
+            &maps,
+        );
     }
 
     /// [`Self::step`]'s input, movement, and event pipeline for a frame no

@@ -223,10 +223,10 @@ impl SceneSprites {
             .iter()
             .map(|live| live.state().previous_elevation())
             .collect();
-        let mut sprites = vec![npc::DepthSprite::single_displaced(
-            avatar::player_entry(player, self.run_base_tile),
-            avatar::player_entry_displaced(player, self.run_base_tile, player_offset),
-            player.previous_elevation(),
+        let mut sprites = vec![avatar::player_depth_sprite(
+            player,
+            self.run_base_tile,
+            player_offset,
         )];
         sprites.extend(npc::elevated_oam_entries(
             objects,
