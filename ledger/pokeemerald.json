@@ -29724,6 +29724,20 @@
       "status": "pending"
     },
     "src/battle_tower.c": {
+      "artifacts": {
+        "sFrontierTrainerIdRanges": {
+          "reason": "src/battle_tower.c:855-865 sFrontierTrainerIdRanges, transcribed as eight inclusive (first, last) Frontier trainer-index ranges, behind trainer_range(FrontierTrainerTable::Normal, row), which refuses a row past the eighth. The endpoints are the FRONTIER_TRAINER_* values of include/constants/battle_frontier_trainers.h, held as FrontierTrainerId, a type distinct from assets::trainers::TrainerId. Adjacent rows overlap, as upstream's comments show. Pinned endpoint by endpoint by unit tests and by an ignored test that re-parses the C table and the header. NOT modelled: the choice of row from a challenge or battle number, including the use of the last row past the eighth challenge (src/battle_tower.c:1113-1142), random trainer selection, trainer records, and battle construction.",
+          "rust_target": "crates/assets/src/frontier_trainer_ranges.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sFrontierTrainerIdRangesHard": {
+          "reason": "src/battle_tower.c:867-877 sFrontierTrainerIdRangesHard, transcribed as eight inclusive (first, last) Frontier trainer-index ranges, behind trainer_range(FrontierTrainerTable::Hard, row), which refuses a row past the eighth. Its last row is the same 200..=299 range as the normal table's last row. Pinned endpoint by endpoint by unit tests and by an ignored test that re-parses the C table and the header. NOT modelled: the choice of table or row from a challenge or battle number (src/battle_tower.c:1113-1142), random trainer selection, trainer records, and battle construction.",
+          "rust_target": "crates/assets/src/frontier_trainer_ranges.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
