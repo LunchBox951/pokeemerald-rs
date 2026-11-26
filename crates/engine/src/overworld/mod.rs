@@ -24,7 +24,9 @@ pub use collision::{
 };
 pub use direction::Direction;
 pub use interaction::{select_interaction_target, InteractionTarget, ObjectInteraction};
-pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
+pub use map_runtime::{
+    ConnectedMapData, ConnectionCrossing, MapRuntime, NoConnectedMaps, NUM_METATILES_IN_PRIMARY,
+};
 pub use metatile_interaction::{classify_metatile_interaction, MetatileInteractionTarget};
 pub use object_event::{
     blocking_object_event_at, facing_object_event, initial_facing_direction,

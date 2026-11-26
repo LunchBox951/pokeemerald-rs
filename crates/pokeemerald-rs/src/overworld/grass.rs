@@ -30,10 +30,13 @@
 //! A player-owned effect survives a map-edge connection crossing, translated into
 //! the entered map's coordinates with its animation and moved-away state kept
 //! (`field_effect_helpers.c:325-330`): [`OverworldScene::carry_tall_grass_from`].
-//! The entered scene keeps no tileset attributes for its connected layouts, so
-//! the departed tile's behaviour is read from the departed scene as the effect
-//! crosses and kept with it; the tile must lie inside the entered map's backup
-//! band (`viewport::within_backup_map_band`) or the effect is dropped. An
+//! The tile must lie inside the entered map's backup band
+//! (`viewport::within_backup_map_band`) or the effect is dropped. An object's
+//! passes and its effects' lifetime read that band
+//! ([`engine::overworld::MapRuntime::metatile_behavior_in_band`]), as the backup
+//! layout holds the neighbour's metatile ids under this map's tileset; the
+//! departed tile's behaviour, read as the effect crosses and kept with it, is the
+//! fallback for a band cell no connection covers. An
 //! object-owned effect crosses with its owner, which the live collection keeps
 //! alive across the crossing (`ObjectEventCollection::carry_across_connection`):
 //! owners are named by [`LiveObjectEvent::id`], which a collection index is not,
@@ -54,7 +57,7 @@ use assets::{ImageRef, PackError};
 use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::is_tall_grass;
 use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
-use engine::overworld::{PlayerState, TilePos};
+use engine::overworld::{ConnectedMapData, PlayerState, TilePos};
 use rendering::{BitDepth, OamEntry, ObjShape};
 
 use super::obj_vram::SheetSprite;
@@ -235,13 +238,19 @@ struct TallGrassEffect {
 
 /// An object sprite an effect's depth is compared against
 /// (`UpdateGrassFieldEffectSubpriority`, `field_effect_helpers.c:1662-1690`),
-/// with 16x32 bounds from its parent's top-left whatever its graphic's size.
+/// with the size of its graphic, from which upstream takes the linked sprite's
+/// `centerToCornerVecX`/`Y` (`-(width >> 1)`, `-(height >> 1)`,
+/// `event_object_movement.c:1461-1462`).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DepthObject {
     /// Screen x of the object's left edge.
     pub(super) left: i32,
     /// Screen y of the object's top edge.
     pub(super) top: i32,
+    /// The graphic's width in pixels.
+    pub(super) width: i32,
+    /// The graphic's height in pixels.
+    pub(super) height: i32,
     pub(super) subpriority: u16,
 }
 
@@ -460,13 +469,21 @@ impl TallGrassEffect {
             0
         };
         let own = npc::subpriority_from_bottom(top + FRAME_PX, self.elevation, bias);
-        let half = FRAME_PX / 2;
+        // The effect is a 16x16 sprite, so its `sprite->x`/`y` sit 8 in
+        // from its top-left and `centerToCornerVec` is -8 on both axes.
+        // For the linked sprite, `x`/`y` are its centre: `lyhi` is its top,
+        // `var` its centre row, and `yhi = ylo + centerToCornerVecY` the
+        // effect's bottom less half the object's height. Since `yhi < ylo`,
+        // `lyhi < yhi || lyhi < ylo` reduces to `lyhi < ylo`.
+        let bottom = top + FRAME_PX;
         let overlapping = objects.iter().find(|object| {
-            let object_centre = object.left + half;
-            left < object_centre
-                && left + FRAME_PX > object_centre
-                && object.top < top + FRAME_PX
-                && object.top + FRAME_PX > top
+            let object_half = object.height >> 1;
+            let object_centre_x = object.left + (object.width >> 1);
+            let object_centre_y = object.top + object_half;
+            left < object_centre_x
+                && left + FRAME_PX > object_centre_x
+                && object.top < bottom
+                && object_centre_y > bottom - object_half
                 && own <= object.subpriority
         });
         overlapping.map_or(own, |object| object.subpriority + 2)
@@ -534,6 +551,7 @@ impl OverworldScene {
         &mut self,
         objects: &ObjectEventCollection,
         _event_data: &EventData,
+        maps: &dyn ConnectedMapData,
     ) {
         let draws = self.sprites.draws_tall_grass();
         self.grass
@@ -550,7 +568,7 @@ impl OverworldScene {
             let state = live.state();
             let tile = state.position();
             self.grass.record_object_pass(id, tile);
-            if draws && self.is_tall_grass_at(tile) {
+            if draws && self.is_tall_grass_in_band(tile, maps) {
                 let elevation = state.previous_elevation();
                 self.grass
                     .spawn_placement(Owner::Object(id), tile, elevation);
@@ -568,6 +586,7 @@ impl OverworldScene {
         &mut self,
         objects: &ObjectEventCollection,
         _event_data: &EventData,
+        maps: &dyn ConnectedMapData,
     ) {
         let draws = self.sprites.draws_tall_grass();
         for live in objects.iter() {
@@ -586,7 +605,7 @@ impl OverworldScene {
                 continue;
             }
             self.grass.record_object_pass(id, tile);
-            if draws && self.is_tall_grass_at(tile) {
+            if draws && self.is_tall_grass_in_band(tile, maps) {
                 let elevation = state.previous_elevation();
                 self.grass.spawn_step(Owner::Object(id), tile, elevation);
             }
@@ -686,6 +705,7 @@ impl OverworldScene {
         player: &PlayerState,
         objects: &ObjectEventCollection,
         _event_data: &EventData,
+        maps: &dyn ConnectedMapData,
     ) {
         let mut grass = std::mem::take(&mut self.grass);
         {
@@ -698,15 +718,25 @@ impl OverworldScene {
                         .filter(|live| has_sprite(live))
                         .map(|live| (live.state().position(), live.state().previous_position())),
                 },
-                |(x, y)| runtime.metatile_behavior(x, y),
+                |(x, y)| runtime.metatile_behavior_in_band(x, y, maps),
             );
         }
         self.grass = grass;
     }
 
+    /// The player's tile query: strictly inside the active grid.
     fn is_tall_grass_at(&self, (x, y): TilePos) -> bool {
         self.runtime()
             .metatile_behavior(x, y)
+            .is_some_and(is_tall_grass)
+    }
+
+    /// An object event's tile query: `MapGridGetMetatileBehaviorAt` reads the backup layout, so a
+    /// carried object standing in the connected-layout band reads the neighbour's cell decoded
+    /// by this map's tileset (`fieldmap.c:121-314,375-388`).
+    fn is_tall_grass_in_band(&self, (x, y): TilePos, maps: &dyn ConnectedMapData) -> bool {
+        self.runtime()
+            .metatile_behavior_in_band(x, y, maps)
             .is_some_and(is_tall_grass)
     }
 

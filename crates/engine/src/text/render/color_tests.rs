@@ -93,10 +93,10 @@ fn a_highlight_paints_glyph_backgrounds_from_then_on_even_back_to_white() {
     let mut paint = Vec::new();
     while !printer.is_finished() {
         if let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) {
-            paint.push((g.colors.background, g.paint_background, g.raster_height));
+            paint.push((g.colors.background, g.raster_height));
         }
     }
-    assert_eq!(paint, vec![(1, false, 15), (4, true, 15), (1, true, 15)]);
+    assert_eq!(paint, vec![(1, 15), (4, 15), (1, 15)]);
 }
 
 #[test]
@@ -218,7 +218,6 @@ fn configured_colors_apply_until_restart_resets_them() {
         panic!("expected a glyph")
     };
     assert_eq!(g.colors, colored(8, 6, 7));
-    assert!(g.paint_background);
     printer.restart(decode_tokens(&[ENCODED_A, eos]));
     let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
         panic!("expected a glyph")

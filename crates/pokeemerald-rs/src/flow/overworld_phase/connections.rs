@@ -48,12 +48,31 @@ use super::{assert_scene_owns_map, OverworldPhase};
 /// of the map the player is leaving, what a crossing would carry
 /// ([`ObjectEventCollection::carry_across_connection`]). The destination's fresh templates are
 /// left out on purpose: none has spawned, as `DoesObjectCollideWithObjectAt` scans only active
-/// objects (`src/event_object_movement.c:4724-4741`).
+/// objects (`src/event_object_movement.c:4724-4741`). A resolver that only reads terrain, as
+/// the object-event scheduler's does, passes `None`: no crossing is asked about, and the live
+/// set is the scheduler's own mutable borrow.
 pub(super) struct MapConnections<'a> {
     pub(super) pack: &'a OnceCell<assets::pack::AssetPack>,
     pub(super) source: crate::pack_source::PackSource,
     pub(super) departed: assets::MapId,
-    pub(super) departed_objects: &'a ObjectEventCollection,
+    pub(super) departed_objects: Option<&'a ObjectEventCollection>,
+}
+
+impl<'a> MapConnections<'a> {
+    /// A resolver that only reads terrain: no crossing is asked about, and the live set stays
+    /// the caller's own borrow ([`Self::departed_objects`] is `None`).
+    pub(super) fn terrain_only(
+        pack: &'a OnceCell<assets::pack::AssetPack>,
+        source: crate::pack_source::PackSource,
+        map: assets::MapId,
+    ) -> Self {
+        Self {
+            pack,
+            source,
+            departed: map,
+            departed_objects: None,
+        }
+    }
 }
 
 impl MapConnections<'_> {
@@ -111,11 +130,13 @@ impl ConnectedMapData for MapConnections<'_> {
     }
 
     fn carried_object_event_blocks(&self, crossing: ConnectionCrossing, elevation: u8) -> bool {
-        self.departed_objects
-            .carry_across_connection(self.departed, crossing.target, &[], crossing.shift)
-            .collision_objects_at(crossing.position.0, crossing.position.1, elevation)
-            .next()
-            .is_some()
+        self.departed_objects.is_some_and(|departed_objects| {
+            departed_objects
+                .carry_across_connection(self.departed, crossing.target, &[], crossing.shift)
+                .collision_objects_at(crossing.position.0, crossing.position.1, elevation)
+                .next()
+                .is_some()
+        })
     }
 }
 
@@ -336,7 +357,10 @@ impl OverworldPhase {
     /// Same shape as [`OverworldPhase::warp_to`] otherwise, including its
     /// failure contract, except the landing position is validated directly
     /// against the destination's decoded grid rather than resolved through
-    /// a warp event.
+    /// a warp event. Returns whether the warp landed, as
+    /// [`OverworldPhase::warp_to_saved_location`] does: `false` means the
+    /// phase is untouched, so a caller that wrote state ahead of the warp can
+    /// undo it.
     ///
     /// Lands at the destination tile's own elevation immediately, rather
     /// than leaving upstream's spawn-time elevation sentinel in place until
@@ -358,15 +382,15 @@ impl OverworldPhase {
     /// # Panics
     ///
     /// Same as [`OverworldPhase::warp_to`].
-    pub(super) fn warp_to_position(&mut self, map: assets::MapId, x: i16, y: i16) {
+    pub(super) fn warp_to_position(&mut self, map: assets::MapId, x: i16, y: i16) -> bool {
         let Ok(header) = MapHeaderTable::new().header(map) else {
             eprintln!("warp: unknown destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(map)
         else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let (elevation, facing) = {
             let runtime = scene.runtime();
@@ -374,7 +398,7 @@ impl OverworldPhase {
                 eprintln!(
                     "warp: destination position ({x}, {y}) is outside map {map:?} -- staying put"
                 );
-                return;
+                return false;
             };
             let behavior = runtime
                 .metatile_behavior(i32::from(x), i32::from(y))
@@ -406,6 +430,7 @@ impl OverworldPhase {
             y,
         };
         self.save1.pos = engine::save::Coords16 { x, y };
+        true
     }
 
     /// Executes a saved-location warp: lands using the complete saved

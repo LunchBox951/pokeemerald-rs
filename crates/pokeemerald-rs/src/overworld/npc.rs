@@ -428,6 +428,8 @@ mod oam;
 #[cfg(test)]
 use engine::overworld::PlayerState;
 #[cfg(test)]
+pub(super) use oam::order_sprites;
+#[cfg(test)]
 use oam::OAM_Y_MODULUS;
 pub(super) use oam::{
     elevated_oam_entries, subpriority_from_bottom, wrap_oam_x, wrap_oam_y, DepthSprite, SpriteId,
@@ -435,8 +437,7 @@ pub(super) use oam::{
 };
 #[cfg(test)]
 use oam::{
-    oam_entries, object_origin, object_screen_position, order_by_depth, order_sprites, subpriority,
-    truck_entries,
+    oam_entries, object_origin, object_screen_position, order_by_depth, subpriority, truck_entries,
 };
 
 #[cfg(test)]

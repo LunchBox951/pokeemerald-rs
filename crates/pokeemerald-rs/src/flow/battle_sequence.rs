@@ -23,16 +23,17 @@
 use std::collections::VecDeque;
 
 use assets::pack::AssetPack;
-use battle::{Battle, BattleEvent};
+use battle::{Battle, BattleEvent, BattleOutcome};
 use engine::rng::Rng;
 use engine::text::render::PrinterInput;
 use rendering::Framebuffer;
 
 use super::first_usable_move::take_first_usable_move_turn;
 use super::move_learn::decline_pending_move_learn;
+use super::wild_encounter::take_run_turn;
 use crate::battle_narration::{
-    AssetNames, BattleMessageLayer, NarrationError, NarrationGate, NarrationRequest, Narrator,
-    PresentationError, Scene, Side,
+    AssetNames, BattleMessageLayer, Battler, NarrationError, NarrationGate, NarrationRequest,
+    Narrator, PresentationError, Scene, Side,
 };
 
 /// `B_WAIT_TIME_LONG` (`pokeemerald/include/constants/battle.h:324`).
@@ -72,6 +73,17 @@ impl From<assets::pack::PackError> for SequenceError {
     fn from(error: assets::pack::PackError) -> Self {
         Self::Presentation(error.into())
     }
+}
+
+/// What the player does on each turn the sequencer starts; the battle has no
+/// action menu, so the flow that owns the battle names its one choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TurnPolicy {
+    /// The first move slot the engine accepts: the scripted Route 101 fight.
+    FirstUsableMove,
+    /// An attempt to run, until the party escapes or is defeated: a wild
+    /// encounter.
+    Run,
 }
 
 /// What a frame of the sequencer decided.
@@ -141,6 +153,15 @@ pub(super) struct BattleSequence {
     layer: BattleMessageLayer<assets::fonts::OwnedFontGlyphSheet>,
     narrator: Narrator,
     stage: Stage,
+    policy: TurnPolicy,
+    /// The player's reserves in the order the engine sends them out, named as
+    /// the replacement's print needs them.
+    reserves: Vec<Battler>,
+    /// How many replacements have been narrated.
+    sent_out: usize,
+    /// A healthy member the engine cannot play was left out of the roster, so
+    /// the roster's loss is not the party's defeat and no white-out text plays.
+    unplayable_member_remains: bool,
     turn_failed: bool,
 }
 
@@ -185,26 +206,82 @@ fn script_hold(event: &BattleEvent, position: usize, count: usize) -> u16 {
     }
 }
 
-/// The prints for `events` in order, each with its hold.
-fn print_steps(
-    narrator: &mut Narrator,
-    events: &[BattleEvent],
-) -> Result<VecDeque<PrintStep>, NarrationError> {
-    let mut steps = VecDeque::new();
-    for event in events {
-        let requests = narrator.requests(&AssetNames, event)?;
-        let count = requests.len();
-        steps.extend(
-            requests
-                .into_iter()
-                .enumerate()
-                .map(|(position, request)| PrintStep {
-                    request,
-                    hold: script_hold(event, position, count),
-                }),
-        );
+/// What `event` did to the opponent's hit points: negative for HP lost, positive
+/// for HP regained, by the amounts the engine actually applied.
+fn opponent_hp_change(event: &BattleEvent) -> i64 {
+    match *event {
+        // A hit lands on, and an absorbing ability heals, the side that did not
+        // use the move.
+        BattleEvent::Hit {
+            by_player: true,
+            damage,
+            ..
+        }
+        // These name the battler that lost the HP.
+        | BattleEvent::ConfusionSelfHit {
+            by_player: false,
+            damage,
+        }
+        | BattleEvent::Recoil {
+            by_player: false,
+            damage,
+            ..
+        }
+        | BattleEvent::LiquidOoze {
+            by_player: false,
+            damage,
+            ..
+        }
+        | BattleEvent::RoughSkinDamage {
+            by_player: false,
+            damage,
+            ..
+        }
+        | BattleEvent::HurtByPoison {
+            by_player: false,
+            damage,
+        }
+        | BattleEvent::HurtByBurn {
+            by_player: false,
+            damage,
+        }
+        | BattleEvent::SappedByLeechSeed {
+            by_player: false,
+            damage,
+        } => -i64::from(damage),
+        BattleEvent::AbilityHealed {
+            by_player: true,
+            healed,
+            ..
+        }
+        // These name the battler that regained the HP.
+        | BattleEvent::Drained {
+            by_player: false,
+            healed,
+            ..
+        }
+        | BattleEvent::LeechSeedHealed {
+            by_player: false,
+            healed,
+        }
+        | BattleEvent::ItemRestoredHealth {
+            by_player: false,
+            healed,
+            ..
+        } => i64::from(healed),
+        _ => 0,
     }
-    Ok(steps)
+}
+
+/// The opponent's hit points when the events before `later` had happened,
+/// recovered from its hit points once `later` has too. A turn resolves whole,
+/// so a replacement's send-out is narrated after the end-of-turn effects that
+/// follow it, yet upstream reads the opponent's health at the switch-in.
+fn opponent_health_at(enemy: &battle::BattlePokemon, later: &[BattleEvent]) -> u32 {
+    let changed: i64 = later.iter().map(opponent_hp_change).sum();
+    let before =
+        (i64::from(enemy.current_hp()) - changed).clamp(0, i64::from(enemy.stats().max_hp));
+    u32::try_from(before).unwrap_or(0)
 }
 
 impl BattleSequence {
@@ -212,7 +289,17 @@ impl BattleSequence {
     /// send-out (`STRINGID_INTROMSG`, `STRINGID_INTROSENDOUT`,
     /// `pokeemerald/src/battle_main.c:3564-3607`), printed before any turn.
     ///
-    /// `raw_text_speed` is the saved text-speed option.
+    /// `raw_text_speed` is the saved text-speed option, and `policy` the action
+    /// each turn takes. `reserves` are the player's other members in the order
+    /// the engine sends them out, so a replacement is named by its nickname and
+    /// ability.
+    ///
+    /// `unplayable_member_remains` is set when a healthy saved member was left
+    /// out of the battle's roster. The roster's fainting then reports a loss
+    /// that upstream never reaches: `Cmd_checkteamslost` sums the HP of the
+    /// whole party (`pokeemerald/src/battle_script_commands.c:3534-3564`), so
+    /// `BattleScript_LocalBattleLost`'s two white-out prints
+    /// (`pokeemerald/data/battle_scripts_1.s:2945-2955`) are not played.
     ///
     /// # Errors
     ///
@@ -222,6 +309,9 @@ impl BattleSequence {
         pack: AssetPack,
         raw_text_speed: u8,
         scene: Scene,
+        policy: TurnPolicy,
+        reserves: Vec<Battler>,
+        unplayable_member_remains: bool,
     ) -> Result<Self, SequenceError> {
         let mut layer = BattleMessageLayer::from_pack(&pack, raw_text_speed)?;
         let narrator = Narrator::new(scene);
@@ -237,8 +327,78 @@ impl BattleSequence {
             layer,
             narrator,
             stage,
+            policy,
+            reserves,
+            sent_out: 0,
+            unplayable_member_remains,
             turn_failed: false,
         })
+    }
+
+    /// The prints for `events` in order, each with its hold.
+    ///
+    /// A replacement is staged before its send-out is narrated, with the
+    /// opponent's health that picks the wording: upstream names the incoming
+    /// mon by its nickname (`Cmd_switchindataupdate`,
+    /// `pokeemerald/src/battle_script_commands.c:4669`) and runs
+    /// `hpthresholds BS_FAINTED` ahead of `STRINGID_SWITCHINMON`
+    /// (`pokeemerald/data/battle_scripts_1.s:2887-2888`).
+    fn print_steps(
+        &mut self,
+        battle: &Battle,
+        events: &[BattleEvent],
+    ) -> Result<VecDeque<PrintStep>, NarrationError> {
+        let mut steps = VecDeque::new();
+        for (index, event) in events.iter().enumerate() {
+            if matches!(event, BattleEvent::PlayerSentOut { .. }) {
+                let enemy = battle.enemy();
+                let health = opponent_health_at(enemy, &events[index + 1..]);
+                self.narrator
+                    .observe_opponent_health(health, enemy.stats().max_hp);
+                if let Some(replacement) = self.reserves.get(self.sent_out) {
+                    self.narrator
+                        .stage_replacement(Side::Player, replacement.clone());
+                }
+                self.sent_out += 1;
+            }
+            let requests = if self.unplayable_member_remains
+                && matches!(event, BattleEvent::Ended(BattleOutcome::PlayerLost))
+            {
+                Vec::new()
+            } else {
+                self.narrator.requests(&AssetNames, event)?
+            };
+            let count = requests.len();
+            steps.extend(
+                requests
+                    .into_iter()
+                    .enumerate()
+                    .map(|(position, request)| PrintStep {
+                        request,
+                        hold: script_hold(event, position, count),
+                    }),
+            );
+        }
+        Ok(steps)
+    }
+
+    /// The templates still queued behind the print on screen.
+    #[cfg(test)]
+    pub(super) fn queued_templates(&self) -> Vec<crate::battle_narration::TemplateId> {
+        match &self.stage {
+            Stage::Printing(printing) => printing
+                .rest
+                .iter()
+                .map(|step| step.request.template)
+                .collect(),
+            Stage::Finished => Vec::new(),
+        }
+    }
+
+    /// The scene as the narrator last staged it.
+    #[cfg(test)]
+    pub(super) const fn scene(&self) -> &Scene {
+        self.narrator.scene()
     }
 
     /// Resolves the first of `steps` into `gate`, or nothing when there is
@@ -322,15 +482,19 @@ impl BattleSequence {
         } else {
             self.take_turn(battle, rng)
         };
-        let steps = print_steps(&mut self.narrator, &events)?;
+        let steps = self.print_steps(battle, &events)?;
         self.stage = Self::start_printing(&mut self.layer, &self.pack, gate, steps)?;
         Ok(Progress::Running)
     }
 
-    /// The headless policy's move: the first slot the engine accepts. A failed
-    /// turn keeps the events it committed.
+    /// The turn the sequence's [`TurnPolicy`] takes. A failed turn keeps the
+    /// events it committed.
     fn take_turn(&mut self, battle: &mut Battle, rng: &mut Rng) -> Vec<BattleEvent> {
-        match take_first_usable_move_turn(battle, rng) {
+        let turn = match self.policy {
+            TurnPolicy::FirstUsableMove => take_first_usable_move_turn(battle, rng),
+            TurnPolicy::Run => take_run_turn(battle, rng),
+        };
+        match turn {
             Ok(events) => events,
             Err(error) => {
                 eprintln!(

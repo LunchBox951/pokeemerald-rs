@@ -120,6 +120,10 @@ pub(in crate::overworld) struct DepthSprite {
     parent_y: u8,
     /// The parent's subpriority.
     pub(super) subpriority: u16,
+    /// The parent's frame size in pixels (`graphicsInfo->width`/`->height`),
+    /// from which upstream derives `centerToCornerVecX`/`Y`.
+    width: u16,
+    height: u16,
     /// Which sprite this is across frames, for [`SpriteOrder`]; `None` for a
     /// sprite with no history, which is new on every frame.
     id: Option<SpriteId>,
@@ -127,18 +131,33 @@ pub(in crate::overworld) struct DepthSprite {
 
 impl DepthSprite {
     /// A 16x32 sprite whose single OBJ is `entry` at `elevation`.
+    #[cfg(test)]
     pub(in crate::overworld) fn single(entry: SheetSprite, elevation: u8) -> Self {
-        Self::with_subpriority(
-            entry,
-            subpriority_from_bottom(
-                i32::from(entry.y()) + 32,
-                elevation,
-                OBJECT_EVENT_SUBPRIORITY,
-            ),
-        )
+        Self::single_over_ground(entry, entry.y(), elevation)
     }
 
-    /// A single-OBJ sprite whose subpriority is already known, such as a
+    /// [`Self::single`] whose subpriority comes from `ground_y`, the OBJ's top
+    /// before any lift: upstream's `sprite->y` excludes `y2`
+    /// (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7779`).
+    pub(in crate::overworld) fn single_over_ground(
+        entry: SheetSprite,
+        ground_y: u8,
+        elevation: u8,
+    ) -> Self {
+        Self {
+            height: 32,
+            ..Self::with_subpriority(
+                entry,
+                subpriority_from_bottom(
+                    i32::from(ground_y) + 32,
+                    elevation,
+                    OBJECT_EVENT_SUBPRIORITY,
+                ),
+            )
+        }
+    }
+
+    /// A single-OBJ 16x16 sprite whose subpriority is already known, such as a
     /// field effect's, which competes beside the object events.
     pub(in crate::overworld) fn with_subpriority(entry: SheetSprite, subpriority: u16) -> Self {
         Self {
@@ -146,6 +165,8 @@ impl DepthSprite {
             parent_y: entry.y(),
             subpriority,
             entries: vec![entry],
+            width: 16,
+            height: 16,
             id: None,
         }
     }
@@ -170,6 +191,16 @@ impl DepthSprite {
     /// The parent's subpriority.
     pub(in crate::overworld) const fn parent_subpriority(&self) -> u16 {
         self.subpriority
+    }
+
+    /// The parent's frame width in pixels.
+    pub(in crate::overworld) const fn width(&self) -> u16 {
+        self.width
+    }
+
+    /// The parent's frame height in pixels.
+    pub(in crate::overworld) const fn height(&self) -> u16 {
+        self.height
     }
 }
 
@@ -271,7 +302,7 @@ impl SpriteOrder {
 
 /// [`SpriteOrder::order`] with no earlier frame: ties keep input order.
 #[cfg(test)]
-pub(super) fn order_sprites(sprites: &[DepthSprite]) -> Vec<SheetSprite> {
+pub(in crate::overworld) fn order_sprites(sprites: &[DepthSprite]) -> Vec<SheetSprite> {
     SpriteOrder::default().order(sprites)
 }
 
@@ -416,6 +447,8 @@ pub(in crate::overworld) fn elevated_oam_entries(
                     elevation,
                     OBJECT_EVENT_SUBPRIORITY,
                 ),
+                width: binding.width,
+                height: binding.height,
                 id: Some(SpriteId::Object(live.id())),
             })
         })
