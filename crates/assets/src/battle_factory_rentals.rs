@@ -145,7 +145,6 @@ const OPEN_LEVEL_RANGES: [FactoryRentalRange; RENTAL_RANGE_ROWS] = [
     range(372, 881),
 ];
 
-/// Builds a fixed-IV row from upstream's two bytes in their column order.
 const fn iv_row(regular_iv: u8, last_battle_iv: u8) -> FactoryIvRow {
     FactoryIvRow {
         regular_iv,
@@ -153,7 +152,6 @@ const fn iv_row(regular_iv: u8, last_battle_iv: u8) -> FactoryIvRow {
     }
 }
 
-/// Builds a rental range from upstream's two inclusive endpoints.
 const fn range(first_mon: u16, last_mon: u16) -> FactoryRentalRange {
     FactoryRentalRange {
         first_mon,
@@ -302,7 +300,6 @@ mod tests {
         })
     }
 
-    /// The `#define NAME value` constants of the Frontier-mon header.
     fn mon_constants() -> std::collections::HashMap<String, u16> {
         upstream_file("include/constants/battle_frontier_mons.h")
             .lines()
@@ -315,7 +312,6 @@ mod tests {
             .collect()
     }
 
-    /// Evaluates one endpoint: a header constant, optionally minus a number.
     fn endpoint(text: &str, constants: &std::collections::HashMap<String, u16>) -> u16 {
         let text = text.trim();
         let (name, subtract) = match text.split_once('-') {
@@ -328,8 +324,6 @@ mod tests {
             - subtract
     }
 
-    /// The `{a, b},` rows of one upstream table, comments and blank lines
-    /// dropped, as the raw text of each pair's two members.
     fn table_rows(source: &str, declaration: &str) -> Vec<(String, String)> {
         let start = source
             .find(declaration)
