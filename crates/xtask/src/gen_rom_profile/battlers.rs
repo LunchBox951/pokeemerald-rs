@@ -26,7 +26,7 @@ use rom_import::Encoding;
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
 use super::inventory;
-use super::locate::{only_one_matching, to_addr, u16_at_addr, u32_at_addr};
+use super::locate::{only_one_matching, to_addr, to_offset, u16_at_addr, u32_at_addr};
 use super::plan::{
     BattlerPlan, BattlerSpeciesPlan, ImagePlan, PalettePlan, ReportLine, Resolution,
 };
@@ -243,6 +243,9 @@ fn palette_plan(
 }
 
 /// Find the one table whose every species row points at that species' art.
+///
+/// A base outside the cartridge window is no candidate: it could not be
+/// emitted as a `GbaPtr`, whatever its rows read.
 fn find_table(
     ctx: &Context<'_>,
     name: &'static str,
@@ -261,6 +264,7 @@ fn find_table(
         .iter()
         .flat_map(|&art| ctx.pointers.refs_to(art).iter().copied())
         .filter_map(|at| at.checked_sub(first_bias))
+        .filter(|&base| to_offset(base).is_some())
         .collect();
     let base = only_one_matching(
         name,
@@ -465,6 +469,28 @@ mod tests {
             }
             // Four art roots per species and four tables.
             assert_eq!(report.len(), BATTLERS.len() * 4 + 4);
+        });
+    }
+
+    #[test]
+    fn a_table_base_below_the_cartridge_window_is_refused() {
+        // Move every front row so the inferred base is ROM_BASE - 8: each
+        // row stays inside the ROM, but the base itself does not.
+        let mut bytes = rom(0);
+        for (index, battler) in BATTLERS.iter().enumerate() {
+            let species = battler.species.index();
+            let old = (FRONT_TABLE + u32::from(species) * RECORD_BYTES) as usize;
+            bytes[old..old + 8].fill(0);
+            let new = (u32::from(species) * RECORD_BYTES - 8) as usize;
+            bytes[new..new + 8]
+                .copy_from_slice(&picture_row(0x0800_0000 + art_at(index, 0), species));
+        }
+        with_context("battlers-below-window", &bytes, entries(), |ctx| {
+            let err = locate(ctx, &mut Vec::new()).unwrap_err();
+            assert!(
+                matches!(&err, GenRomProfileError::StructMismatch { .. }),
+                "{err}"
+            );
         });
     }
 
