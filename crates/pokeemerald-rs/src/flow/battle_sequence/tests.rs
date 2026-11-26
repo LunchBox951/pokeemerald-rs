@@ -57,6 +57,94 @@ fn a_result_message_holds_for_the_long_wait() {
     assert_eq!(script_hold(&crit, 0, 1), WAIT_TIME_LONG);
 }
 
+fn replacement_send_out() -> BattleEvent {
+    BattleEvent::PlayerSentOut {
+        species: assets::SpeciesId(19),
+        reserves_remaining: 0,
+    }
+}
+
+/// `BattleScript_FaintedMonSendOutNew` prints `STRINGID_SWITCHINMON` and goes
+/// straight on to `switchinanim` with no `waitmessage`
+/// (`battle_scripts_1.s:2883-2897`); `Cmd_printstring` only waits for the
+/// controller to be free (`battle_script_commands.c:2137-2146`).
+#[test]
+fn a_replacement_send_out_carries_no_hold() {
+    assert_eq!(script_hold(&replacement_send_out(), 0, 1), 0);
+}
+
+#[test]
+fn a_completed_replacement_print_releases_at_once_where_a_result_message_waits() {
+    let released_after = |event: &BattleEvent| released_on(Hold::new(script_hold(event, 0, 1)));
+    let crit = BattleEvent::Hit {
+        by_player: true,
+        move_id: MoveId::POUND,
+        damage: 5,
+        is_critical: true,
+    };
+    assert_eq!(released_after(&replacement_send_out()), 1);
+    assert_eq!(released_after(&crit), 1 + usize::from(WAIT_TIME_LONG));
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn the_sequencer_queues_a_replacement_send_out_print_with_no_hold() {
+    use super::{BattleSequence, TurnPolicy};
+    use crate::battle_narration::{BattleKind, Battler, Scene};
+    use battle::{Battle, BattlePokemon, Dex, Ivs};
+    use engine::rng::Rng;
+
+    let mon = |species: u16, level: u8| {
+        BattlePokemon::new(
+            &Dex::new(),
+            assets::SpeciesId(species),
+            level,
+            Ivs::default(),
+            0,
+            vec![MoveId::POUND],
+        )
+        .unwrap()
+    };
+    let battler = |name: &str| Battler {
+        name: name.to_owned(),
+        ability: None,
+    };
+    let mut rng = Rng::new(1);
+    let battle = Battle::new_with_player_reserves(
+        Dex::new(),
+        mon(213, 2),
+        vec![mon(290, 5)],
+        mon(277, 50),
+        false,
+        &mut crate::flow::wild_encounter::SharedRng::new(&mut rng),
+    )
+    .unwrap();
+    let pack = assets::pack::AssetPack::load(&assets::pack::AssetPack::repo_pack_path())
+        .expect("needs a local pack: run `cargo xtask extract` first");
+    let scene = Scene {
+        kind: BattleKind::Wild,
+        player_name: "MAY".to_owned(),
+        player: battler("SHUCKLE"),
+        opponent: battler("TREECKO"),
+        trainer: None,
+        hp_scale: 0,
+    };
+    let mut sequence = BattleSequence::begin(
+        pack,
+        0,
+        scene,
+        TurnPolicy::Run,
+        vec![battler("WURMPLE")],
+        false,
+    )
+    .unwrap();
+    let steps = sequence
+        .print_steps(&battle, &[replacement_send_out()])
+        .unwrap();
+    assert_eq!(steps.len(), 1, "one send-out print");
+    assert!(steps.iter().all(|step| step.hold == 0));
+}
+
 /// The forgetting lines of a learned move print with no hold, and only the
 /// learned line waits (`battle_scripts_1.s:3178-3187`).
 #[test]
