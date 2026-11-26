@@ -99,6 +99,17 @@ fn power_gate_skips_chart_and_ability_checks_for_unranked_moves() {
     assert_eq!(bad_move_score(MoveId::DRAGON_RAGE, &shedinja), FULL);
 }
 
+/// `Cmd_get_ability` reads `abilities[0]` for an unrevealed single-ability
+/// species whatever the battler's own ability is
+/// (`src/battle_ai_script_commands.c:1361-1390`).
+#[test]
+fn restored_slot_one_jolteon_still_reads_as_volt_absorb_to_the_ai() {
+    let jolteon = mon(JOLTEON, &[MoveId::POUND]).with_ability_slot(1);
+    assert_eq!(jolteon.ability(), AbilityId(0));
+    assert_eq!(ai_get_ability(&jolteon), Ok(AbilityId::VOLT_ABSORB));
+    assert_eq!(bad_move_score(MoveId::SHOCK_WAVE, &jolteon), MINUS_12);
+}
+
 #[test]
 fn volt_absorb_cancels_electric_with_minus_twelve() {
     let jolteon = mon(JOLTEON, &[MoveId::POUND]);
