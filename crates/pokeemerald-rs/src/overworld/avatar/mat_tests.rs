@@ -3,6 +3,7 @@
 
 use super::tests::{behavior_runtime, flat_runtime, flat_test_map, player_at};
 use super::*;
+use crate::overworld::npc::{order_sprites, subpriority_from_bottom};
 use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::{MB_SECRET_BASE_JUMP_MAT, MB_SECRET_BASE_SPIN_MAT};
 use engine::overworld::{StepOutcome, MAT_JUMP_FRAMES, WALK_FRAMES_PER_TILE};
@@ -80,6 +81,82 @@ fn the_jump_mat_raises_the_oam_entry_by_the_hop_height() {
         render(&mut player, &runtime, None);
     }
     assert_eq!(player_entry(&player, 0).y(), PLAYER_OBJ_Y - 12);
+}
+
+#[test]
+fn the_jump_mat_hop_leaves_the_player_subpriority_on_the_ground() {
+    let runtime = behavior_runtime(MB_SECRET_BASE_JUMP_MAT);
+    let mut player = on_mat(&runtime, (1, 2), Direction::East);
+    let grounded = player_depth_sprite(&player, 0).parent_subpriority();
+    assert_eq!(grounded, subpriority_from_bottom(88, 3, 1));
+    for _ in 0..6 {
+        render(&mut player, &runtime, None);
+    }
+    let airborne = player_depth_sprite(&player, 0);
+    assert_eq!(
+        airborne.top(),
+        PLAYER_OBJ_Y - 12,
+        "the sort key stays lifted"
+    );
+    assert_eq!(airborne.parent_subpriority(), grounded);
+}
+
+/// An opaque 16x16 object one tile north of the player shares the player's
+/// rows 56-71: at any lift, a subpriority taken from the lifted OBJ would tie
+/// the object's and hand the overlap to it.
+#[test]
+fn the_jump_mat_hop_keeps_the_player_in_front_of_an_object_one_tile_north() {
+    const OBJECT_BANK: u8 = 5;
+    let tiles = rendering::Tileset::decode(BitDepth::Bpp4, &[0x11; 32 * 128]).expect("tiles");
+    let mut colors = [rendering::Bgr555::from_raw(0); rendering::Palette::LEN];
+    colors[usize::from(PLAYER_PALETTE_BANK) * 16 + 1] = rendering::Bgr555::from_raw(0x001F);
+    colors[usize::from(OBJECT_BANK) * 16 + 1] = rendering::Bgr555::from_raw(0x7C00);
+    let palette = rendering::Palette::new(colors);
+    let object_entry = SheetSprite::new(
+        OamEntry::new(
+            PLAYER_OBJ_X,
+            PLAYER_OBJ_Y,
+            0,
+            OBJECT_BANK,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            1,
+            PLAYER_OBJ_PRIORITY,
+            true,
+        ),
+        0,
+    );
+    let object = DepthSprite::with_subpriority(
+        object_entry,
+        subpriority_from_bottom(i32::from(PLAYER_OBJ_Y) + 16, 3, 1),
+    );
+
+    let runtime = behavior_runtime(MB_SECRET_BASE_JUMP_MAT);
+    let mut player = on_mat(&runtime, (1, 2), Direction::East);
+    assert!(
+        object.parent_subpriority() > player_depth_sprite(&player, 0).parent_subpriority(),
+        "the grounded player ranks ahead of the object"
+    );
+    let mut airborne_frames = 0;
+    for _ in 0..2 * MAT_JUMP_FRAMES {
+        render(&mut player, &runtime, None);
+        airborne_frames += usize::from(mat::lift(&player) > 0);
+        let ordered: Vec<OamEntry> =
+            order_sprites(&[object.clone(), player_depth_sprite(&player, 0)])
+                .into_iter()
+                .map(SheetSprite::oam)
+                .collect();
+        let overlap = rendering::SpriteLayer::new(&ordered, &tiles, &tiles, &palette)
+            .resolve_pixel(usize::from(PLAYER_OBJ_X) + 4, usize::from(PLAYER_OBJ_Y) + 4)
+            .expect("both sprites are opaque there");
+        assert_eq!(
+            overlap.color,
+            palette.bank_color(PLAYER_PALETTE_BANK, 1).to_rgb888()
+        );
+    }
+    assert!(airborne_frames > 0, "the player left the ground");
 }
 
 #[test]
