@@ -768,6 +768,11 @@ impl CgbVoice {
         let mut stopped_write_latch = None;
         if let Some((note_key, fine_pitch)) = self.pending_pitch.take() {
             if self.envelope.is_active() {
+                // The first pass writes only this frequency, so the inherited
+                // clock goes from the predecessor's to this one in one step.
+                if initial_trigger {
+                    self.oscillator.rewind_inherited_clock();
+                }
                 let latched = self
                     .oscillator
                     .retune(note_key, fine_pitch, self.dac_correction);

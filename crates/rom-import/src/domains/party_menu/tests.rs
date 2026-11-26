@@ -1,6 +1,6 @@
 //! Party-menu reader tests over a synthetic ROM.
 //!
-//! All fourteen roots are planted under the real `party-menu/` ids at their
+//! All fifteen roots are planted under the real `party-menu/` ids at their
 //! production shapes and encodings, then read back through the domain. The
 //! failure tests break one root at a time and require a typed error with
 //! nothing queued.
@@ -20,6 +20,7 @@ const SLOT: usize = 0x4000;
 
 const BACKGROUND_TILES: u32 = 62;
 const BACKGROUND_COLORS: u16 = 11 * 16;
+const SMALL_BALL_TILES: u32 = 24;
 
 /// The decompressed 4bpp tile data of the synthetic background: every tile
 /// differs from every other, and the bytes within a tile differ too.
@@ -66,7 +67,18 @@ struct Planted {
     offset: usize,
 }
 
-/// The fourteen roots in the order the planted offsets run.
+/// The small Poké Ball sheet's decompressed tiles: all of tile `t` is the
+/// colour `t % 16`, so a pixel's value names the tile it came from.
+fn small_ball_tiles() -> Vec<u8> {
+    (0..SMALL_BALL_TILES)
+        .flat_map(|tile| {
+            let color = u8::try_from(tile % 16).unwrap();
+            [(color << 4) | color; 32]
+        })
+        .collect()
+}
+
+/// The fifteen roots in the order the planted offsets run.
 fn planted() -> Vec<Planted> {
     let mut next = 0;
     let mut plant = |id, decoded, encoding| {
@@ -144,6 +156,11 @@ fn planted() -> Vec<Planted> {
             "party-menu/raw/cancel_button",
             counting(7 * 2 * 2, 32),
             Encoding::Raw,
+        ),
+        plant(
+            "party-menu/image/pokeball_small",
+            small_ball_tiles(),
+            Encoding::Lz77,
         ),
     ]
 }
@@ -230,6 +247,12 @@ static IMAGES: &[ImageRoot] = &[
         3 * SLOT,
         Encoding::Raw,
         (8, 16, 2),
+    ),
+    image(
+        "party-menu/image/pokeball_small",
+        15 * SLOT,
+        Encoding::Lz77,
+        (16, 96, SMALL_BALL_TILES),
     ),
 ];
 static PALETTES: &[PaletteRoot] = &[
@@ -332,6 +355,7 @@ fn every_party_menu_root_is_emitted_with_its_decoded_bytes() {
         ("party-menu/image/bg", 8, 496),
         ("party-menu/image/pokeball", 32, 64),
         ("party-menu/image/hold_icons", 8, 16),
+        ("party-menu/image/pokeball_small", 16, 96),
     ] {
         assert_eq!(
             kind(id),
@@ -404,6 +428,22 @@ fn the_held_item_sheet_is_two_raw_tiles() {
 }
 
 #[test]
+fn the_small_ball_sheet_is_two_tiles_wide_and_twenty_four_tiles_in_all() {
+    let (bytes, entries) = written(&full()).expect("every root is well-formed");
+    let pixels = payload(&bytes, &entries, "party-menu/image/pokeball_small");
+    assert_eq!(pixels.len(), 16 * 96);
+    for (index, &pixel) in pixels.iter().enumerate() {
+        let (x, y) = (index % 16, index / 16);
+        let tile = (y / 8) * 2 + x / 8;
+        assert_eq!(usize::from(pixel), tile % 16, "x {x} y {y}");
+    }
+    // It draws with the Poké Ball palette, so it has none of its own.
+    assert!(!entries
+        .iter()
+        .any(|entry| entry.id == "party-menu/palette/pokeball_small"));
+}
+
+#[test]
 fn every_background_colour_survives() {
     let (bytes, entries) = written(&full()).expect("every root is well-formed");
     let colours = payload(&bytes, &entries, "party-menu/palette/bg");
@@ -419,7 +459,7 @@ fn the_domain_list_dispatches_the_party_menu() {
         domain(&rom, &full(), &mut writer).expect("every root is well-formed");
     }
     let bytes = writer.finish().expect("no duplicate ids");
-    assert_eq!(parse_directory(&bytes).expect("a valid pack").len(), 14);
+    assert_eq!(parse_directory(&bytes).expect("a valid pack").len(), 15);
 }
 
 #[test]
@@ -439,7 +479,8 @@ fn party_menu_images_and_palettes_are_enumerated() {
         [
             "party-menu/image/bg",
             "party-menu/image/pokeball",
-            "party-menu/image/hold_icons"
+            "party-menu/image/hold_icons",
+            "party-menu/image/pokeball_small"
         ]
     );
     assert_eq!(
@@ -504,6 +545,20 @@ fn a_compressed_sheet_of_the_wrong_length_is_a_typed_error() {
     }];
     let roots = roots(PartyMenuRoots {
         images: BAD_IMAGES,
+        ..PartyMenuRoots::NONE
+    });
+    let err = written(&roots).unwrap_err();
+    assert!(matches!(err, ImportError::Lz77 { .. }), "{err}");
+}
+
+#[test]
+fn a_small_ball_stream_of_twenty_three_tiles_is_a_typed_error() {
+    static SHORT_IMAGES: &[ImageRoot] = &[ImageRoot {
+        tile_count: SMALL_BALL_TILES - 1,
+        ..IMAGES[3]
+    }];
+    let roots = roots(PartyMenuRoots {
+        images: SHORT_IMAGES,
         ..PartyMenuRoots::NONE
     });
     let err = written(&roots).unwrap_err();

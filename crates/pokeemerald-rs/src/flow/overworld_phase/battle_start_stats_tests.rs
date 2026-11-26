@@ -350,6 +350,7 @@ fn a_lost_sight_battle_keeps_the_start_count() {
         "Whoa!",
         battle,
         assets::trainers::TrainerId(703),
+        super::PartyReserves::default(),
     );
     approach.skip_to_open_intro_message();
     phase.sight_approach = Some(approach);

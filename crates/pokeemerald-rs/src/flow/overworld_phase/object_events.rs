@@ -5,8 +5,10 @@
 
 use engine::event_data::EventData;
 use engine::overworld::object_event::FrameContext;
-use engine::overworld::{MapRuntime, PlayerState};
+use engine::overworld::{ConnectedMapData, MapRuntime, PlayerState};
 
+use super::connections::MapConnections;
+use super::sight_trainer_approach::SightApproach;
 use super::OverworldPhase;
 
 /// What one overworld frame lets the object-event scheduler see of the player and the flags.
@@ -14,6 +16,7 @@ fn frame_context<'a>(
     player: &PlayerState,
     event_data: &'a EventData,
     terrain: MapRuntime<'a>,
+    connected_maps: &'a dyn ConnectedMapData,
     frozen: bool,
 ) -> FrameContext<'a> {
     FrameContext {
@@ -22,6 +25,7 @@ fn frame_context<'a>(
         frozen,
         player_dashing: player.dashing(),
         terrain,
+        connected_maps,
         player_previous_position: player.previous_position(),
         player_elevation: player.elevation(),
     }
@@ -49,8 +53,13 @@ impl OverworldPhase {
             // The pass reads each admitted object's retained elevation, which no frame has
             // settled yet for an entry seeded this visit.
             self.scene.update_object_elevations(&mut self.object_events);
+            let maps = MapConnections::terrain_only(
+                &self.connection_pack,
+                self.pack_source.clone(),
+                self.map_id,
+            );
             self.scene
-                .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
+                .seed_object_tall_grass(&self.object_events, &self.save1.event_data, &maps);
         }
     }
 
@@ -62,7 +71,9 @@ impl OverworldPhase {
     /// start menu, or a battle owns the field: upstream's `lock`/`lockall`,
     /// `FreezeForApproachingTrainers` and `ShowStartMenu` freeze them
     /// (`src/scrcmd.c:2193-2208`, `src/start_menu.c:581`) and unfreeze when the
-    /// owner closes (`src/start_menu.c:1421`).
+    /// owner closes (`src/start_menu.c:1421`). The approaching trainer is the exception while
+    /// its approach waits on the lock: it finishes the step it is in the middle of first
+    /// (`event_object_lock.c:130-147`).
     pub(super) fn advance_object_events(&mut self) {
         let frozen = self.dialog.is_some()
             || self.sight_approach.is_some()
@@ -73,31 +84,46 @@ impl OverworldPhase {
         // movement. A scene's first frame also seeds again after the scheduler, so an object
         // its camera update admits on that frame, as a crossing's does, gets its pass then.
         let first_frame = self.scene.take_object_admission_pending();
+        // The neighbours' rows an object a crossing carried over can stand on. Terrain only: the
+        // scheduler borrows the live set mutably, and the ground-effect passes read the same band.
+        let maps = MapConnections::terrain_only(
+            &self.connection_pack,
+            self.pack_source.clone(),
+            self.map_id,
+        );
         self.scene.update_object_elevations(&mut self.object_events);
         self.scene
-            .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
+            .seed_object_tall_grass(&self.object_events, &self.save1.event_data, &maps);
         let context = frame_context(
             &self.player,
             &self.save1.event_data,
             self.scene.runtime(),
+            &maps,
             frozen,
         );
+        let finishing = self
+            .sight_approach
+            .as_ref()
+            .and_then(SightApproach::trainer_finishing_step);
         #[cfg(test)]
         if let Some(scratch) = &mut self.object_event_rng {
-            self.object_events.run_frame(&context, scratch);
+            self.object_events
+                .run_frame_finishing_step(&context, finishing, scratch);
         } else {
-            self.object_events.run_frame(&context, &mut self.rng);
+            self.object_events
+                .run_frame_finishing_step(&context, finishing, &mut self.rng);
         }
         #[cfg(not(test))]
-        self.object_events.run_frame(&context, &mut self.rng);
+        self.object_events
+            .run_frame_finishing_step(&context, finishing, &mut self.rng);
         // Movement and respawns have changed tiles; settle their elevations
         // before the begin-step pass and the frame's rendering read them.
         self.scene.update_object_elevations(&mut self.object_events);
         if first_frame {
             self.scene
-                .seed_object_tall_grass(&self.object_events, &self.save1.event_data);
+                .seed_object_tall_grass(&self.object_events, &self.save1.event_data, &maps);
         }
         self.scene
-            .object_steps_began(&self.object_events, &self.save1.event_data);
+            .object_steps_began(&self.object_events, &self.save1.event_data, &maps);
     }
 }

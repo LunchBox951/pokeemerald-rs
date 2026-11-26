@@ -139,6 +139,7 @@ use crate::frame::to_platform_frame;
 use crate::game_save::SaveSlot;
 use crate::main_menu::MainMenuItem;
 use crate::music::{MusicContext, MusicError, MusicPlayer};
+use crate::new_game::RngSeedSource;
 use crate::scene::BootScene;
 use crate::title::{self, TitleSceneError};
 use battle::BattleOutcome;
@@ -341,7 +342,18 @@ pub struct App {
     /// `CB2_InitTitleScreen`'s state 4 starts `MUS_TITLE`, on the boot and
     /// after the main menu's B (`pokeemerald/src/title_screen.c:662`).
     title_audio: TitleAudio,
+    /// Where each new game's and continue's RNG seed comes from
+    /// ([`RngSeedSource`]): [`RngSeedSource::Entropy`] for [`Self::new`], the
+    /// real window, so adventures do not share one trainer ID and field
+    /// stream (upstream's `SeedRngAndSetTrainerId` timer read,
+    /// `pokeemerald/src/main.c:208-214`); [`RngSeedSource::FIXED`] for every
+    /// headless `App`, whose scripted scenarios promise fixed inputs.
+    seeds: RngSeedSource,
 }
+
+/// The seed source of the real window ([`App::new`]), a fresh draw per new
+/// game and continue; every headless `App` keeps [`RngSeedSource::FIXED`].
+const WINDOWED_SEEDS: RngSeedSource = RngSeedSource::Entropy;
 
 /// The audio output the title's state-4 frame starts its BGM on, mirroring how the
 /// `App` was constructed: the real device ([`App::new`]), the null backend
@@ -402,6 +414,7 @@ impl App {
             music_context: MusicContext::new(),
             pack_source,
             title_audio: TitleAudio::Disabled,
+            seeds: RngSeedSource::FIXED,
         }
     }
 
@@ -467,16 +480,25 @@ impl App {
     /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        let mut app = Self::boot(
+        let app = Self::boot(
             title::load_default,
             || Platform::new(title),
             || Ok(SaveSlot::default_location()),
             crate::pack_source::PackSource::Runtime,
         )?;
+        Ok(app.into_real_window())
+    }
+
+    /// What [`Self::new`] changes on a booted `App` because it owns a real
+    /// window: the audio device for the title BGM and a fresh seed per new
+    /// game and continue. Split from [`Self::new`] so a headless test can
+    /// observe it without opening a window.
+    fn into_real_window(mut self) -> Self {
         // `mus_title` starts on the initializer's state-4 frame
         // ([`Self::restart_title_music`]), not at construction.
-        app.title_audio = TitleAudio::Device;
-        Ok(app)
+        self.title_audio = TitleAudio::Device;
+        self.seeds = WINDOWED_SEEDS;
+        self
     }
 
     /// Load the real title screen and game-flow state through [`App::boot`]
@@ -659,6 +681,7 @@ impl App {
             // docs).
             pack_source: crate::pack_source::PackSource::Runtime,
             title_audio: TitleAudio::Disabled,
+            seeds: RngSeedSource::FIXED,
         }
     }
 
@@ -733,11 +756,12 @@ impl App {
         }
         if let Some(scene) = self.scene.take() {
             let starts_title_music = scene.starts_title_music();
-            let (next, frame) = flow::advance_scene(
+            let (next, frame) = flow::advance_scene_seeded(
                 scene,
                 buttons,
                 &mut self.save_slot,
                 self.pack_source.clone(),
+                self.seeds,
             );
             if starts_title_music {
                 self.restart_title_music();

@@ -369,8 +369,17 @@ impl OverworldPhase {
         self.scene.seed_tall_grass_placement(&self.player);
         self.step_field_frame(buttons);
         self.advance_object_events();
-        self.scene
-            .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
+        let maps = MapConnections::terrain_only(
+            &self.connection_pack,
+            self.pack_source.clone(),
+            self.map_id,
+        );
+        self.scene.advance_tall_grass(
+            &self.player,
+            &self.object_events,
+            &self.save1.event_data,
+            &maps,
+        );
     }
 
     /// [`Self::step`]'s input, movement, and event pipeline for a frame no
@@ -425,8 +434,9 @@ impl OverworldPhase {
             // before `self.sight_approach` existed and returned `None`
             // (PR #407 review).
             let player_was_moving = self.player.in_transit();
+            let trainer_was_moving = self.approaching_trainer_step_in_flight();
             self.tick_player_under_approach_lock();
-            if player_was_moving {
+            if player_was_moving || trainer_was_moving {
                 if let Some(approach) = &mut self.sight_approach {
                     approach.advance_lock_handoff(true);
                 }
@@ -563,7 +573,7 @@ impl OverworldPhase {
             pack: &self.connection_pack,
             source: self.pack_source.clone(),
             departed: self.map_id,
-            departed_objects: &self.object_events,
+            departed_objects: Some(&self.object_events),
         };
         // `interaction` preempts movement too (issue #435), and so do a
         // claimed fresh `START`, the pre-movement animated-door check
@@ -634,15 +644,12 @@ impl OverworldPhase {
         self.sync_saved_position();
     }
 
-    /// Bumps `GAME_STAT_STEPS` for this frame's `tookStep` landing
-    /// (`field_control_avatar.c:116-118`), ahead of
-    /// `TryStartStepBasedScript`'s coord event, door warp and step scripts
-    /// (`:155-163`), so a landing those then claim still counts.
-    /// [`Self::take_stepped_onto`] already withholds the forced landing and
-    /// the escalator arrival's held walk-off, neither of which sets `tookStep`.
+    /// `IncrementGameStat(GAME_STAT_STEPS)` and `IncrementBirthIslandRockStepCount`
+    /// (`field_control_avatar.c:116-118,155-160`); a landing a later step script claims still counts.
     fn count_took_step(&mut self, stepped_onto: Option<TilePos>) {
         if stepped_onto.is_some() {
             self.save1.game_stats.increment(GameStat::Steps);
+            self.increment_birth_island_rock_step_count();
         }
     }
 

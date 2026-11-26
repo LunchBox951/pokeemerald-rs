@@ -44,7 +44,6 @@ use assets::fonts::{FontId, Glyph, GlyphSource, GlyphSources};
 use super::Token;
 
 mod colors;
-use colors::BackgroundPaint;
 pub use colors::TextColors;
 
 mod ext_ctrl {
@@ -81,6 +80,10 @@ pub use keypad_icon::{keypad_icon_size, KeypadIconPlacement};
 /// Waiting calls an auto-scroll prompt lasts, the releasing call included
 /// (`TextPrinterWaitAutoMode`, `pokeemerald/src/text.c:850-863`).
 const AUTO_SCROLL_WAIT_CALLS: u8 = 50;
+
+/// Reveal-delay reload of a non-recorded auto-scroll printer
+/// (`pokeemerald/src/text.c:958-959`).
+const AUTO_SCROLL_REVEAL_DELAY_FRAMES: u8 = 3;
 
 const EXTRA_SYMBOL_PAGE_START: u16 = 0x100;
 
@@ -266,11 +269,6 @@ pub struct RevealedGlyph {
     /// Rows of background upstream paints under the glyph: the font's Latin
     /// glyph height ([`ClearedSpan::height`]).
     pub raster_height: i32,
-    /// Whether the glyph's background pixels paint `colors.background`. False
-    /// while the printer still uses the unmodified message-box background,
-    /// which the window already shows; true once a `HIGHLIGHT` (or a
-    /// non-default configured background) selects one.
-    pub paint_background: bool,
 }
 
 /// How prompt waits release: `gTextFlags.autoScroll` (`text.c:868`, `:887`).
@@ -410,7 +408,6 @@ pub struct Printer<S> {
     auto_scroll_calls_left: u8,
     initial_colors: TextColors,
     colors: TextColors,
-    background: BackgroundPaint,
     cleared_window_colors: Option<TextColors>,
 }
 
@@ -444,7 +441,6 @@ impl<S: GlyphSource> Printer<S> {
             auto_scroll_calls_left: AUTO_SCROLL_WAIT_CALLS,
             initial_colors: TextColors::MESSAGE_BOX,
             colors: TextColors::MESSAGE_BOX,
-            background: BackgroundPaint::Window,
             cleared_window_colors: None,
         }
     }
@@ -526,6 +522,9 @@ impl<S: GlyphSource> Printer<S> {
     /// do. Upstream draws no prompt arrow in this mode (`text.c:792`,
     /// `:868-871`); a consumer that draws one checks [`Self::is_auto_scroll`].
     ///
+    /// A speed that delays also reloads three frames per token instead of its
+    /// own (`text.c:958-961`); Fast and Instant stay undelayed.
+    ///
     /// Select the mode before the first tick; it survives [`Self::restart`].
     #[must_use]
     pub const fn with_auto_scroll(mut self) -> Self {
@@ -541,13 +540,11 @@ impl<S: GlyphSource> Printer<S> {
     }
 
     /// Starts the printer with `colors` instead of the message-box defaults
-    /// (`TextPrinterTemplate.fgColor`/`bgColor`/`shadowColor`). A background
-    /// other than the default is painted under glyphs from the first one.
+    /// (`TextPrinterTemplate.fgColor`/`bgColor`/`shadowColor`).
     #[must_use]
     pub fn with_text_colors(mut self, colors: TextColors) -> Self {
         self.initial_colors = colors;
         self.colors = colors;
-        self.background = BackgroundPaint::for_initial(colors);
         self
     }
 
@@ -634,7 +631,6 @@ impl<S: GlyphSource> Printer<S> {
         self.cleared_window = false;
         self.cleared_window_colors = None;
         self.colors = self.initial_colors;
-        self.background = BackgroundPaint::for_initial(self.initial_colors);
         self.keypad_icon = None;
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
@@ -733,7 +729,7 @@ impl<S: GlyphSource> Printer<S> {
             if self.consume_reveal_delay_frame(input) {
                 return TickEvent::Idle;
             }
-            self.reveal_delay_frames_remaining = self.speed.wait_frames();
+            self.reveal_delay_frames_remaining = self.reveal_delay_reload();
 
             let Some(token) = self.tokens.get(self.next_token_index).cloned() else {
                 self.state = PrinterState::Finished;
@@ -828,7 +824,6 @@ impl<S: GlyphSource> Printer<S> {
                 glyph,
                 colors: self.colors,
                 raster_height: self.clear_height,
-                paint_background: self.background == BackgroundPaint::Painted,
             };
             // `text.c:1149-1156`: with a minimum set, the glyph's own advance
             // is followed by erasing the shortfall and advancing across it in
@@ -839,6 +834,17 @@ impl<S: GlyphSource> Printer<S> {
                 self.erase_forward(gap);
             }
             return TickEvent::Glyph(Box::new(placement));
+        }
+    }
+
+    /// Auto-scroll overrides the speed's reload, but a speed with no delay
+    /// stays undelayed (`text.c:947`).
+    const fn reveal_delay_reload(&self) -> u8 {
+        let own = self.speed.wait_frames();
+        if own != 0 && self.is_auto_scroll() {
+            AUTO_SCROLL_REVEAL_DELAY_FRAMES
+        } else {
+            own
         }
     }
 
@@ -924,7 +930,7 @@ impl<S: GlyphSource> Printer<S> {
             }
             ext_ctrl::HIGHLIGHT => {
                 if let Some(&index) = arguments.first() {
-                    self.set_background(index);
+                    self.colors.background = index;
                 }
             }
             ext_ctrl::SHADOW => {
@@ -936,19 +942,12 @@ impl<S: GlyphSource> Printer<S> {
                 if let [foreground, background, shadow, ..] = *arguments {
                     self.colors.foreground = foreground;
                     self.colors.shadow = shadow;
-                    self.set_background(background);
+                    self.colors.background = background;
                 }
             }
             _ => {}
         }
         ControlOutcome::Repeat
-    }
-
-    /// An accepted `HIGHLIGHT` selects the background upstream paints under
-    /// every later glyph, including an explicit return to the default one.
-    fn set_background(&mut self, index: u8) {
-        self.colors.background = index;
-        self.background = BackgroundPaint::Painted;
     }
 
     /// Records `width` pixels erased at the cursor and advances past them.

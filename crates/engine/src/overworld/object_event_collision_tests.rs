@@ -2,6 +2,7 @@ use assets::MovementType;
 
 use super::*;
 use crate::overworld::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
+use crate::overworld::map_runtime::NoConnectedMaps;
 use crate::overworld::metatile_behavior::{MB_IMPASSABLE_NORTH, MB_IMPASSABLE_SOUTH};
 use crate::overworld::object_event::{
     blocking_object_event_at, visible_object_event_at, ObjectEventCollection, ObjectEventState,
@@ -27,7 +28,14 @@ fn occupant(current: TilePos, previous: TilePos) -> Occupant {
 }
 
 fn step(terrain: &Terrain, mover: &ObjectEventState, direction: Direction) -> Option<NpcCollision> {
-    collision_in_direction(&terrain.runtime(), mover, None, direction, [])
+    collision_in_direction(
+        &terrain.runtime(),
+        &NoConnectedMaps,
+        mover,
+        None,
+        direction,
+        [],
+    )
 }
 
 #[test]
@@ -49,6 +57,7 @@ fn the_range_is_inclusive_and_anchored_to_the_initial_tile() {
     let refused = |from: (i16, i16), direction| {
         collision_in_direction(
             &terrain.runtime(),
+            &NoConnectedMaps,
             &mover_at(from.0, from.1),
             Some(range),
             direction,
@@ -81,6 +90,7 @@ fn a_zero_range_leaves_its_axis_unbounded() {
     let from = |x, y, direction| {
         collision_in_direction(
             &terrain.runtime(),
+            &NoConnectedMaps,
             &mover_at(x, y),
             Some(vertical_only),
             direction,
@@ -168,6 +178,7 @@ fn the_refusals_take_upstreams_precedence() {
     assert_eq!(
         collision_in_direction(
             &terrain.runtime(),
+            &NoConnectedMaps,
             &mover,
             Some(MovementRange {
                 initial: (10, 20),
@@ -181,12 +192,26 @@ fn the_refusals_take_upstreams_precedence() {
         "range outranks a wall"
     );
     assert_eq!(
-        collision_in_direction(&terrain.runtime(), &mover, None, East, blocker),
+        collision_in_direction(
+            &terrain.runtime(),
+            &NoConnectedMaps,
+            &mover,
+            None,
+            East,
+            blocker
+        ),
         Some(NpcCollision::Impassable),
         "a wall outranks an elevation mismatch and an object"
     );
     assert_eq!(
-        collision_in_direction(&terrain.runtime(), &mover, None, South, blocker),
+        collision_in_direction(
+            &terrain.runtime(),
+            &NoConnectedMaps,
+            &mover,
+            None,
+            South,
+            blocker
+        ),
         Some(NpcCollision::ElevationMismatch),
         "an elevation mismatch outranks an object"
     );
@@ -197,8 +222,14 @@ fn an_occupant_blocks_the_tile_it_stands_on_and_the_tile_it_is_leaving() {
     let terrain = Terrain::flat();
     let mover = mover_at(20, 20);
     let blocked = |occupant| {
-        collision_in_direction(&terrain.runtime(), &mover, None, East, [occupant])
-            == Some(NpcCollision::ObjectEvent)
+        collision_in_direction(
+            &terrain.runtime(),
+            &NoConnectedMaps,
+            &mover,
+            None,
+            East,
+            [occupant],
+        ) == Some(NpcCollision::ObjectEvent)
     };
 
     assert!(blocked(occupant((21, 20), (21, 20))), "standing on it");
@@ -215,6 +246,7 @@ fn an_occupant_blocks_by_object_elevation_not_by_cell_elevation() {
     let at = |elevation| {
         collision_in_direction(
             &terrain.runtime(),
+            &NoConnectedMaps,
             &mover,
             None,
             East,

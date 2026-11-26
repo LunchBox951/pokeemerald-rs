@@ -3,8 +3,9 @@
 //!
 //! The trainer's position, facing, and elevation come from its
 //! [`LiveObjectEvent`] state, and intermediate blockers are the
-//! [`ObjectEventCollection`]'s live entries; the immutable template supplies
-//! only the trainer type, sight range, and hide flag.
+//! [`ObjectEventCollection`]'s live entries plus the player's departing tile;
+//! the immutable template supplies only the trainer type, sight range, and
+//! hide flag.
 //!
 //! A pure, stateless query over an already-decided player position, facing,
 //! and world snapshot; call-site timing relative to movement is the
@@ -59,6 +60,7 @@ pub fn trainer_can_see_player(
         return false;
     };
     let world = SightWorld {
+        trainer_id: trainer.id(),
         trainer_elevation: state.elevation(),
         objects,
         runtime,
@@ -91,6 +93,8 @@ fn approach_distance(
 /// What a sight line reads besides the trainer's own position and facing.
 #[derive(Clone, Copy)]
 struct SightWorld<'a> {
+    /// The observing trainer's [`LiveObjectEvent::id`], which its own intermediate scan skips.
+    trainer_id: u32,
     /// The trainer's live elevation.
     trainer_elevation: u8,
     /// The live object events that can block an intermediate tile.
@@ -125,7 +129,7 @@ fn sight_line_clear(
     for _ in 0..intermediate_tiles {
         x += dx;
         y += dy;
-        if tile_blocks_intermediate_sight(world, standing_behavior, x, y, facing) {
+        if tile_blocks_intermediate_sight(world, standing_behavior, x, y, facing, player) {
             return false;
         }
     }
@@ -157,16 +161,21 @@ fn sight_line_clear(
 /// Whether intermediate tile `(x, y)` -- one step along `facing`, strictly
 /// between the trainer and the player -- blocks the sight line: any
 /// collision bit, a directional wall, an elevation mismatch, or another
-/// active object event occupying it. An undecodable cell fails
-/// closed (`true`).
+/// active object event occupying it (`DoesObjectCollideWithObjectAt` skips the
+/// mover, so the observing trainer never blocks itself,
+/// `event_object_movement.c:4733`), or the player's own object leaving it
+/// (`event_object_movement.c:4724-4739`). An undecodable cell fails closed
+/// (`true`).
 fn tile_blocks_intermediate_sight(
     world: &SightWorld<'_>,
     standing_behavior: u8,
     x: i32,
     y: i32,
     facing: Direction,
+    player: &PlayerState,
 ) -> bool {
     let SightWorld {
+        trainer_id,
         trainer_elevation,
         objects,
         runtime,
@@ -184,10 +193,16 @@ fn tile_blocks_intermediate_sight(
     if elevation_mismatch(trainer_elevation, cell.elevation) {
         return true;
     }
+    // The player is not in `objects`; its departing tile is held like a
+    // walking NPC's. Its current tile is the line's end, never between.
+    if player.previous_position() == (x, y)
+        && elevations_compatible(trainer_elevation, player.elevation())
+    {
+        return true;
+    }
     objects
         .collision_objects_at(x, y, trainer_elevation)
-        .next()
-        .is_some()
+        .any(|object| object.id() != trainer_id)
 }
 
 #[cfg(test)]
@@ -794,6 +809,41 @@ mod tests {
     }
 
     #[test]
+    fn a_trainer_never_blocks_its_own_sight_line_with_its_previous_tile() {
+        // `DoesObjectCollideWithObjectAt` skips `curObject == objectEvent`
+        // (`event_object_movement.c:4733`).
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let walked_then_turned = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.walk(Direction::East);
+            s.face(Direction::West);
+        };
+        assert!(live_sees(
+            vec![t],
+            walked_then_turned,
+            1,
+            &player_at(4, 5, 3)
+        ));
+    }
+
+    #[test]
+    fn another_object_on_the_trainers_previous_tile_still_blocks_its_sight_line() {
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let mut other = trainer(5, 5, 3, MovementType::FaceDown, "0");
+        other.local_id = 2;
+        other.trainer_type = TrainerType::None;
+        let walked_then_turned = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.walk(Direction::East);
+            s.face(Direction::West);
+        };
+        assert!(!live_sees(
+            vec![t, other],
+            walked_then_turned,
+            1,
+            &player_at(4, 5, 3)
+        ));
+    }
+
+    #[test]
     fn a_blocker_still_leaving_the_line_keeps_blocking_until_its_step_settles() {
         let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
         let mut blocker = trainer(5, 7, 3, MovementType::FaceDown, "0");
@@ -813,5 +863,38 @@ mod tests {
             "the walker still holds (5, 7), as `GetCollisionFlagsAtCoords` sees it"
         );
         assert!(live_sees(vec![t, blocker], settled, 2, &player));
+    }
+
+    #[test]
+    fn the_player_holds_its_departing_tile_until_its_crossing_settles() {
+        let hdr = header(&[]);
+        let events = empty_events();
+        let runtime = runtime_over(&hdr, &events, 20, 20, cell(0, 0, 3));
+        let event_data = EventData::new();
+        let mut player = player_at(5, 7, 3);
+        let _ = player.step(
+            Some(Direction::South),
+            &runtime,
+            &crate::overworld::NoConnectedMaps,
+            &event_data,
+        );
+        assert_eq!(
+            (player.position(), player.previous_position()),
+            ((5, 8), (5, 7))
+        );
+
+        // A trainer that was facing away turns to the player's column
+        // while the crossing is still in flight.
+        let t = trainer(5, 5, 3, MovementType::FaceLeft, "3");
+        let turn_south = |s: &mut crate::overworld::object_event::ObjectEventState| {
+            s.face(Direction::South);
+        };
+        assert!(!live_sees(vec![t], turn_south, 1, &player));
+
+        while player.in_transit() {
+            player.tick();
+        }
+        assert_eq!(player.previous_position(), (5, 8));
+        assert!(live_sees(vec![t], turn_south, 1, &player));
     }
 }

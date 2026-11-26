@@ -63,8 +63,12 @@ pub enum BattleKind {
 /// The opposing trainer's text (`gTrainers[gTrainerBattleOpponent_A]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trainer {
-    /// The trainer class name (`B_TRAINER1_CLASS`).
-    pub class: String,
+    /// The trainer class name (`B_TRAINER1_CLASS`), terminator removed.
+    ///
+    /// Tokens rather than a string so the glyph tokens of a class such as the
+    /// rival's `{PKMN} TRAINER` reach the printer; a `String` round trip would
+    /// drop them.
+    pub class: Vec<Token>,
     /// The trainer name (`B_TRAINER1_NAME`).
     pub name: String,
     /// The defeat text (`GetTrainerALoseText`), terminator removed.
