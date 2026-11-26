@@ -252,7 +252,11 @@ fn admission_is_flag_aware() {
         );
     }
     assert_eq!(
-        ensure_scoreable(&dex, MoveId::SLASH, only_cbm.union(AiFlags::CHECK_VIABILITY)),
+        ensure_scoreable(
+            &dex,
+            MoveId::SLASH,
+            only_cbm.union(AiFlags::CHECK_VIABILITY)
+        ),
         Err(BattleError::UnscoreableMoveEffect(MoveId::SLASH))
     );
     // `AI_CV_Absorb` is ported, so a draining move passes `CHECK_VIABILITY`.
