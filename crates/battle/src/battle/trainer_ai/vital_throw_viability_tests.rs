@@ -331,14 +331,12 @@ fn admission_widens_for_vital_throw_only() {
             "{flags:?}"
         );
     }
-    // The other unported viability rows stay refused.
-    for move_id in [MoveId::SLASH, MoveId::MUD_SHOT] {
-        assert_eq!(
-            ensure_scoreable(&dex, move_id, AiFlags::CHECK_VIABILITY),
-            Err(BattleError::UnscoreableMoveEffect(move_id)),
-            "{move_id:?}"
-        );
-    }
+    // The one remaining unported viability row stays refused.
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::SLASH, AiFlags::CHECK_VIABILITY),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::SLASH)),
+        "still-unported HIGH_CRITICAL"
+    );
 }
 
 #[test]
