@@ -39,7 +39,9 @@
 //! [`SaveStore::load`]: super::store::SaveStore::load
 
 use super::bag::{Bag, BAG_LEN};
+use super::coins::Coins;
 use super::game_stats::GameStats;
+use super::mail::{Mail, MAIL_COUNT};
 use super::pokemon::{Pokemon, POKEMON_LEN};
 use crate::event_data::{self, EventData};
 use crate::overworld::ELEVATION_MULTI_LEVEL;
@@ -88,8 +90,10 @@ const LAST_HEAL_LOCATION_OFFSET: usize = 0x1C;
 const PARTY_COUNT_OFFSET: usize = 0x234;
 const PARTY_OFFSET: usize = 0x238;
 const MONEY_OFFSET: usize = 0x490;
+const COINS_OFFSET: usize = 0x494;
 // `SaveBlock1::registeredItem` follows `money` (u32 at 0x490) and `coins` (u16
-// at 0x494) as a plain, unencrypted u16 (`pokeemerald/include/global.h:1002-1004`).
+// at 0x494, key-encrypted) as a plain, unencrypted u16
+// (`pokeemerald/include/global.h:1002-1004`).
 const REGISTERED_ITEM_OFFSET: usize = 0x496;
 const BAG_ITEMS_OFFSET: usize = 0x560;
 const POKEBLOCKS_OFFSET: usize = 0x848;
@@ -97,6 +101,10 @@ const FLAGS_OFFSET: usize = 0x1270;
 const VARS_OFFSET: usize = 0x139C;
 // `SaveBlock1::gameStats` (`pokeemerald/include/global.h:1022`).
 const GAME_STATS_OFFSET: usize = 0x159C;
+/// `SaveBlock1::mail` (`pokeemerald/include/global.h:1053`); the array ends
+/// where `unlockedTrendySayings` begins, at `0x2E20` (`:1054`).
+const MAIL_OFFSET: usize = 0x2BE0;
+const _: () = assert!(MAIL_OFFSET + MAIL_COUNT * Mail::LEN == 0x2E20);
 const OBJECT_EVENTS_OFFSET: usize = 0xA30;
 const OBJECT_EVENT_LEN: usize = 0x24;
 const OBJECT_EVENT_DIRECTIONS_OFFSET: usize = 0x18;
@@ -388,7 +396,8 @@ pub enum BattleStyle {
 
 /// `playTimeHours`/`Minutes`/`Seconds`/`VBlanks`
 /// (`pokeemerald/include/global.h:514-517`), stored as loaded: ticking and
-/// clamping belong to the play-time producer (`pokeemerald/src/play_time.c`).
+/// clamping belong to [`super::play_time::PlayTimeCounter`]
+/// (`pokeemerald/src/play_time.c`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PlayTime {
     /// `playTimeHours`.
@@ -670,6 +679,10 @@ pub struct SaveBlock1 {
     pub player_party: [Pokemon; PARTY_SIZE],
     /// Plaintext money.
     pub money: u32,
+    /// Plaintext Game Corner coin balance, stored at 0x494 as a `u16` xor-ed
+    /// with the key's low 16 bits (`coins`,
+    /// `pokeemerald/include/global.h:1003`, `pokeemerald/src/coins.c:41-49`).
+    pub coins: Coins,
     /// Item registered for use with SELECT, stored unencrypted at 0x496
     /// (`registeredItem`, `pokeemerald/include/global.h:1004`);
     /// [`ItemId::NONE`] means nothing is registered.
@@ -682,6 +695,8 @@ pub struct SaveBlock1 {
     pub player_object_event: SavedObjectEvent,
     /// Plaintext `gameStats` counters.
     pub game_stats: GameStats,
+    /// `mail`: six party slots, then the PC mailbox's ten (see [`super::mail`]).
+    pub mail: [Mail; MAIL_COUNT],
 }
 
 impl Default for SaveBlock1 {
@@ -694,11 +709,13 @@ impl Default for SaveBlock1 {
             player_party_count: 0,
             player_party: [Pokemon::default(); PARTY_SIZE],
             money: 0,
+            coins: Coins::default(),
             registered_item: ItemId::NONE,
             bag: Bag::default(),
             event_data: EventData::default(),
             player_object_event: SavedObjectEvent::default(),
             game_stats: GameStats::default(),
+            mail: [Mail::default(); MAIL_COUNT],
         }
     }
 }
@@ -731,7 +748,7 @@ impl SaveBlock1 {
     pub const PAYLOAD_LEN: usize = 0x3D88;
 
     /// Serializes modeled fields over a zero-filled payload.
-    /// Money and bag quantities are encrypted with `encryption_key`.
+    /// Money, coins and bag quantities are encrypted with `encryption_key`.
     #[must_use]
     pub fn to_bytes(&self, encryption_key: u32) -> [u8; Self::PAYLOAD_LEN] {
         let mut out = [0u8; Self::PAYLOAD_LEN];
@@ -741,7 +758,7 @@ impl SaveBlock1 {
 
     /// Writes modeled fields at their fixed offsets, preserving every other byte.
     ///
-    /// Money and bag quantities are encrypted with `encryption_key`. The base
+    /// Money, coins and bag quantities are encrypted with `encryption_key`. The base
     /// must share that key's save lineage because unmodeled encrypted fields
     /// remain untouched; use [`Self::to_bytes`] for a zero-filled base.
     pub fn patch_bytes(&self, base: &mut [u8; Self::PAYLOAD_LEN], encryption_key: u32) {
@@ -757,6 +774,8 @@ impl SaveBlock1 {
         }
         base[MONEY_OFFSET..MONEY_OFFSET + SERIALIZED_U32_LEN]
             .copy_from_slice(&(self.money ^ encryption_key).to_le_bytes());
+        base[COINS_OFFSET..COINS_OFFSET + SERIALIZED_U16_LEN]
+            .copy_from_slice(&(self.coins.get() ^ key_low16(encryption_key)).to_le_bytes());
         base[REGISTERED_ITEM_OFFSET..REGISTERED_ITEM_OFFSET + SERIALIZED_U16_LEN]
             .copy_from_slice(&self.registered_item.index().to_le_bytes());
         base[BAG_ITEMS_OFFSET..BAG_ITEMS_OFFSET + BAG_LEN]
@@ -769,6 +788,10 @@ impl SaveBlock1 {
         }
         base[GAME_STATS_OFFSET..GAME_STATS_OFFSET + GameStats::LEN]
             .copy_from_slice(&self.game_stats.to_bytes(encryption_key));
+        for (index, mail) in self.mail.iter().enumerate() {
+            let offset = MAIL_OFFSET + index * Mail::LEN;
+            base[offset..offset + Mail::LEN].copy_from_slice(&mail.to_bytes());
+        }
         base[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET] = self.player_object_event.to_direction_byte();
         base[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = self.player_object_event.to_elevation_byte();
         // Only bit 0 is modeled; the byte's other bitfields stay as loaded.
@@ -784,7 +807,7 @@ impl SaveBlock1 {
         }
     }
 
-    /// Decodes modeled fields and decrypts money and bag quantities.
+    /// Decodes modeled fields and decrypts money, coins and bag quantities.
     ///
     /// # Errors
     ///
@@ -809,6 +832,12 @@ impl SaveBlock1 {
             *value = read_u16(bytes, VARS_OFFSET + index * SERIALIZED_U16_LEN);
         }
 
+        let mail = std::array::from_fn(|index| {
+            let offset = MAIL_OFFSET + index * Mail::LEN;
+            let mut raw = [0u8; Mail::LEN];
+            raw.copy_from_slice(&bytes[offset..offset + Mail::LEN]);
+            Mail::from_bytes(&raw)
+        });
         let pos = Coords16::from_bytes(&bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]);
         Ok(Self {
             pos,
@@ -824,6 +853,7 @@ impl SaveBlock1 {
             player_party_count: bytes[PARTY_COUNT_OFFSET],
             player_party,
             money: read_u32(bytes, MONEY_OFFSET) ^ encryption_key,
+            coins: Coins::new(read_u16(bytes, COINS_OFFSET) ^ key_low16(encryption_key)),
             registered_item: ItemId(read_u16(bytes, REGISTERED_ITEM_OFFSET)),
             bag: Bag::from_bytes(bag_bytes, encryption_key),
             event_data: EventData::from_saved_state(flags, vars),
@@ -836,6 +866,7 @@ impl SaveBlock1 {
             )
             .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET])
             .with_active(trusted_player_object(bytes, pos)),
+            mail,
         })
     }
 }
@@ -901,6 +932,14 @@ fn write_warp(out: &mut [u8], offset: usize, warp: WarpData) {
 
 fn read_i16(bytes: &[u8], offset: usize) -> i16 {
     i16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+/// The key's low 16 bits, which encrypt `coins`
+/// (`pokeemerald/src/coins.c:41-49`: the `u16` field XOR the `u32` key,
+/// narrowed back to 16 bits).
+fn key_low16(key: u32) -> u16 {
+    let [low, high, ..] = key.to_le_bytes();
+    u16::from_le_bytes([low, high])
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> u16 {
@@ -1249,6 +1288,26 @@ mod tests {
         let mut keyless = SaveBlock1::default();
         keyless.game_stats.set(GameStat::CheckedPokedex, u32::MAX);
         assert_eq!(&keyless.to_bytes(0)[0x1640..0x1644], &[0xFF; 4]);
+    }
+
+    /// `GAME_STAT_STEPS` is word 5 of `gameStats` (`game_stat.h:9`), at
+    /// `0x159C + 5 * 4` in the key-XORed image.
+    #[test]
+    fn the_steps_stat_round_trips_at_its_slot_and_caps_at_the_ceiling() {
+        let key = 0x1234_5678;
+        let mut block = SaveBlock1::default();
+        block.game_stats.set(GameStat::Steps, 0x00AB_CDEF);
+        let bytes = block.to_bytes(key);
+        assert_eq!(&bytes[0x15B0..0x15B4], &(0x00AB_CDEF ^ key).to_le_bytes());
+        let decoded = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(decoded.game_stats.get(GameStat::Steps), 0x00AB_CDEF);
+
+        let mut capped = decoded;
+        capped.game_stats.set(GameStat::Steps, 0xFF_FFFE);
+        capped.game_stats.increment(GameStat::Steps);
+        capped.game_stats.increment(GameStat::Steps);
+        let reloaded = SaveBlock1::from_bytes(&capped.to_bytes(key), key).unwrap();
+        assert_eq!(reloaded.game_stats.get(GameStat::Steps), 0xFF_FFFF);
     }
 
     #[test]
@@ -1618,9 +1677,13 @@ mod tests {
             .event_data
             .var_set(event_data::VARS_END, 0xBEEF)
             .unwrap();
+        block.mail[0] = sample_mail(1);
+        block.mail[MAIL_COUNT - 1] = sample_mail(2);
 
         let bytes = block.to_bytes(key);
         assert_eq!(bytes.len(), 0x3D88);
+        assert_eq!(&bytes[0x2BE0..0x2BE0 + 0x24], &sample_mail(1).to_bytes());
+        assert_eq!(&bytes[0x2E20 - 0x24..0x2E20], &sample_mail(2).to_bytes());
         assert_eq!(&bytes[0x00..0x04], &block.pos.to_bytes());
         assert_eq!(&bytes[0x04..0x0C], &block.location.to_bytes());
         assert_eq!(&bytes[0x0C..0x14], &block.continue_game_warp.to_bytes());
@@ -1667,6 +1730,47 @@ mod tests {
             Ok(0xBEEF)
         );
         assert_eq!(restored.player_object_event, block.player_object_event);
+        assert_eq!(restored.mail, block.mail);
+    }
+
+    fn sample_mail(seed: u8) -> Mail {
+        Mail {
+            words: [u16::from(seed) << 8 | 0x34; 9],
+            player_name: [seed; 8],
+            trainer_id: [seed + 1; 4],
+            species: 0x0100 + u16::from(seed),
+            item_id: ItemId::ORANGE_MAIL,
+            padding: [seed + 2, seed + 3],
+        }
+    }
+
+    #[test]
+    fn patching_the_mail_array_leaves_its_neighbours_alone() {
+        let key = 0xA1B2_C3D4;
+        let mut block = SaveBlock1::default();
+        block.mail[3] = sample_mail(7);
+        let mut base = [0x5A_u8; SaveBlock1::PAYLOAD_LEN];
+        block.patch_bytes(&mut base, key);
+        assert_eq!(base[0x2BDF], 0x5A, "easyChatBattleLost's last byte");
+        assert_eq!(base[0x2E20], 0x5A, "unlockedTrendySayings");
+        assert_eq!(
+            &base[0x2BE0 + 3 * 0x24..0x2BE0 + 4 * 0x24],
+            &sample_mail(7).to_bytes()
+        );
+        assert_eq!(
+            SaveBlock1::from_bytes(&base, key).unwrap().mail[3],
+            sample_mail(7)
+        );
+    }
+
+    #[test]
+    fn a_zeroed_mail_region_loads_as_sixteen_empty_slots() {
+        let block = SaveBlock1::from_bytes(&[0; SaveBlock1::PAYLOAD_LEN], 0).unwrap();
+        assert!(block.mail.iter().all(Mail::is_empty));
+        assert_eq!(
+            block.mail[0].words, [0; 9],
+            "loaded zeros are not rewritten"
+        );
     }
 
     #[test]
@@ -1742,6 +1846,96 @@ mod tests {
             &[0, 0],
             "clearing the registration writes the empty item"
         );
+    }
+
+    #[test]
+    fn coins_encode_at_0x494_xored_with_the_keys_low_sixteen_bits() {
+        let key = 0xA1B2_C3D4;
+        let mut block = SaveBlock1::default();
+        block.coins.set(0x1234);
+        let bytes = block.to_bytes(key);
+        // 0x1234 ^ 0xC3D4 = 0xD1E0, little-endian; the key's high half is unused.
+        assert_eq!(&bytes[0x494..0x496], &[0xE0, 0xD1]);
+        assert_eq!(&bytes[0x490..0x494], &key.to_le_bytes());
+        assert_eq!(&bytes[0x496..0x498], &[0, 0]);
+
+        let decoded = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(decoded.coins.get(), 0x1234);
+    }
+
+    #[test]
+    fn a_new_game_holds_zero_coins_which_serialize_as_the_bare_key() {
+        let key = 0xA1B2_C3D4;
+        assert_eq!(SaveBlock1::default().coins.get(), 0);
+        let bytes = SaveBlock1::default().to_bytes(key);
+        assert_eq!(&bytes[0x494..0x496], &[0xD4, 0xC3]);
+        assert_eq!(SaveBlock1::from_bytes(&bytes, key).unwrap().coins.get(), 0);
+        assert_eq!(&SaveBlock1::default().to_bytes(0)[0x494..0x496], &[0, 0]);
+    }
+
+    #[test]
+    fn coin_balances_round_trip_under_a_nonzero_key() {
+        let key = 0x89AB_CDEF;
+        for amount in [0, 1, 9999, 0x7FFF, 0xFFFF] {
+            let mut block = SaveBlock1::default();
+            block.coins.set(amount);
+            let bytes = block.to_bytes(key);
+            assert_eq!(
+                &bytes[0x494..0x496],
+                &(amount ^ 0xCDEF).to_le_bytes(),
+                "balance {amount}"
+            );
+            assert_eq!(
+                SaveBlock1::from_bytes(&bytes, key).unwrap().coins.get(),
+                amount
+            );
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_imported_balance_decodes_unnormalised() {
+        let key = 0x0000_1111;
+        let mut bytes = [0u8; SaveBlock1::PAYLOAD_LEN];
+        bytes[0x494..0x496].copy_from_slice(&(0xFFFF_u16 ^ 0x1111).to_le_bytes());
+        let block = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(block.coins.get(), 0xFFFF);
+        block.patch_bytes(&mut bytes, key);
+        assert_eq!(&bytes[0x494..0x496], &(0xFFFF_u16 ^ 0x1111).to_le_bytes());
+    }
+
+    #[test]
+    fn patching_the_coin_balance_leaves_its_neighbouring_bytes_unchanged() {
+        let key = 0xDEAD_BEEF;
+        let mut image = SaveBlock1::default().to_bytes(key);
+        image[0x480..0x4A0].fill(0x77);
+        let before = image;
+        let mut block = SaveBlock1::from_bytes(&image, key).unwrap();
+        let (money, registered) = (block.money, block.registered_item);
+        block.coins.set(0x0141);
+        block.patch_bytes(&mut image, key);
+
+        assert_eq!(&image[0x494..0x496], &(0x0141_u16 ^ 0xBEEF).to_le_bytes());
+        assert_eq!(block.money, money);
+        assert_eq!(block.registered_item, registered);
+        let changed: Vec<usize> = (0..image.len())
+            .filter(|&i| image[i] != before[i])
+            .collect();
+        assert!(
+            changed.iter().all(|i| (0x494..0x496).contains(i)),
+            "only the coin bytes may change, got {changed:#X?}"
+        );
+        assert!(!changed.is_empty());
+    }
+
+    #[test]
+    fn coin_operations_survive_a_serialize_and_reload() {
+        let key = 0x0102_0304;
+        let mut block = SaveBlock1::default();
+        assert!(block.coins.add(9998));
+        assert!(block.coins.add(5));
+        assert!(block.coins.remove(99));
+        let reloaded = SaveBlock1::from_bytes(&block.to_bytes(key), key).unwrap();
+        assert_eq!(reloaded.coins.get(), 9900);
     }
 
     #[test]

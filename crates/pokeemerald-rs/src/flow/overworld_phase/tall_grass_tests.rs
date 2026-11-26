@@ -45,7 +45,7 @@ fn eastward_phase(specials: &[((u16, u16), u8)]) -> OverworldPhase {
     phase_with((4, 4), Direction::East, specials)
 }
 
-fn grass_entries(phase: &OverworldPhase) -> Vec<OamEntry> {
+pub(super) fn grass_entries(phase: &OverworldPhase) -> Vec<OamEntry> {
     phase
         .scene
         .sprite_entries(&phase.player, &phase.save1.event_data)
@@ -56,7 +56,7 @@ fn grass_entries(phase: &OverworldPhase) -> Vec<OamEntry> {
 }
 
 /// The image (0 to 4) the one effect on screen shows.
-fn shown_image(phase: &OverworldPhase) -> u16 {
+pub(super) fn shown_image(phase: &OverworldPhase) -> u16 {
     let first = phase
         .scene
         .tall_grass_first_tile()
@@ -488,13 +488,13 @@ fn a_player_placed_on_route_101_grass_shows_the_real_effect() {
     assert_eq!(shown_image(&phase), 0);
 }
 
-const ROUTE_101: MapId = MapId("MAP_ROUTE101");
-const OLDALE_TOWN: MapId = MapId("MAP_OLDALE_TOWN");
+pub(super) const ROUTE_101: MapId = MapId("MAP_ROUTE101");
+pub(super) const OLDALE_TOWN: MapId = MapId("MAP_OLDALE_TOWN");
 /// Oldale's south-edge column the crossing lands on, clear of its coord events
 /// and its hidden rival object.
-const LANDING_X: i32 = 13;
+pub(super) const LANDING_X: i32 = 13;
 /// The object-event sheets Oldale Town and Route 101 load.
-const CROSSING_SPRITES: [&str; 8] = [
+pub(super) const CROSSING_SPRITES: [&str; 8] = [
     "girl_3",
     "mart_employee",
     "maniac",
@@ -508,20 +508,41 @@ const CROSSING_SPRITES: [&str; 8] = [
 /// A phase at rest on Route 101's north edge facing Oldale Town, whose pack
 /// puts `landing_behavior` on Oldale's landing tile and carries the tall-grass
 /// sheet.
-fn route_101_phase_crossing_into_oldale(
+pub(super) fn route_101_phase_crossing_into_oldale(
     landing_behavior: u8,
+) -> (OverworldPhase, std::path::PathBuf) {
+    route_101_phase_crossing_into_oldale_with_grass(landing_behavior, &[])
+}
+
+/// [`route_101_phase_crossing_into_oldale`] whose pack has tall grass on Route 101's
+/// `route101_grass` cells too, which a carried object reads from Oldale's connected band. The
+/// departed scene is separate, so a fixture that puts grass in it keeps the pack's cells to match.
+pub(super) fn route_101_phase_crossing_into_oldale_with_grass(
+    landing_behavior: u8,
+    route101_grass: &[(u16, u16)],
 ) -> (OverworldPhase, std::path::PathBuf) {
     let path = std::env::temp_dir().join(format!(
         "pokeemerald-rs-tall-grass-crossing-{landing_behavior}-{}-{:?}.pack",
         std::process::id(),
         std::thread::current().id()
     ));
-    crate::overworld::test_support::write_route101_oldale_layout_pack_with(
-        &path,
-        &[((13, 19), landing_behavior)],
-        &CROSSING_SPRITES,
-        true,
-    );
+    if route101_grass.is_empty() {
+        crate::overworld::test_support::write_route101_oldale_layout_pack_with(
+            &path,
+            &[((13, 19), landing_behavior)],
+            &CROSSING_SPRITES,
+            true,
+        );
+    } else {
+        crate::pack_test_support::write_scratch_exclusive(
+            &path,
+            crate::overworld::test_support::route101_oldale_pack_bytes_with_route101_grass(
+                &[((13, 19), landing_behavior)],
+                route101_grass,
+                &CROSSING_SPRITES,
+            ),
+        );
+    }
     let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
     let mut phase = OverworldPhase::for_test(
         synthetic_scene_with_tall_grass_sprites(20, 20, &[]),
@@ -561,7 +582,7 @@ fn a_map_edge_crossing_onto_ordinary_ground_leaves_the_entered_scene_without_eff
 /// Route 101 with tall grass on its top-edge tile `(13, 0)`, the player at rest
 /// one tile south of it facing north.
 fn route_101_phase_with_grass_on_the_edge_tile() -> (OverworldPhase, std::path::PathBuf) {
-    let (mut phase, path) = route_101_phase_crossing_into_oldale(MB_NORMAL);
+    let (mut phase, path) = route_101_phase_crossing_into_oldale_with_grass(MB_NORMAL, &[(13, 0)]);
     phase.scene =
         synthetic_scene_with_tall_grass_sprites(20, 20, &[((13, 0), MB_TALL_GRASS, GROUND)])
             .in_room_for_test(ROUTE_101);

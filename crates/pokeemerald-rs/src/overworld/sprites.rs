@@ -8,12 +8,13 @@
 //! ROM-side image store; composing stages only the drawn frames into OBJ VRAM
 //! (`super::obj_vram`), so its size is not bound by the ten-bit OBJ tile field.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use assets::pack::AssetPack;
-use assets::LayoutGrid;
+use assets::{LayoutGrid, ObjectEvent};
 use engine::event_data::EventData;
-use engine::overworld::object_event::ObjectEventCollection;
+use engine::overworld::object_event::{ObjectEventCollection, ObjectEventState};
 use engine::overworld::PlayerState;
 use rendering::{BitDepth, Palette, Tileset};
 
@@ -39,14 +40,13 @@ pub(super) struct SceneSprites {
     /// its live tile.
     cell_elevations: CellElevations,
     bindings: HashMap<&'static str, SpriteBinding>,
+    /// The previous frame's draw order, which an exact depth tie keeps
+    /// (`sSpriteOrder`, `sprite.c:372-440`). Composing is `&self`, so the
+    /// history is interior state; composing the same frame again changes nothing.
+    sprite_order: RefCell<npc::SpriteOrder>,
 }
 
-/// `ELEVATION_TRANSITION`: a cell any elevation may enter, which carries no
-/// elevation of its own.
-const ELEVATION_TRANSITION: u8 = 0;
-
-/// `ELEVATION_MULTI_LEVEL`: a cell that leaves an object's elevation alone.
-const ELEVATION_MULTI_LEVEL: u8 = 15;
+use engine::overworld::collision::ELEVATION_TRANSITION;
 
 /// Each cell's elevation, row-major, copied from the layout grid so the
 /// sprites need not borrow it.
@@ -74,13 +74,9 @@ impl CellElevations {
         }
     }
 
-    /// The elevation an object on `tile` settles at: its own, replaced by the
-    /// cell's unless that cell is a transition or multi-level one, or off the
-    /// grid (`ObjectEventUpdateElevation`,
-    /// `event_object_movement.c:7759-7771`, which the spawn-time ground-effect
-    /// update reaches).
-    fn settled(&self, tile: (i32, i32), elevation: u8) -> u8 {
-        let cell = u16::try_from(tile.0)
+    /// The elevation of the cell at `tile`; `None` off the grid.
+    fn at(&self, tile: (i32, i32)) -> Option<u8> {
+        u16::try_from(tile.0)
             .ok()
             .zip(u16::try_from(tile.1).ok())
             .filter(|&(x, y)| x < self.width && y < self.height)
@@ -88,10 +84,26 @@ impl CellElevations {
                 self.elevations
                     .get(usize::from(y) * usize::from(self.width) + usize::from(x))
             })
-            .copied();
-        match cell {
-            Some(cell) if !matches!(cell, ELEVATION_TRANSITION | ELEVATION_MULTI_LEVEL) => cell,
-            _ => elevation,
+            .copied()
+    }
+
+    /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`) for
+    /// one object: its stored elevations take its current and previous cells'.
+    /// An object off the grid keeps what it has, and an off-grid previous cell
+    /// reads as a transition.
+    fn update(&self, state: &mut ObjectEventState) {
+        if let Some(current) = self.at(state.position()) {
+            let previous = self
+                .at(state.previous_position())
+                .unwrap_or(ELEVATION_TRANSITION);
+            state.update_elevation(current, previous);
+        }
+    }
+
+    /// Updates every object's elevations from the cells they stand on.
+    fn update_all(&self, objects: &mut ObjectEventCollection) {
+        for live in objects.iter_mut() {
+            self.update(live.state_mut());
         }
     }
 }
@@ -101,14 +113,20 @@ impl SceneSprites {
         pack: &AssetPack,
         player: PlayerCharacter,
         events: &assets::MapEvents,
+        carried: &[&'static ObjectEvent],
         grid: &LayoutGrid<'_>,
         event_data: &EventData,
     ) -> Result<Self, OverworldSceneError> {
         let sprite_image = pack.sprite(player.sprite_path())?;
         let palette_ref = pack.sprite_palette(player.palette_name())?;
         let mut bytes = avatar::pack_people_sheet_frames("sprite/*/walking", sprite_image)?;
-        let bindings =
-            npc::resolve_bindings(pack, player, events.object_events, &mut bytes, event_data)?;
+        let bindings = npc::resolve_bindings(
+            pack,
+            player,
+            events.object_events.iter().chain(carried.iter().copied()),
+            &mut bytes,
+            event_data,
+        )?;
         #[expect(
             clippy::cast_possible_truncation,
             reason = "a scene contains only a small number of NPC sheets"
@@ -119,6 +137,7 @@ impl SceneSprites {
             pack.sprite(player.run_sprite_path())?,
         )?);
         let grass = grass::load_resources(pack)?;
+        let cell_elevations = CellElevations::from_grid(grid);
         #[expect(
             clippy::cast_possible_truncation,
             reason = "a scene contains only a small number of sprite sheets"
@@ -140,9 +159,14 @@ impl SceneSprites {
                 &bindings,
                 grass.as_ref().map(|grass| grass.palette),
             )?,
-            seed_objects: ObjectEventCollection::from_templates(events.object_events),
-            cell_elevations: CellElevations::from_grid(grid),
+            seed_objects: {
+                let mut seeds = ObjectEventCollection::from_templates(events.object_events);
+                cell_elevations.update_all(&mut seeds);
+                seeds
+            },
+            cell_elevations,
             bindings,
+            sprite_order: RefCell::default(),
         })
     }
 
@@ -151,17 +175,40 @@ impl SceneSprites {
         self.grass_base_tile
     }
 
+    /// Forgets the draw-order history, as `ResetSpriteData` resets `sSpriteOrder`
+    /// to the identity (`sprite.c:848-858`).
+    pub(super) fn reset_sprite_order(&self) {
+        self.sprite_order.take();
+    }
+
+    /// Takes over `departed`'s draw-order history after a seamless connection
+    /// crossing, which keeps every sprite and so `sSpriteOrder`
+    /// (`LoadMapFromCameraTransition`, `overworld.c:784-825`).
+    pub(super) fn carry_sprite_order_from(&self, departed: &Self) {
+        self.sprite_order
+            .replace(departed.sprite_order.borrow().clone());
+    }
+
     /// Whether the pack supplied the tall-grass effect's sheet and palette.
     pub(super) const fn draws_tall_grass(&self) -> bool {
         self.grass_base_tile.is_some()
     }
 
-    /// The elevation an object on `tile` settles at (`CellElevations::settled`).
-    pub(super) fn settled_elevation(&self, tile: (i32, i32), elevation: u8) -> u8 {
-        self.cell_elevations.settled(tile, elevation)
+    /// Settles every live object's elevations on the cells it stands on
+    /// (`ObjectEventUpdateElevation`). Rendering only reads the result, so a
+    /// caller runs this after creating or moving objects and before composing.
+    pub(super) fn update_object_elevations(&self, objects: &mut ObjectEventCollection) {
+        self.cell_elevations.update_all(objects);
     }
 
-    /// [`Self::live_entries`] over the template-seeded state.
+    /// Settles one object's elevations on the cells it stands on, for a caller that
+    /// runs a finish-step update between frames ([`Self::update_object_elevations`]).
+    pub(super) fn update_object_elevation(&self, state: &mut ObjectEventState) {
+        self.cell_elevations.update(state);
+    }
+
+    /// [`Self::live_entries`] over the template-seeded state, admitted as map load would admit
+    /// it for `player` under `event_data`.
     #[must_use]
     pub(super) fn entries(
         &self,
@@ -169,14 +216,18 @@ impl SceneSprites {
         event_data: &EventData,
         grass: &TallGrassEffects,
     ) -> Vec<SheetSprite> {
-        self.live_entries(&self.seed_objects, player, event_data, grass)
+        let mut objects = self.seed_objects.clone();
+        let _ = objects.admit_on_map_load(player.position(), event_data);
+        self.live_entries(&objects, player, event_data, grass)
     }
 
     /// Lists the player first, then NPCs in `objects` order, then the tall-grass
     /// effects, and orders by OBJ priority and y-derived subpriority
-    /// ([`npc::order_sprites`]); the player leads a tie in every sort key.
-    /// `objects` supplies tile, facing, and elevation, the last settled by the
-    /// layout cell it stands on; the scene's templates keep the graphics
+    /// ([`npc::SpriteOrder`]); a tie in every sort key keeps the order of the
+    /// previous call, and sprites new together tie in this listing order.
+    /// `objects` supplies tile, facing, and the retained elevation that sets
+    /// each sprite's priority, settled by
+    /// [`Self::update_object_elevations`]; the scene's templates keep the graphics
     /// bindings. Each effect carries its own subpriority, set against the
     /// object sprites it overlaps.
     #[must_use]
@@ -189,16 +240,11 @@ impl SceneSprites {
     ) -> Vec<SheetSprite> {
         let elevations: Vec<u8> = objects
             .iter()
-            .map(|live| {
-                let state = live.state();
-                self.cell_elevations
-                    .settled(state.position(), state.elevation())
-            })
+            .map(|live| live.state().previous_elevation())
             .collect();
-        let mut sprites = vec![npc::DepthSprite::single(
-            avatar::player_entry(player, self.run_base_tile),
-            player.previous_elevation(),
-        )];
+        let mut sprites =
+            vec![avatar::player_depth_sprite(player, self.run_base_tile)
+                .with_id(npc::SpriteId::Player)];
         sprites.extend(npc::elevated_oam_entries(
             objects,
             &elevations,
@@ -212,6 +258,8 @@ impl SceneSprites {
                 .map(|sprite| DepthObject {
                     left: i32::from(sprite.left()),
                     top: signed_screen_y(sprite.top()),
+                    width: i32::from(sprite.width()),
+                    height: i32::from(sprite.height()),
                     subpriority: sprite.parent_subpriority(),
                 })
                 .collect();
@@ -219,12 +267,12 @@ impl SceneSprites {
                 grass
                     .oam_entries(player, first_tile, &depth_objects)
                     .into_iter()
-                    .map(|(entry, subpriority)| {
-                        npc::DepthSprite::with_subpriority(entry, subpriority)
+                    .map(|(entry, subpriority, id)| {
+                        npc::DepthSprite::with_subpriority(entry, subpriority).with_id(id)
                     }),
             );
         }
-        npc::order_sprites(&sprites)
+        self.sprite_order.borrow_mut().order(&sprites)
     }
 
     pub(super) const fn tiles(&self) -> &Tileset {
@@ -282,18 +330,67 @@ mod tests {
         (layout, bytes)
     }
 
+    fn npc_state(x: i16, elevation: u8) -> ObjectEventState {
+        ObjectEventState::from_template(&assets::ObjectEvent {
+            local_id: 1,
+            graphics_id: "OBJ_EVENT_GFX_MOM",
+            x,
+            y: 0,
+            elevation,
+            movement_type: assets::MovementType::FaceRight,
+            movement_range_x: 0,
+            movement_range_y: 0,
+            trainer_type: assets::TrainerType::None,
+            trainer_sight_or_berry_tree_id: "0",
+            script: None,
+            flag: "0",
+        })
+    }
+
+    fn settle(cells: &CellElevations, state: &mut ObjectEventState) -> (u8, u8) {
+        cells.update(state);
+        (state.elevation(), state.previous_elevation())
+    }
+
     /// `ObjectEventUpdateElevation`: a cell's elevation replaces the
     /// template's, except the transition (0) and multi-level (15) cells.
     #[test]
     fn a_spawned_object_takes_its_cells_elevation_unless_transition_or_multi_level() {
-        let (layout, bytes) =
-            grid_with_elevation_row([3, ELEVATION_TRANSITION, ELEVATION_MULTI_LEVEL]);
+        let (layout, bytes) = grid_with_elevation_row([3, ELEVATION_TRANSITION, 15]);
         let cells = CellElevations::from_grid(&layout.grid(&bytes).unwrap());
-        assert_eq!(cells.settled((0, 0), 4), 3);
-        assert_eq!(cells.settled((1, 0), 3), 3);
-        assert_eq!(cells.settled((1, 0), 4), 4);
-        assert_eq!(cells.settled((2, 0), 4), 4);
-        assert_eq!(cells.settled((9, 0), 4), 4, "off the grid");
-        assert_eq!(cells.settled((-1, 0), 4), 4, "left of the grid");
+        assert_eq!(settle(&cells, &mut npc_state(0, 4)), (3, 3));
+        assert_eq!(settle(&cells, &mut npc_state(1, 3)), (0, 3));
+        assert_eq!(settle(&cells, &mut npc_state(1, 4)), (0, 4));
+        assert_eq!(settle(&cells, &mut npc_state(2, 4)), (4, 4));
+        assert_eq!(settle(&cells, &mut npc_state(9, 4)), (4, 4), "off the grid");
+        assert_eq!(
+            settle(&cells, &mut npc_state(-1, 4)),
+            (4, 4),
+            "left of the grid"
+        );
+    }
+
+    /// `ObjectEventUpdateElevation` keeps `previousElevation` from the last
+    /// ordinary cell when the object steps onto a transition cell.
+    #[test]
+    fn walking_onto_a_transition_keeps_the_settled_elevation() {
+        let (layout, bytes) = grid_with_elevation_row([4, ELEVATION_TRANSITION, 4]);
+        let cells = CellElevations::from_grid(&layout.grid(&bytes).unwrap());
+        let mut state = npc_state(0, 3);
+        assert_eq!(settle(&cells, &mut state), (4, 4));
+        state.walk(engine::overworld::Direction::East);
+        assert_eq!(settle(&cells, &mut state), (0, 4));
+    }
+
+    /// `ObjectEventUpdateElevation` returns early when the previous cell is
+    /// multi-level, leaving the elevation unchanged.
+    #[test]
+    fn leaving_a_multi_level_cell_keeps_the_elevation() {
+        let (layout, bytes) = grid_with_elevation_row([4, 15, 6]);
+        let cells = CellElevations::from_grid(&layout.grid(&bytes).unwrap());
+        let mut state = npc_state(1, 4);
+        assert_eq!(settle(&cells, &mut state), (4, 4));
+        state.walk(engine::overworld::Direction::East);
+        assert_eq!(settle(&cells, &mut state), (4, 4));
     }
 }

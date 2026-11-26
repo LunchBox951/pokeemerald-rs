@@ -25,6 +25,31 @@ pub(super) const VAR_ROUTE101_STATE: u16 = 0x4060;
 /// An event-flag store with nothing hidden.
 pub(super) const NO_FLAGS: EventData = EventData::new();
 
+/// Gives the scheduler one camera update, as a hide flag the test just changed needs: clearing a
+/// flag spawns nothing while the camera is still (`UpdateObjectEventsForCameraUpdate` runs on a
+/// camera move, `field_camera.c:413-416`). The player steps one tile aside for an idle frame and is
+/// put back exactly as it was.
+pub(super) fn run_camera_update(phase: &mut OverworldPhase) {
+    let home = phase.player;
+    let (x, y) = home.position();
+    phase.player = PlayerState::new((x + 1, y), 3, Direction::South);
+    phase.step(ButtonState::new());
+    phase.player = home;
+}
+
+/// `templates` seeded and admitted through map load's pass for a player standing at `player`, with
+/// `event_data` as the flags.
+pub(super) fn admitted_objects(
+    templates: &'static [assets::ObjectEvent],
+    player: &PlayerState,
+    event_data: &EventData,
+) -> engine::overworld::object_event::ObjectEventCollection {
+    let mut objects =
+        engine::overworld::object_event::ObjectEventCollection::from_templates(templates);
+    super::connections::admit_object_events_at_map_load(&mut objects, player, event_data);
+    objects
+}
+
 /// A map resolver under which no map is connected.
 pub(super) fn no_connections(_: MapId) -> Option<(u16, u16)> {
     None
@@ -491,7 +516,7 @@ pub(super) fn grass_step_draws(
 ) -> bool {
     let header = assets::WildEncounterTable::new().get_by_map(MapId("MAP_ROUTE101"));
     let before = rng.state();
-    state.check_standard_wild_encounter(MB_TALL_GRASS, header, rng);
+    state.check_standard_wild_encounter(MB_TALL_GRASS, header, None, rng);
     rng.state() != before
 }
 
@@ -568,6 +593,11 @@ impl OverworldPhase {
     pub(in crate::flow) fn clear_lead_for_test(&mut self) {
         self.lead = None;
         self.undecodable_lead_retained = false;
+    }
+
+    /// The record the loaded lead owns, as last merged or edited.
+    pub(in crate::flow) fn lead_record_for_test(&self) -> Option<&engine::save::Pokemon> {
+        self.lead.as_ref().map(crate::party::LoadedLead::record)
     }
 
     /// The saved slot backing the lead, if one is loaded.

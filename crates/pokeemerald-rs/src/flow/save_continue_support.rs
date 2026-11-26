@@ -40,7 +40,7 @@ use super::tests::{held, pressed};
 use crate::game_save::SaveSlot;
 use crate::new_game;
 use crate::start_menu::StartMenuItem;
-use engine::event_data::EventData;
+use engine::event_data::{EventData, VAR_REPEL_STEP_COUNT};
 use engine::overworld::{Direction, PlayerState};
 use engine::save::{BoxPokemon, Pokemon, SaveBlock1, SaveBlock2, WarpData};
 use platform::Buttons;
@@ -50,10 +50,6 @@ use platform::Buttons;
 /// real mid-play mutation rather than something the reloaded blocks would
 /// have anyway.
 const FLAG_RECEIVED_RUNNING_SHOES: u16 = 0x112;
-
-/// `VAR_REPEL_STEP_COUNT` (`pokeemerald/include/constants/vars.h:51`) — an
-/// ordinary (non-temp) var, likewise untouched by new-game init.
-const VAR_REPEL_STEP_COUNT: u16 = 0x4021;
 
 /// How many frames a save flow gets before the fixture calls it wedged.
 /// Deliberately generous: `gText_DifferentSaveFile`'s four-page WARNING is

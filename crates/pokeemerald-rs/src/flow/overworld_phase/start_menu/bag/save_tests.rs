@@ -225,3 +225,41 @@ fn the_reordered_bag_is_saved_from_the_returned_menu() {
     let saved = s.save.slot().load();
     assert_eq!(quantities(&saved.block1.bag), [20, 10, 30, 40]);
 }
+
+/// Play time is counted once a frame through the fades, the bag and the
+/// handoff, as on every other frame (`PlayTimeCounter_Update`,
+/// `src/main.c:131-167`).
+#[test]
+fn play_time_counts_every_frame_of_the_trip() {
+    fn vblanks(session: &Session) -> u64 {
+        let time = session.phase().save2().play_time;
+        ((u64::from(time.hours) * 60 + u64::from(time.minutes)) * 60 + u64::from(time.seconds)) * 60
+            + u64::from(time.vblanks)
+    }
+    let mut session = session("bag-play-time");
+    session.open_start_menu();
+    let mut expected = vblanks(&session);
+    let mut tick = |session: &mut Session, button| {
+        session.frame(button);
+        expected += 1;
+        assert_eq!(vblanks(session), expected);
+    };
+
+    tick(&mut session, Buttons::A);
+    assert!(
+        session.phase().bag_trip_active(),
+        "A on BAG starts the trip"
+    );
+    while !session.browsing() {
+        tick(&mut session, Buttons::NONE);
+    }
+    tick(&mut session, Buttons::B);
+    let mut frames = 0;
+    while session.phase().bag_trip_active() {
+        frames += 1;
+        assert!(frames < 200, "the trip never returned to the field");
+        tick(&mut session, Buttons::NONE);
+    }
+    // The frame the menu takes input back.
+    tick(&mut session, Buttons::NONE);
+}

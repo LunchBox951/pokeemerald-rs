@@ -1,7 +1,7 @@
 //! Every battle event the turn engine can report has a narration mapping.
 
 use assets::items::ItemId;
-use assets::{AbilityId, Effectiveness, MoveId};
+use assets::{AbilityId, Effectiveness, MoveId, Type};
 use battle::{BattleEvent, BattleOutcome, ChangedStat, LoafMessage, StatStage, Status1};
 
 use super::fixtures::{narrator, RATTATA};
@@ -50,6 +50,7 @@ fn move_events() -> Vec<BattleEvent> {
         BattleEvent::FastAsleep { by_player, move_id },
         BattleEvent::WokeUp { by_player },
         BattleEvent::LoafingAround { by_player, move_id },
+        BattleEvent::Flinched { by_player, move_id },
         BattleEvent::FrozenSolid { by_player, move_id },
         BattleEvent::Thawed { by_player },
         BattleEvent::ThawedByMove { by_player, move_id },
@@ -137,6 +138,13 @@ fn move_events() -> Vec<BattleEvent> {
 fn ability_and_status_events() -> Vec<BattleEvent> {
     let (by_player, move_id) = (BY_PLAYER, MOVE);
     vec![
+        BattleEvent::MadeDrowsy { by_player, move_id },
+        BattleEvent::YawnAbilityProtected {
+            by_player,
+            move_id,
+            ability: AbilityId::INSOMNIA,
+        },
+        BattleEvent::FellAsleepFromYawn { by_player },
         BattleEvent::SoundproofProtected { by_player, move_id },
         BattleEvent::Paralyzed { by_player, move_id },
         BattleEvent::AlreadyParalyzed { by_player, move_id },
@@ -156,6 +164,9 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
         BattleEvent::PoisonedByEffectSpore { by_player, move_id },
         BattleEvent::ParalyzedByEffectSpore { by_player, move_id },
         BattleEvent::PoisonedByPoisonPoint { by_player, move_id },
+        BattleEvent::BurnedByFlameBody { by_player, move_id },
+        BattleEvent::BurnedByAttackerSynchronize { by_player, move_id },
+        BattleEvent::AttackerSynchronizeFireTypeProtected { by_player, move_id },
         BattleEvent::PoisonedByAttackerSynchronize { by_player, move_id },
         BattleEvent::AttackerSynchronizePoisonOrSteelTypeProtected { by_player, move_id },
         BattleEvent::SynchronizeImmunityProtected { by_player, move_id },
@@ -190,6 +201,15 @@ fn ability_and_status_events() -> Vec<BattleEvent> {
             by_player,
             status: Status1::Poisoned,
         },
+        BattleEvent::SpeedBoostActivated {
+            by_player,
+            new_stage: StatStage::new(1).unwrap(),
+        },
+        BattleEvent::TypeChanged {
+            by_player,
+            move_id,
+            new_type: Type::Water,
+        },
     ]
 }
 
@@ -207,6 +227,10 @@ fn party_events() -> Vec<BattleEvent> {
         BattleEvent::PlayerSentOut {
             species: RATTATA,
             reserves_remaining: 1,
+        },
+        BattleEvent::TracedAbility {
+            by_player,
+            ability: AbilityId::LIMBER,
         },
         BattleEvent::ExpGained {
             amount: 10,
@@ -241,7 +265,7 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 87;
+const VARIANTS: usize = 97;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
@@ -335,6 +359,16 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::DisobedientSelfHit { .. } => 84,
         BattleEvent::IgnoredOrders => 85,
         BattleEvent::DisobedientNap => 86,
+        BattleEvent::SpeedBoostActivated { .. } => 87,
+        BattleEvent::MadeDrowsy { .. } => 88,
+        BattleEvent::YawnAbilityProtected { .. } => 89,
+        BattleEvent::FellAsleepFromYawn { .. } => 90,
+        BattleEvent::TracedAbility { .. } => 91,
+        BattleEvent::Flinched { .. } => 92,
+        BattleEvent::TypeChanged { .. } => 93,
+        BattleEvent::BurnedByFlameBody { .. } => 94,
+        BattleEvent::BurnedByAttackerSynchronize { .. } => 95,
+        BattleEvent::AttackerSynchronizeFireTypeProtected { .. } => 96,
     }
 }
 

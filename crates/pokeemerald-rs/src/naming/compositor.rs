@@ -16,9 +16,9 @@
 //! swap would show -- and the cursor alpha-blends against whichever is in
 //! front (`BLDCNT` target 2 is BG1 and BG2, `BLDALPHA` 12/8).
 //!
-//! The banner's `{DPAD_NONE}`, `{A_BUTTON}` and `{B_BUTTON}` icons come from
-//! `keypad_icons.png`, which the asset pack does not carry yet, so the banner
-//! reserves each icon's eight pixels and draws only the words.
+//! The banner prints `gText_MoveOkBack` (`{DPAD_NONE}MOVE  {A_BUTTON}OK
+//! {B_BUTTON}BACK`) with its three keypad icons drawn from the pack's
+//! `font/keypad_icons` sheet.
 
 mod error;
 mod sprites;
@@ -27,7 +27,7 @@ mod text;
 
 use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::pack::NamingScreenHandle;
-use assets::{AssetPack, PaletteRef};
+use assets::{AssetPack, KeypadIconSheet, PaletteRef};
 use engine::text::Token;
 use rendering::{
     compose_frame_with_effects, BgLayer, BgSlot, Bgr555, BitDepth, ColorEffect, EffectsConfig,
@@ -109,8 +109,12 @@ const CURSOR_EVA: u8 = 12;
 const CURSOR_EVB: u8 = 8;
 /// The banner text origin (`PrintControls`).
 const BANNER_TEXT_ORIGIN: (i32, i32) = (2, 1);
-/// Pixels `{DPAD_NONE}`, `{A_BUTTON}` and `{B_BUTTON}` advance.
-const KEYPAD_ICON_WIDTH: u8 = 8;
+/// `gText_MoveOkBack` as charmap bytes (`strings.c:1593`): `{DPAD_NONE}`,
+/// "MOVE", two spaces, `{A_BUTTON}`, "OK", two spaces, `{B_BUTTON}`, "BACK".
+const MOVE_OK_BACK: [u8; 21] = [
+    0xF8, 0x0C, 0xC7, 0xC9, 0xD0, 0xBF, 0x00, 0x00, 0xF8, 0x00, 0xC9, 0xC5, 0x00, 0x00, 0xF8, 0x01,
+    0xBC, 0xBB, 0xBD, 0xC5, 0xFF,
+];
 /// The title window's text origin (`DrawNormalTextEntryBox`).
 const TITLE_TEXT_ORIGIN: (i32, i32) = (8, 1);
 /// Pixels from the keyboard window's left edge to the window of the entry
@@ -198,21 +202,23 @@ impl NamingScene {
     ///
     /// # Errors
     ///
-    /// [`NamingSceneError::Pack`] for a missing or malformed naming-screen or
-    /// font entry, [`NamingSceneError::Font`] for a font sheet that does not
-    /// decode, and [`NamingSceneError::UnencodableCharacter`] if a keyboard
+    /// [`NamingSceneError::Pack`] for a missing or malformed naming-screen,
+    /// font, or keypad-icon entry, [`NamingSceneError::Font`] for a font or
+    /// keypad-icon sheet that does not decode, and [`NamingSceneError::UnencodableCharacter`] if a keyboard
     /// character has no encoding.
     pub fn from_pack(pack: &AssetPack) -> Result<Self, NamingSceneError> {
         let handle = pack.naming_screen()?;
         let normal = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
         let small = OwnedFontGlyphSheet::new(pack.font(FontId::Small)?)?;
-        Self::from_handle(&handle, normal, &small)
+        let icons = KeypadIconSheet::new(pack.keypad_icons()?)?;
+        Self::from_handle(&handle, normal, &small, &icons)
     }
 
     fn from_handle(
         handle: &NamingScreenHandle<'_>,
         normal: OwnedFontGlyphSheet,
         small: &OwnedFontGlyphSheet,
+        icons: &KeypadIconSheet,
     ) -> Result<Self, NamingSceneError> {
         let mut bg = [Bgr555::default(); Palette::LEN];
         for (bank, palette) in handle.menu_palette_banks().into_iter().enumerate() {
@@ -239,7 +245,13 @@ impl NamingScene {
             Self::page_window(&normal, KeyboardPage::Symbols)?,
         ];
         let mut banner = WindowBuffer::filled(BANNER.width, BANNER.height, BANNER_FILL);
-        banner.print(small, banner_tokens(), BANNER_TEXT_ORIGIN, KEY_COLORS);
+        banner.print(
+            small,
+            banner_tokens()?,
+            BANNER_TEXT_ORIGIN,
+            KEY_COLORS,
+            Some(icons),
+        );
         Ok(Self {
             normal,
             bg_palette: Palette::new(bg),
@@ -275,7 +287,7 @@ impl NamingScene {
             }
             let y =
                 i32::try_from(row * usize::from(super::page_spec::KEY_ROW_HEIGHT) + 1).unwrap_or(0);
-            window.print(normal, tokens, (0, y), KEY_COLORS);
+            window.print(normal, tokens, (0, y), KEY_COLORS, None);
         }
         Ok(window.tile_bytes())
     }
@@ -392,6 +404,7 @@ impl NamingScene {
                     text_tokens(&c.to_string())?,
                     (x, 1),
                     ENTRY_COLORS,
+                    None,
                 );
             }
         }
@@ -401,6 +414,7 @@ impl NamingScene {
             text_tokens(&visuals.title)?,
             TITLE_TEXT_ORIGIN,
             ENTRY_COLORS,
+            None,
         );
 
         let page_on_bg1 = selection.page_on(KeyboardLayer::Bg1);
@@ -462,14 +476,13 @@ fn sprite_scene(selection: PageSelection, visuals: &NamingVisuals, avatar: usize
     }
 }
 
-/// `gText_MoveOkBack`, with each keypad icon's width reserved.
-fn banner_tokens() -> Vec<Token> {
-    let mut tokens = Vec::new();
-    for words in ["MOVE  ", "OK  ", "BACK"] {
-        tokens.push(clear_token(KEYPAD_ICON_WIDTH));
-        tokens.extend(words.chars().map(Token::Char));
-    }
-    tokens
+/// `gText_MoveOkBack` decoded: the keypad icons, words, and spaces in order.
+///
+/// # Errors
+///
+/// [`NamingSceneError::Text`] if the string does not decode.
+fn banner_tokens() -> Result<Vec<Token>, NamingSceneError> {
+    Ok(engine::text::decode(&MOVE_OK_BACK)?)
 }
 
 #[cfg(test)]
