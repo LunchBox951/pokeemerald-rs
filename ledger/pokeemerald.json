@@ -32702,6 +32702,12 @@
     },
     "src/field_specials.c": {
       "artifacts": {
+        "CountSSTidalStep": {
+          "reason": "field_specials.c:288-294. EventData::count_ss_tidal_step: while FLAG_SYS_CRUISE_MODE (0x88D, flags.h:1403) is set, adds the u16 delta to VAR_CRUISE_STEP_COUNT (0x404A, vars.h:94) with u16 wraparound and returns whether the count has reached SS_TIDAL_MAX_STEPS (205, field_specials.h:27); with the flag clear the counter is untouched and it returns false. No RNG. Pending, not modelled: the walking caller (field_control_avatar.c:597-603), the arrival script, ship movement and presentation; SetSSTidalFlag and ResetSSTidalFlag are separate.",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "GetDaysUntilPacifidlogTMAvailable": {
           "reason": "field_specials.c:1555-1564, read by data/maps/PacifidlogTown_House2/scripts.inc:20-23. EventData::days_until_pacifidlog_tm_available reads VAR_PACIFIDLOG_TM_RECEIVED_DAY (vars.h:214) as a u16 and keeps upstream's branch order on the signed difference (the s16 gLocalTime.days minus the u16 day, as C's promoted int): zero once seven days passed, then 8 for a negative local day, otherwise 7 minus the difference truncated to the u16 return. A recorded day ahead of the local day is not clamped (9 after recording 10 gives 8, 3 gives 14) and a recorded day of 0xFFFF wraps (day 0 gives 6, day 6 gives 0), as does a negative day already stored as its u16 image. The local day count is a caller-supplied i16 and makes no RNG draw. Not modelled: where gLocalTime.days comes from (the real-time clock policy, issue #2396), the GetDaysUntilPacifidlogTMAvailable special's dispatch (crate::script::specials lists it by name only), and the PacifidlogTown_House2 script's VAR_RESULT branch that clears FLAG_RECEIVED_FANCLUB_TM_THIS_WEEK.",
           "rust_target": "crates/engine/src/event_data.rs",
