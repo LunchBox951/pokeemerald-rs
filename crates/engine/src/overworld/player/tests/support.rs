@@ -343,11 +343,6 @@ pub(super) fn walk_east_runtime() -> MapRuntime<'static> {
     forced_mover_runtime(MB_WALK_EAST, Direction::East, false)
 }
 
-/// A slide-east tile whose eastward destination is impassable.
-pub(super) fn blocked_slide_east_runtime() -> MapRuntime<'static> {
-    forced_mover_runtime(MB_SLIDE_EAST, Direction::East, true)
-}
-
 /// `MAP_SOUTH`'s landing tile carries a southward current (Route
 /// 132/133/134's connected water does at the seam), which upstream
 /// classifies on the standing tile every `PlayerStep`, crossing or not
