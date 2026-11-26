@@ -238,11 +238,7 @@ fn a_pause_whose_operand_is_ff_is_read_through_to_the_real_eos() {
         let rom = rom_of(fixture().write(stream_at(12), planted));
         let entries = written(&rom, leak(roots())).expect("a valid PAUSE 255 stream");
         let table = TrainerDefeatSpeechTable::decode(&entries[0].2).expect("canonical bytes");
-        assert_eq!(
-            table.speech(Context::ALL[12]),
-            planted,
-            "{planted:02X?}"
-        );
+        assert_eq!(table.speech(Context::ALL[12]), planted, "{planted:02X?}");
     }
 }
 

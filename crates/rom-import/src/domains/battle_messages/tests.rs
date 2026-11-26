@@ -379,12 +379,7 @@ fn a_control_operand_of_ff_is_read_through_to_the_real_eos() {
 #[test]
 fn a_control_sequence_cut_by_the_end_of_the_image_is_refused() {
     // Each is a valid prefix that needs one or more bytes the image lacks.
-    let cuts: [&[u8]; 4] = [
-        &[0xFC],
-        &[0xFC, 0x08],
-        &[0xFC, 0x04, 0xFF, 0xFF],
-        &[0xFD],
-    ];
+    let cuts: [&[u8]; 4] = [&[0xFC], &[0xFC, 0x08], &[0xFC, 0x04, 0xFF, 0xFF], &[0xFD]];
     for cut in cuts {
         let at_end = ROM_SIZE - cut.len();
         let table_rom = rom_of(fixture().write_ptr(TABLE, at(at_end)).write(at_end, cut));
