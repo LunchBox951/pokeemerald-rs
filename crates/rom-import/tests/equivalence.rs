@@ -49,11 +49,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use assets::audio::{CRY_TABLE_LEN, CRY_TABLE_PACK_ID};
+use assets::SightTrainerIntroSpeechTable;
 use assets::{
     AssetPack, CryTable, SampleId, Song, TrainerClass, TrainerClassNameTable,
     TrainerDefeatSpeechContext, TrainerDefeatSpeechTable, VoiceEntry, VoiceGroup,
 };
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
+use rom_import::SIGHT_TRAINER_INTRO_SPEECH_PACK_ID;
 use rom_import::{
     FIELD_MESSAGE_PACK_ID, TRAINER_CLASS_NAME_PACK_ID, TRAINER_DEFEAT_SPEECH_PACK_ID,
 };
@@ -81,6 +83,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "battle-message/",
     "field-message/",
     "trainer-defeat-speech/",
+    "sight-trainer-intro-speech/",
     "trainer-class-name/",
     "battle-anim/",
     "bag/",
@@ -341,6 +344,21 @@ const TRAINER_DEFEAT_SPEECH_LABELS: [&str; 14] = [
 const TRAINER_DEFEAT_SPEECH_SOURCES: [&str; 2] =
     ["data/text/trainers.inc", "data/maps/Route103/scripts.inc"];
 
+/// Route 103's nine sight-trainer object-event scripts in the table's record
+/// order. Names only: each script's intro text is read at test time from the
+/// contributor's own checkout, so no game text is committed here.
+const SIGHT_TRAINER_SCRIPTS: [&str; 9] = [
+    "Route103_EventScript_Amy",
+    "Route103_EventScript_Andrew",
+    "Route103_EventScript_Daisy",
+    "Route103_EventScript_Isabelle",
+    "Route103_EventScript_Liv",
+    "Route103_EventScript_Marcos",
+    "Route103_EventScript_Miguel",
+    "Route103_EventScript_Pete",
+    "Route103_EventScript_Rhett",
+];
+
 /// Class indices that share one display name upstream: the four
 /// `{PKMN}`-glyph classes, the two `COOLTRAINER` classes, and the two `TUBER`
 /// classes. Every other class has a name of its own.
@@ -388,6 +406,21 @@ fn synthetic_speech_table() -> Vec<u8> {
         })
         .collect();
     record_table(*b"TDFS", &streams)
+}
+
+/// A synthetic intro-speech payload: distinct made-up lines, with `{PLAYER}`
+/// in one; not game text.
+fn synthetic_sight_trainer_table() -> Vec<u8> {
+    let streams: Vec<Vec<u8>> = (0..9)
+        .map(|index| {
+            let text = match index {
+                4 => "Zz!\\n{PLAYER}, zz.$".to_owned(),
+                _ => format!("Zz {}…$", "z".repeat(index + 1)),
+            };
+            spell(&text).expect("synthetic speeches spell")
+        })
+        .collect();
+    keyed_record_table(&streams)
 }
 
 #[test]
@@ -485,6 +518,46 @@ fn the_structural_checks_accept_the_synthetic_tables_and_catch_merges() {
     assert!(speech_structure(&synthetic_class_name_table()).is_err());
 }
 
+#[test]
+fn the_intro_reference_reads_each_scripts_own_operand_and_catches_merges() {
+    let scripts = "\
+Route103_EventScript_Amy::
+\ttrainerbattle_double TRAINER_X, Want_A, Lost_A, Few_A, Callback
+\tend
+
+Route103_EventScript_Liv::
+
+\ttrainerbattle_single TRAINER_X, Want_B, Lost_B
+\tend
+
+Route103_EventScript_Andrew::
+\tmsgbox Want_A, MSGBOX_NPC
+";
+    assert_eq!(
+        reference_intro_label(scripts, "Route103_EventScript_Amy"),
+        Ok("Want_A".to_owned())
+    );
+    assert_eq!(
+        reference_intro_label(scripts, "Route103_EventScript_Liv"),
+        Ok("Want_B".to_owned())
+    );
+    // Not a trainerbattle, or defined nowhere.
+    assert!(reference_intro_label(scripts, "Route103_EventScript_Andrew").is_err());
+    assert!(reference_intro_label(scripts, "Route103_EventScript_Pete").is_err());
+
+    assert_eq!(
+        sight_trainer_intro_structure(&synthetic_sight_trainer_table()),
+        Ok(())
+    );
+    // Two scripts given one string, and a table of another domain.
+    let mut streams: Vec<Vec<u8>> = (0..9)
+        .map(|index| spell(&format!("Zz {}…$", "z".repeat(index + 1))).unwrap())
+        .collect();
+    streams[1] = streams[0].clone();
+    assert!(sight_trainer_intro_structure(&keyed_record_table(&streams)).is_err());
+    assert!(sight_trainer_intro_structure(&synthetic_speech_table()).is_err());
+}
+
 /// A pack holding just `id` with `payload`, or none.
 fn single_entry_pack(
     id: &str,
@@ -507,7 +580,7 @@ type PackDifferences = fn(
 
 #[test]
 fn the_reference_checks_catch_an_absent_corrupt_or_identically_wrong_entry() {
-    let cases: [(&str, Vec<u8>, PackDifferences); 2] = [
+    let cases: [(&str, Vec<u8>, PackDifferences); 3] = [
         (
             TRAINER_CLASS_NAME_PACK_ID,
             synthetic_class_name_table(),
@@ -517,6 +590,11 @@ fn the_reference_checks_catch_an_absent_corrupt_or_identically_wrong_entry() {
             TRAINER_DEFEAT_SPEECH_PACK_ID,
             synthetic_speech_table(),
             trainer_defeat_speech_differences,
+        ),
+        (
+            SIGHT_TRAINER_INTRO_SPEECH_PACK_ID,
+            synthetic_sight_trainer_table(),
+            sight_trainer_intro_speech_differences,
         ),
     ];
     for (id, good, differences) in cases {
@@ -556,6 +634,13 @@ fn the_reference_checks_catch_an_absent_corrupt_or_identically_wrong_entry() {
         );
         assert_eq!(one_corrupt.len(), 1, "{id}: {one_corrupt:?}");
         assert!(one_corrupt[0].contains("the checkout pack"));
+        let rom_corrupt = differences(
+            (&wrong_bytes, &wrong_index),
+            (&good_bytes, &good_index),
+            &reference,
+        );
+        assert_eq!(rom_corrupt.len(), 1, "{id}: {rom_corrupt:?}");
+        assert!(rom_corrupt[0].contains("the ROM backend"));
         // Equal packs are not enough: both wrong the same way still fails twice.
         let both_wrong = differences(
             (&wrong_bytes, &wrong_index),
@@ -699,19 +784,9 @@ fn the_rom_backend_matches_the_checkout_pack() {
         (&checkout_bytes, &checkout),
     ));
 
-    // Pinned against strings read from the local checkout, so a record both
-    // backends drop or misencode together still fails.
-    let reference = reference_checkout();
-    differences.extend(trainer_defeat_speech_differences(
+    differences.extend(reference_table_differences(
         (&rom_bytes, &imported),
         (&checkout_bytes, &checkout),
-        &reference_trainer_defeat_speech_table(&reference),
-    ));
-
-    differences.extend(trainer_class_name_differences(
-        (&rom_bytes, &imported),
-        (&checkout_bytes, &checkout),
-        &reference_trainer_class_name_table(&reference),
     ));
 
     for difference in &differences {
@@ -1437,6 +1512,32 @@ fn field_message_differences(
     differences
 }
 
+/// The text-table payloads of both backends against strings read from the
+/// local checkout, so a record both backends drop or misencode together still
+/// fails.
+fn reference_table_differences(
+    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
+) -> Vec<String> {
+    let reference = reference_checkout();
+    let mut differences = trainer_defeat_speech_differences(
+        imported,
+        checkout,
+        &reference_trainer_defeat_speech_table(&reference),
+    );
+    differences.extend(sight_trainer_intro_speech_differences(
+        imported,
+        checkout,
+        &reference_sight_trainer_intro_table(&reference),
+    ));
+    differences.extend(trainer_class_name_differences(
+        imported,
+        checkout,
+        &reference_trainer_class_name_table(&reference),
+    ));
+    differences
+}
+
 /// The `pokeemerald/` checkout `cargo xtask extract` reads, at the repo root.
 fn reference_checkout() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1614,6 +1715,64 @@ fn record_table(magic: [u8; 4], streams: &[Vec<u8>]) -> Vec<u8> {
     table
 }
 
+/// The first operand after the trainer of `script`'s first command, which
+/// must be a `trainerbattle_single` or `trainerbattle_double`: its intro text.
+fn reference_intro_label(scripts: &str, script: &str) -> Result<String, String> {
+    let mut lines = scripts.lines();
+    if !lines.any(|line| line.trim_end() == format!("{script}::")) {
+        return Err(format!("`{script}` is defined in no source"));
+    }
+    let command = lines
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .ok_or_else(|| format!("`{script}` has no command"))?;
+    let operands = ["trainerbattle_single ", "trainerbattle_double "]
+        .iter()
+        .find_map(|name| command.strip_prefix(name))
+        .ok_or_else(|| format!("`{script}` does not start with a trainerbattle command"))?;
+    operands
+        .split(',')
+        .nth(1)
+        .map(|label| label.trim().to_owned())
+        .filter(|label| !label.is_empty())
+        .ok_or_else(|| format!("`{script}` names no intro text"))
+}
+
+/// A `STIS` payload: header, then one `key_len`, key, `byte_len`, `bytes`
+/// record per stream in [`SIGHT_TRAINER_SCRIPTS`] order; built here so a
+/// shared encoder cannot vouch for itself.
+fn keyed_record_table(streams: &[Vec<u8>]) -> Vec<u8> {
+    let mut table = b"STIS".to_vec();
+    table.extend_from_slice(&1u16.to_le_bytes());
+    let count = u16::try_from(streams.len()).expect("a u16 record count");
+    table.extend_from_slice(&count.to_le_bytes());
+    for (script, stream) in SIGHT_TRAINER_SCRIPTS.iter().zip(streams) {
+        let key_len = u16::try_from(script.len()).expect("a u16 key length");
+        table.extend_from_slice(&key_len.to_le_bytes());
+        table.extend_from_slice(script.as_bytes());
+        let len = u32::try_from(stream.len()).expect("a stream fits in u32");
+        table.extend_from_slice(&len.to_le_bytes());
+        table.extend_from_slice(stream);
+    }
+    table
+}
+
+/// The `sight-trainer-intro-speech/table` payload derived from the local
+/// checkout: each script's own `trainerbattle` intro operand, through the
+/// trainer text, spelled by hand.
+fn reference_sight_trainer_intro_table(checkout: &Path) -> Result<Vec<u8>, String> {
+    let scripts = read_reference(checkout, "data/maps/Route103/scripts.inc")?;
+    let trainers = read_reference(checkout, "data/text/trainers.inc")?;
+    let streams = SIGHT_TRAINER_SCRIPTS
+        .iter()
+        .map(|script| {
+            let label = reference_intro_label(&scripts, script)?;
+            reference_speech(&[trainers.as_str()], &label)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(keyed_record_table(&streams))
+}
+
 /// The `trainer-class-name/table` payload derived from the local checkout.
 fn reference_trainer_class_name_table(checkout: &Path) -> Result<Vec<u8>, String> {
     let constants = read_reference(checkout, "include/constants/trainers.h")?;
@@ -1698,6 +1857,24 @@ fn speech_structure(payload: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Invariants of the intro payload that carry no game text: it decodes, and
+/// the nine scripts hold nine different strings, Amy's and Liv's included.
+fn sight_trainer_intro_structure(payload: &[u8]) -> Result<(), String> {
+    let table = SightTrainerIntroSpeechTable::decode(payload).map_err(|err| err.to_string())?;
+    let speeches: BTreeSet<&[u8]> = SIGHT_TRAINER_SCRIPTS
+        .iter()
+        .map(|script| {
+            table
+                .speech(script)
+                .ok_or(format!("{script} has no speech"))
+        })
+        .collect::<Result<_, _>>()?;
+    if speeches.len() != SIGHT_TRAINER_SCRIPTS.len() {
+        return Err("the nine intro speeches are not nine different strings".to_owned());
+    }
+    Ok(())
+}
+
 /// Each backend's `id` payload checked against `reference`, derived from the
 /// local checkout, and against `structure`: named by id and bytes so a
 /// record both backends drop, merge, reorder, or misencode together still
@@ -1763,6 +1940,20 @@ fn trainer_defeat_speech_differences(
         checkout,
         reference,
         speech_structure,
+    )
+}
+
+fn sight_trainer_intro_speech_differences(
+    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    reference: &Result<Vec<u8>, String>,
+) -> Vec<String> {
+    reference_differences(
+        SIGHT_TRAINER_INTRO_SPEECH_PACK_ID,
+        imported,
+        checkout,
+        reference,
+        sight_trainer_intro_structure,
     )
 }
 

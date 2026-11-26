@@ -9,8 +9,8 @@ use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
     field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
-    opening_scene, party_menu, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
-    trainer_class_names, trainer_defeat_speeches,
+    opening_scene, party_menu, poke_ball, sight_trainer_intro_speeches, sprites, starter_chooser,
+    text_window, tilesets, title, trainer_class_names, trainer_defeat_speeches,
 };
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
@@ -51,6 +51,7 @@ fn complete_inventory() -> Vec<PackEntry> {
             rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
             rom_import::FIELD_MESSAGE_PACK_ID.to_owned(),
             rom_import::TRAINER_DEFEAT_SPEECH_PACK_ID.to_owned(),
+            rom_import::SIGHT_TRAINER_INTRO_SPEECH_PACK_ID.to_owned(),
             rom_import::TRAINER_CLASS_NAME_PACK_ID.to_owned(),
             rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
         ])
@@ -122,6 +123,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             field_messages::locate(ctx, &mut report).map(|_| ())
         } else if domain == "trainer_defeat_speeches" {
             trainer_defeat_speeches::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "sight_trainer_intro_speeches" {
+            sight_trainer_intro_speeches::locate(ctx, &mut report).map(|_| ())
         } else if domain == "trainer_class_names" {
             trainer_class_names::locate(ctx, &mut report).map(|_| ())
         } else {
@@ -332,6 +335,17 @@ fn a_pack_missing_the_trainer_defeat_speech_table_is_refused() {
         without(id),
         id,
         "trainer_defeat_speeches",
+    );
+}
+
+#[test]
+fn a_pack_missing_the_sight_trainer_intro_speech_table_is_refused() {
+    let id = rom_import::SIGHT_TRAINER_INTRO_SPEECH_PACK_ID;
+    assert_refused(
+        "no-sight-trainer-intro-speech-table",
+        without(id),
+        id,
+        "sight_trainer_intro_speeches",
     );
 }
 
