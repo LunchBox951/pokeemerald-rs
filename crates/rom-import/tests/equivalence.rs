@@ -782,25 +782,9 @@ fn the_rom_backend_matches_the_checkout_pack() {
         (&checkout_bytes, &checkout),
     ));
 
-    // Pinned against strings read from the local checkout, so a record both
-    // backends drop or misencode together still fails.
-    let reference = reference_checkout();
-    differences.extend(trainer_defeat_speech_differences(
+    differences.extend(reference_table_differences(
         (&rom_bytes, &imported),
         (&checkout_bytes, &checkout),
-        &reference_trainer_defeat_speech_table(&reference),
-    ));
-
-    differences.extend(sight_trainer_intro_speech_differences(
-        (&rom_bytes, &imported),
-        (&checkout_bytes, &checkout),
-        &reference_sight_trainer_intro_table(&reference),
-    ));
-
-    differences.extend(trainer_class_name_differences(
-        (&rom_bytes, &imported),
-        (&checkout_bytes, &checkout),
-        &reference_trainer_class_name_table(&reference),
     ));
 
     for difference in &differences {
@@ -1513,6 +1497,32 @@ fn field_message_differences(
             ));
         }
     }
+    differences
+}
+
+/// The text-table payloads of both backends against strings read from the
+/// local checkout, so a record both backends drop or misencode together still
+/// fails.
+fn reference_table_differences(
+    imported: (&[u8], &BTreeMap<String, DirectoryEntry>),
+    checkout: (&[u8], &BTreeMap<String, DirectoryEntry>),
+) -> Vec<String> {
+    let reference = reference_checkout();
+    let mut differences = trainer_defeat_speech_differences(
+        imported,
+        checkout,
+        &reference_trainer_defeat_speech_table(&reference),
+    );
+    differences.extend(sight_trainer_intro_speech_differences(
+        imported,
+        checkout,
+        &reference_sight_trainer_intro_table(&reference),
+    ));
+    differences.extend(trainer_class_name_differences(
+        imported,
+        checkout,
+        &reference_trainer_class_name_table(&reference),
+    ));
     differences
 }
 
