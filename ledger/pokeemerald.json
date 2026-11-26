@@ -32916,6 +32916,12 @@
     },
     "src/frontier_util.c": {
       "artifacts": {
+        "sBattlePointAwards": {
+          "reason": "src/frontier_util.c:500-592 sBattlePointAwards, transcribed as the full 30 row by 7 facility by 4 mode rectangle of Battle Point awards behind battle_point_award, which takes a table row and checked FrontierFacility and FrontierMode values (TryFrom their FRONTIER_FACILITY_* and FRONTIER_MODE_* ids) and refuses a row or id outside the table. The cells C zero-fills where the initializer omits modes, and the Battle Arena's explicit zeros in rows 10 and 11, are stored as zeros and are values, not an invalid-combination marker. Pinned cell by cell by unit tests written column-wise and by an ignored test that re-parses the source. NOT modelled: the streak-to-row arithmetic and clamping, the Brain bonus, awarding and capping saved Battle Points (src/frontier_util.c:1853-1910), facility execution, and link play.",
+          "rust_target": "crates/assets/src/frontier_battle_points.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "sFrontierBrainStreakAppearances": {
           "reason": "src/frontier_util.c:86-95 sFrontierBrainStreakAppearances, transcribed as the seven facility rows of four bytes (silver streak, gold streak, repeat interval, streak adjustment), behind frontier_brain_thresholds, which refuses a facility id outside the table. The Dome's and Pyramid's zero adjustment stays distinct from the other facilities' one. Pinned field by field by unit tests and, with the battle_pike.c copy, by an ignored test that re-parses both source files. NOT modelled: GetFrontierBrainStatus (src/frontier_util.c:1659-1689) and the Brain status check at :2595-2600, symbol awarding, the Brain teams and speeches, and battle wiring.",
           "rust_target": "crates/assets/src/frontier_brain_thresholds.rs",
