@@ -10,6 +10,7 @@ mod battle_effect;
 mod battle_interface;
 mod battle_message;
 mod battler;
+mod door_animation;
 mod error;
 mod event_scripts;
 mod evolution_scene;
@@ -53,6 +54,10 @@ pub use battle_message::{
     TABLE_START as BATTLE_MESSAGE_TABLE_START,
 };
 pub use battler::{BattlerDirection, BattlerHandle, PaletteVariant};
+pub use door_animation::{
+    DoorAnimationHandle, DoorAnimationRecord, DoorAnimationTable, DoorSize, DoorSound,
+    DoorTableError, DOOR_PALETTE_SLOTS,
+};
 pub use error::PackError;
 pub use evolution_scene::EvolutionSceneHandle;
 pub use field_message::{FieldMessage, FieldMessageError, FieldMessageTable, FIELD_MESSAGE_COUNT};

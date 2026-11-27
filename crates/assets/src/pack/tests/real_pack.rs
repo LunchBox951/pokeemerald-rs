@@ -1,4 +1,4 @@
-use super::super::AssetPack;
+use super::super::{AssetPack, DoorSize, DoorSound};
 use crate::audio::{SampleId, SongEvent, VoiceGroupId};
 
 const EXPECTED_PALETTE_COLOR_COUNT: u16 = 16;
@@ -579,6 +579,50 @@ fn real_pack_poke_ball_has_the_sheet_the_palette_and_the_open_sheet() {
     assert_eq!(leading, FIRST_COLORS);
     assert_eq!((ball.open_sheet.width, ball.open_sheet.height), (16, 16));
     assert_eq!(ball.open_sheet.pixels.len(), 16 * 16);
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_door_animations_resolve_by_metatile_and_miss_typed() {
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    // `sDoorAnimGraphicsTable`: Littleroot's house door, Birch's Lab, and the
+    // Battle Tower multi-corridor door, the one two-metatile door.
+    let littleroot = pack
+        .door_animation(0x248)
+        .expect("a valid table")
+        .expect("a door");
+    assert_eq!((littleroot.sheet.width, littleroot.sheet.height), (16, 96));
+    assert_eq!(littleroot.size, DoorSize::OneTile);
+    assert_eq!(littleroot.sound, DoorSound::Normal);
+    assert_eq!(littleroot.palette_slots, [10, 10, 6, 6, 6, 6, 6, 6]);
+    let lab = pack
+        .door_animation(0x249)
+        .expect("a valid table")
+        .expect("a door");
+    assert_eq!(lab.palette_slots, [8; 8]);
+    let large = pack
+        .door_animation(0x2AD)
+        .expect("a valid table")
+        .expect("a door");
+    assert_eq!((large.sheet.width, large.sheet.height), (32, 96));
+    assert_eq!(
+        (large.size, large.sound),
+        (DoorSize::Large, DoorSound::Sliding)
+    );
+    // The tents' sheets are taller than the rest.
+    let tent = pack
+        .door_animation(0x393)
+        .expect("a valid table")
+        .expect("a door");
+    assert_eq!(tent.sheet.height, 128);
+
+    for metatile in [0, 1, 0x247, 0x24A, u16::MAX] {
+        assert!(pack
+            .door_animation(metatile)
+            .expect("a valid table")
+            .is_none());
+    }
 }
 
 #[test]

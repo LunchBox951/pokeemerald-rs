@@ -12909,6 +12909,320 @@
       "status": "pending"
     },
     "graphics/door_anims": {
+      "artifacts": {
+        "abandoned_ship.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_AbandonedShip is the raw .4bpp build of abandoned_ship.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/abandoned_ship at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "abandoned_ship_room.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_AbandonedShipRoom is the raw .4bpp build of abandoned_ship_room.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/abandoned_ship_room at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_arena.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleArena is the raw .4bpp build of battle_arena.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_arena at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_arena_lobby.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleArenaLobby is the raw .4bpp build of battle_arena_lobby.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_arena_lobby at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_dome.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleDome is the raw .4bpp build of battle_dome.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_dome at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_dome_corridor.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleDomeCorridor is the raw .4bpp build of battle_dome_corridor.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_dome_corridor at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_dome_lobby.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleDomeLobby is the raw .4bpp build of battle_dome_lobby.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_dome_lobby at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_dome_pre_battle_room.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleDomePreBattleRoom is the raw .4bpp build of battle_dome_pre_battle_room.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/battle_dome_pre_battle_room at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_factory.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleFactory is the raw .4bpp build of battle_factory.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_factory at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_frontier.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleFrontier is the raw .4bpp build of battle_frontier.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_frontier at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_frontier_sliding.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleFrontierSliding is the raw .4bpp build of battle_frontier_sliding.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_frontier_sliding at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_palace_lobby.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattlePalaceLobby is the raw .4bpp build of battle_palace_lobby.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_palace_lobby at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_tent.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleTent is the raw .4bpp build of battle_tent.png, a 16x128 door animation sheet. The Battle Tent doors share this sheet. The extractor publishes it as door-animation/image/battle_tent at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_tent_interior.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleTentInterior is the raw .4bpp build of battle_tent_interior.png, a 16x128 door animation sheet. The extractor publishes it as door-animation/image/battle_tent_interior at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_tower.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleTower is the raw .4bpp build of battle_tower.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_tower at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_tower_elevator.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleTowerElevator is the raw .4bpp build of battle_tower_elevator.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_tower_elevator at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_tower_multi_corridor.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleTowerMultiCorridor is the raw .4bpp build of battle_tower_multi_corridor.png, a 32x96 door animation sheet. Its sheet is built with -mwidth 2 -mheight 4 and the extractor publishes the whole 32x96 raster in row-major order. The extractor publishes it as door-animation/image/battle_tower_multi_corridor at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "battle_tower_old.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BattleTowerOld is the raw .4bpp build of battle_tower_old.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/battle_tower_old at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "birchs_lab.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_BirchsLab is the raw .4bpp build of birchs_lab.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/birchs_lab at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cable_club.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_CableClub is the raw .4bpp build of cable_club.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/cable_club at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "contest.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Contest is the raw .4bpp build of contest.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/contest at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cycling_road.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_CyclingRoad is the raw .4bpp build of cycling_road.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/cycling_road at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "dewford.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Dewford is the raw .4bpp build of dewford.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/dewford at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "fallarbor_dark_roof.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_FallarborDarkRoof is the raw .4bpp build of fallarbor_dark_roof.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/fallarbor_dark_roof at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "fallarbor_light_roof.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_FallarborLightRoof is the raw .4bpp build of fallarbor_light_roof.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/fallarbor_light_roof at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "general.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_General is the raw .4bpp build of general.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/general at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gym.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Gym is the raw .4bpp build of gym.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/gym at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "lilycove.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Lilycove is the raw .4bpp build of lilycove.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/lilycove at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "lilycove_dept_store.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_LilycoveDeptStore is the raw .4bpp build of lilycove_dept_store.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/lilycove_dept_store at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "lilycove_dept_store_elevator.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_LilycoveDeptStoreElevator is the raw .4bpp build of lilycove_dept_store_elevator.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/lilycove_dept_store_elevator at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "lilycove_wooden.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_LilycoveWooden is the raw .4bpp build of lilycove_wooden.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/lilycove_wooden at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "littleroot.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Littleroot is the raw .4bpp build of littleroot.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/littleroot at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "mauville.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Mauville is the raw .4bpp build of mauville.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/mauville at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "mossdeep.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Mossdeep is the raw .4bpp build of mossdeep.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/mossdeep at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "mossdeep_space_center.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_MossdeepSpaceCenter is the raw .4bpp build of mossdeep_space_center.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/mossdeep_space_center at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "oldale.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Oldale is the raw .4bpp build of oldale.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/oldale at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "pacifidlog.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Pacifidlog is the raw .4bpp build of pacifidlog.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/pacifidlog at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "petalburg_gym.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_PetalburgGym is the raw .4bpp build of petalburg_gym.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/petalburg_gym at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "poke_center.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_PokeCenter is the raw .4bpp build of poke_center.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/poke_center at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "poke_mart.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_PokeMart is the raw .4bpp build of poke_mart.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/poke_mart at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "pokemon_league.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_PokemonLeague is the raw .4bpp build of pokemon_league.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/pokemon_league at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "rustboro_gray.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_RustboroGray is the raw .4bpp build of rustboro_gray.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/rustboro_gray at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "rustboro_tan.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_RustboroTan is the raw .4bpp build of rustboro_tan.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/rustboro_tan at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "safari_zone.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_SafariZone is the raw .4bpp build of safari_zone.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/safari_zone at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "slateport.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Slateport is the raw .4bpp build of slateport.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/slateport at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sootopolis.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Sootopolis is the raw .4bpp build of sootopolis.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/sootopolis at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sootopolis_peaked_roof.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_SootopolisPeakedRoof is the raw .4bpp build of sootopolis_peaked_roof.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/sootopolis_peaked_roof at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "trainer_hill_lobby_elevator.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_TrainerHillLobbyElevator is the raw .4bpp build of trainer_hill_lobby_elevator.png, a 16x96 door animation sheet. The extractor publishes it as door-animation/image/trainer_hill_lobby_elevator at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "trainer_hill_roof_elevator.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_TrainerHillRoofElevator is the raw .4bpp build of trainer_hill_roof_elevator.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/trainer_hill_roof_elevator at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "unused_battle_frontier.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_UnusedBattleFrontier is the raw .4bpp build of unused_battle_frontier.png, a 16x96 door animation sheet. The PNG is a 4-bit grayscale image, decoded to its indices. The extractor publishes it as door-animation/image/unused_battle_frontier at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "unused_bottom.png": {
+          "status": "pending"
+        },
+        "unused_top.png": {
+          "status": "pending"
+        },
+        "verdanturf.png": {
+          "reason": "src/field_door.c sDoorAnimTiles_Verdanturf is the raw .4bpp build of verdanturf.png, a 16x96 door animation sheet. The PNG is 8-bit indexed, so the extractor keeps the low nibble of each index as gbagfx does for the 4bpp sheet. The extractor publishes it as door-animation/image/verdanturf at 4 bits and AssetPack::door_animation returns it for the door metatiles its table rows name. The same normalized pack entry is also produced directly from the player's own ROM by crates/rom-import/src/domains/door_animation.rs (--import-rom) from the generated BPEE rev-0 profile, equivalence-checked entry for entry against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.scene",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -32422,6 +32736,14 @@
       "status": "pending"
     },
     "src/field_door.c": {
+      "artifacts": {
+        "door_animation_table": {
+          "reason": "src/field_door.c:171-281 sDoorAnimPalettes_* and sDoorAnimGraphicsTable map each of the 53 animating door metatiles to a sheet, a sound (normal, sliding, arena), a size class (one metatile column or two) and eight palette banks. The extractor restates the table by meaning and writes it as the door-animation/table entry in the schema owned by crates/assets/src/pack/door_animation.rs; AssetPack::door_animation returns a metatile's sheet, size class, sound and banks, and a metatile the table does not list is Ok(None). The importer crates/rom-import/src/domains/door_animation.rs reads the metatile, sound, size, both pointers and the terminator of every ROM row, equivalence-checked against the checkout pack by crates/rom-import/tests/equivalence.rs. Sound is metadata only. sDoorAnimTiles_UnusedTops, sDoorAnimTiles_UnusedBottoms and sDoorAnimPalettes_Unused have no table row, so no metatile reaches them and they are not extracted; door animation tasks, frame timing, drawing and sound playback are not modelled.",
+          "rust_target": "crates/xtask/src/extract/door_animation.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

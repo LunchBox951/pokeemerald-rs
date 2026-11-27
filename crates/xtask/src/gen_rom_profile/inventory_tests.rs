@@ -7,18 +7,18 @@ use rom_import::fixture::RomFixture;
 use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
-    bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
-    field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
-    opening_scene, party_menu, poke_ball, sight_trainer_intro_speeches, sprites, starter_chooser,
-    text_window, tilesets, title, trainer_class_names, trainer_defeat_speeches,
+    bag, battle_anims, battle_interface, battle_messages, battlers, door_animation,
+    evolution_scene, field_messages, fonts, interface, inventory, layouts, locate_profile,
+    naming_screen, opening_scene, party_menu, poke_ball, sight_trainer_intro_speeches, sprites,
+    starter_chooser, text_window, tilesets, title, trainer_class_names, trainer_defeat_speeches,
 };
 use crate::extract::scope::{
-    battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
-    healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids, opening_scene_ids,
-    party_menu_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
-    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, GENERAL_1_PALETTE_ID,
-    INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS, TALL_GRASS_IMAGE_ID,
-    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    battle_interface_ids, door_animation_ids, evolution_scene_ids, healthbox_battle_bar_id,
+    healthbox_element_ids, healthbox_frame_ids, healthbox_table_ids, layout_ids, naming_screen_ids,
+    opening_scene_ids, party_menu_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids,
+    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
+    GENERAL_1_PALETTE_ID, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS,
+    TALL_GRASS_IMAGE_ID, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -67,6 +67,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(healthbox_element_ids())
         .chain(healthbox_frame_ids())
         .chain(poke_ball_ids())
+        .chain(door_animation_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -113,6 +114,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             interface::locate(ctx, &mut report).map(|_| ())
         } else if domain == "poke_ball" {
             poke_ball::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "door_animation" {
+            door_animation::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
             battlers::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_anims" {
@@ -180,6 +183,7 @@ fn the_fixed_inventory_ids_are_unique() {
         naming_screen_ids(),
         party_menu_ids(),
         poke_ball_ids(),
+        door_animation_ids(),
         trainer_battler_ids(),
     ] {
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
@@ -966,4 +970,27 @@ fn a_pack_missing_a_poke_ball_entry_is_refused() {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "poke_ball");
     }
+}
+
+#[test]
+fn a_pack_missing_a_door_animation_entry_is_refused() {
+    for id in door_animation_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "door_animation");
+    }
+}
+
+#[test]
+fn a_surplus_door_animation_entry_is_refused_by_id() {
+    let surplus = "door-animation/image/unused_top";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-door-animation", &rom, entries, |ctx| {
+        let err = locate_profile(ctx, &mut Vec::new()).expect_err("a surplus entry is refused");
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+    });
 }

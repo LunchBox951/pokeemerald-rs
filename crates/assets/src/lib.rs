@@ -226,12 +226,13 @@ pub use items::{
 };
 pub use move_names::MoveNames;
 pub use pack::{
-    AssetPack, BagAssets, BattlerDirection, BattlerHandle, BirchSpeechHandle, EntryKind,
+    AssetPack, BagAssets, BattlerDirection, BattlerHandle, BirchSpeechHandle, DoorAnimationHandle,
+    DoorAnimationRecord, DoorAnimationTable, DoorSize, DoorSound, DoorTableError, EntryKind,
     EvolutionSceneHandle, ImageRef, PackError, PaletteRef, PaletteVariant, PalettedImage,
     PartyMenuBackground, PartyMenuButton, PartyMenuHandle, PartyMenuSlot, PcWallpaperHandle,
     PcWallpaperId, PcWallpaperTile, PokeBallHandle, PokedexGraphicsHandle, StarterChooserHandle,
     StarterPreviewHandle, StarterSpecies, TextPrinterDownArrow, TilesetHandle,
-    TrainerBattlerHandle, TrainerPicHandle, WallClockHandle,
+    TrainerBattlerHandle, TrainerPicHandle, WallClockHandle, DOOR_PALETTE_SLOTS,
 };
 pub use pack::{
     SightTrainerIntroSpeechTable, SIGHT_TRAINER_INTRO_COUNT, SIGHT_TRAINER_INTRO_SCRIPTS,
