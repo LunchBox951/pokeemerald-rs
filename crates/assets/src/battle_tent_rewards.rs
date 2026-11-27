@@ -107,8 +107,14 @@ mod tests {
 
     #[test]
     fn pools_are_named_per_tent() {
-        assert_eq!(tent_reward(BattleTent::Verdanturf, 0), Ok(ItemId::NEST_BALL));
-        assert_eq!(tent_reward(BattleTent::Fallarbor, 0), Ok(ItemId::HYPER_POTION));
+        assert_eq!(
+            tent_reward(BattleTent::Verdanturf, 0),
+            Ok(ItemId::NEST_BALL)
+        );
+        assert_eq!(
+            tent_reward(BattleTent::Fallarbor, 0),
+            Ok(ItemId::HYPER_POTION)
+        );
         assert_eq!(tent_reward(BattleTent::Slateport, 0), Ok(ItemId::FULL_HEAL));
     }
 
