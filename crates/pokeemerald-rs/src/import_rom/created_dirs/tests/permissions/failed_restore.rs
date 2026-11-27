@@ -5,6 +5,9 @@
 //! the thread-group leader's descriptor table. A test thread that unshared
 //! its own table before reopening the level holds it at a number that table
 //! never had, so the fallback finds nothing, as with `/proc` unmounted.
+//! A level whose owner read is left would then be restored through a
+//! readable open from its parent, so that open is refused as the mode bits
+//! refuse it once the read is gone.
 //! Root, which may lack `unshare(2)` in a container, instead hands the
 //! level to another user and gives up the capabilities that override
 //! ownership and mode bits, so both chmods are refused.
@@ -14,6 +17,7 @@ use std::path::Path;
 
 use rustix::thread::{CapabilitySet, CapabilitySets, UnshareFlags};
 
+use super::super::dest::readable_open_refused;
 use super::super::{entry_names, fs, TempDir};
 
 /// `nobody`, which root hands the level to.
@@ -21,11 +25,14 @@ const NOBODY: u32 = 65_534;
 
 /// Fails the owner-access restore of `level`, about to be reopened on this
 /// thread with its owner's search gone, and answers the capabilities to
-/// put back; `Err` when this environment refuses the unshare.
+/// put back and, off root, the guard holding the readable open refused;
+/// `Err` when this environment refuses the unshare.
 ///
 /// Must run on a thread other than the thread-group leader, which alone
 /// keeps the table `/proc/self/fd` reads.
-fn fail_restore_of(level: &Path) -> rustix::io::Result<CapabilitySets> {
+fn fail_restore_of(
+    level: &Path,
+) -> rustix::io::Result<(CapabilitySets, Option<readable_open_refused::Guard>)> {
     let held = rustix::thread::capabilities(None).unwrap();
     let mut bound_by_modes = held;
     bound_by_modes.effective -=
@@ -33,6 +40,7 @@ fn fail_restore_of(level: &Path) -> rustix::io::Result<CapabilitySets> {
     if rustix::process::geteuid().is_root() {
         std::os::unix::fs::chown(level, Some(NOBODY), None).unwrap();
         rustix::thread::set_capabilities(None, bound_by_modes).unwrap();
+        Ok((held, None))
     } else {
         rustix::thread::set_capabilities(None, bound_by_modes).unwrap();
         // SAFETY: only this thread's table is unshared, and no descriptor
@@ -41,8 +49,8 @@ fn fail_restore_of(level: &Path) -> rustix::io::Result<CapabilitySets> {
         // what was open before stay open, unowned, until this child
         // process exits.
         unsafe { rustix::thread::unshare_unsafe(UnshareFlags::FILES) }?;
+        Ok((held, Some(readable_open_refused::refuse())))
     }
-    Ok(held)
 }
 
 /// Creates `a/b` under `mask`, a umask taking the owner's write and
@@ -71,13 +79,16 @@ fn assert_failed_restore_is_rolled_back(label: &'static str, mask: u32) {
             },
             &mut || None,
         );
-        match induced.unwrap() {
-            Ok(held) => rustix::thread::set_capabilities(None, held).unwrap(),
+        let _refused = match induced.unwrap() {
+            Ok((held, refused)) => {
+                rustix::thread::set_capabilities(None, held).unwrap();
+                refused
+            }
             Err(refused) => {
                 rustix::process::umask(previous);
                 panic!("failure boundary not exercised: unshare(CLONE_FILES) refused ({refused})");
             }
-        }
+        };
         let Err((created, source)) = result else {
             panic!("creation succeeded with the owner-access restore failing");
         };

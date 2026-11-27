@@ -466,6 +466,10 @@ pub(super) fn open_readable_created_at(
     parent: &std::os::fd::OwnedFd,
     name: &OsStr,
 ) -> io::Result<std::os::fd::OwnedFd> {
+    #[cfg(test)]
+    if readable_open_refused::get() {
+        return Err(rustix::io::Errno::ACCESS.into());
+    }
     Ok(rustix::fs::openat(
         parent,
         name,
@@ -475,6 +479,36 @@ pub(super) fn open_readable_created_at(
             | rustix::fs::OFlags::NOFOLLOW,
         rustix::fs::Mode::empty(),
     )?)
+}
+
+/// Test seam: makes [`open_readable_created_at`] refuse on this thread with
+/// `EACCES`, as the mode bits do once the owner's read is gone, for a level
+/// whose read bit the runner still holds.
+#[cfg(all(test, unix))]
+pub(super) mod readable_open_refused {
+    use std::cell::Cell;
+
+    thread_local! {
+        static REFUSED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(super) fn get() -> bool {
+        REFUSED.with(Cell::get)
+    }
+
+    /// Holds the open refused until dropped.
+    pub(in crate::import_rom) struct Guard(());
+
+    pub(in crate::import_rom) fn refuse() -> Guard {
+        REFUSED.with(|flag| flag.set(true));
+        Guard(())
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            REFUSED.with(|flag| flag.set(false));
+        }
+    }
 }
 
 /// [`restore_directory_owner_access`] for a descriptor that is a real open
