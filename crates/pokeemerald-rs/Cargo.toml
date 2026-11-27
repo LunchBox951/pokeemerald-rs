@@ -65,7 +65,9 @@ rustix = { version = "1.1", default-features = false, features = ["std", "fs", "
 # `crate::pack_test_support::ScratchClaim` (compiled under `cfg(test)` only)
 # removes its scratch file on Windows through `win-fs`'s handle identity and
 # verified-handle delete, so a replacement under the same name is never
-# unlinked. Dev-only, so the shipped Windows binary gains no edge; in-workspace,
+# unlinked. `crate::scratch_dir_test_support::ScratchDir` (also `cfg(test)`)
+# verifies its scratch directory the same way before it removes anything
+# inside it. Dev-only, so the shipped Windows binary gains no edge; in-workspace,
 # not a new external dependency, and `win-fs` owns the one `windows-sys` use
 # (dependency ledger, `README.md`).
 [target.'cfg(windows)'.dev-dependencies]

@@ -56,6 +56,9 @@ fn a_failed_import_names_the_partial_file_its_own_cleanup_left_behind() {
 
     let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
         let temp_path = find_temp_path(&dir.path);
+        // Record the importer's temp name so the fixture's drop removes the
+        // occupant planted at it.
+        let _ = dir.join(temp_path.file_name().expect("a temp file name"));
         fs::remove_file(&temp_path).expect("the temp file removes");
         fs::create_dir(&temp_path).expect("the directory takes the freed name");
         fs::write(temp_path.join("occupant"), b"occupant").expect("the occupant writes");

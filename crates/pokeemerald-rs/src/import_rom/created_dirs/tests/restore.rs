@@ -85,7 +85,7 @@ fn a_capture_no_name_takes_back_is_reported_at_its_exact_quarantine_path() {
     fs::write(capture.join("keep"), b"x").unwrap();
     fs::create_dir(dir.join("new")).unwrap();
     for n in 0..16 {
-        fs::create_dir(dir.join(&format!("new.restored-{n}"))).unwrap();
+        fs::create_dir(dir.join(format!("new.restored-{n}"))).unwrap();
     }
     fs::create_dir(dir.join(".undo-other")).unwrap();
 

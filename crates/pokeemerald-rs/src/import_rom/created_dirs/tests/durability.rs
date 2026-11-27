@@ -259,6 +259,8 @@ fn a_full_table_after_acquisition_still_syncs_every_shed_parent() {
         return;
     }
     let dir = TempDir::new("shed-parent-full-table");
+    // Every level hangs off `l0`, the one name the fixture must remove.
+    let _ = dir.join("l0");
     let paths: Vec<_> = ["l0", "l1", "l2", "l3"]
         .iter()
         .scan(dir.path.clone(), |path, name| {

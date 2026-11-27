@@ -306,12 +306,9 @@ fn a_created_level_keeps_owner_access_and_every_other_bit_as_the_umask_left_it()
     // Each level must be usable by the time the next is made inside it. All
     // keep the owner search bit, as the Apple pin needs.
     let dir = TempDir::new("owner-access");
-    let levels: Vec<PathBuf> = ["a", "b", "c", "d"]
+    let levels: Vec<PathBuf> = ["a", "a/b", "a/b/c", "a/b/c/d"]
         .iter()
-        .scan(dir.path.clone(), |parent, name| {
-            *parent = parent.join(name);
-            Some(parent.clone())
-        })
+        .map(|level| dir.join(level))
         .collect();
     let left_by_umask = [0o333, 0o500, 0o555, 0o750];
     let mut next = 0;
@@ -340,6 +337,7 @@ fn a_created_level_keeps_owner_access_and_every_other_bit_as_the_umask_left_it()
         .map(|level| fs::metadata(level).unwrap().permissions().mode() & 0o7777)
         .collect();
     assert_eq!(modes, [0o733, 0o700, 0o755, 0o750]);
+    dir.assert_cleans_up();
 }
 
 #[cfg(unix)]
@@ -414,6 +412,8 @@ fn a_destination_with_dotdot_levels_pins_every_directory_it_actually_creates() {
     // component: 11 lexical levels but 6 real directories, the injected
     // budget.
     let dir = TempDir::new("dotdot-budget");
+    // The `..` climbs land `final` beside `d`, so record its name too.
+    let _ = dir.join("final");
     let pin_limit = 6;
     let mut level = dir.join("d");
     for _ in 1..5 {
@@ -459,7 +459,7 @@ fn a_valid_deep_destination_creates_or_fully_rolls_back() {
     for _ in 1..total {
         level = level.join("d");
     }
-    let _fillers = fill_descriptor_table_leaving(4);
+    let fillers = fill_descriptor_table_leaving(4);
     match create_directories(&level) {
         Ok(created) => assert_eq!(created.len(), total),
         Err((created, source)) => {
@@ -473,6 +473,15 @@ fn a_valid_deep_destination_creates_or_fully_rolls_back() {
             );
             panic!("valid deep destination failed to create: {source}");
         }
+    }
+    // The child runs with a 36-descriptor limit, which the fixture's
+    // recursive removal of a 37-level tree would exceed (one open directory
+    // per level), leaving the tree behind. Remove the levels deepest first
+    // by path, which needs no descriptor.
+    drop(fillers);
+    for _ in 0..total {
+        let _ = std::fs::remove_dir(&level);
+        level.pop();
     }
 }
 
