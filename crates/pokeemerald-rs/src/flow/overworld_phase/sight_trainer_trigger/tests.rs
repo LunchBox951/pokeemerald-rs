@@ -1,5 +1,6 @@
 use super::*;
 use crate::flow::overworld_phase::test_support::admitted_objects;
+use engine::overworld::NoConnectedMaps;
 
 /// [`SIGHT_TRAINERS`] must cover exactly Route 103's own nine
 /// `TRAINER_TYPE_NORMAL` object events, by script name -- pinned against
@@ -122,7 +123,7 @@ fn find_sight_trainer_matches_rhett_and_is_gated_by_the_defeated_flag() {
     let objects = admitted_objects(scene.map_events().object_events, &player, &EventData::new());
 
     let event_data = EventData::new();
-    let scan = find_sight_trainer(&objects, &runtime, &player, &event_data);
+    let scan = find_sight_trainer(&objects, &runtime, &NoConnectedMaps, &player, &event_data);
     let (_, entry) = scan
         .selected
         .expect("Rhett's own south-facing cone must reach a player one tile south of him");
@@ -133,7 +134,7 @@ fn find_sight_trainer_matches_rhett_and_is_gated_by_the_defeated_flag() {
     defeated
         .flag_set(TRAINER_FLAGS_START + 703)
         .expect("TRAINER_FLAGS_START + 703 is an ordinary ranged flag id");
-    let scan = find_sight_trainer(&objects, &runtime, &player, &defeated);
+    let scan = find_sight_trainer(&objects, &runtime, &NoConnectedMaps, &player, &defeated);
     assert!(
         scan.selected.is_none(),
         "an already-defeated trainer must not be selected even though the geometry \
@@ -158,7 +159,13 @@ fn a_double_battle_cone_is_reported_as_reached_but_never_selected() {
     let player = PlayerState::new((64, 13), 3, engine::overworld::Direction::North);
     let objects = admitted_objects(scene.map_events().object_events, &player, &EventData::new());
 
-    let scan = find_sight_trainer(&objects, &runtime, &player, &EventData::new());
+    let scan = find_sight_trainer(
+        &objects,
+        &runtime,
+        &NoConnectedMaps,
+        &player,
+        &EventData::new(),
+    );
     assert_eq!(
         scan.doubles_refused,
         vec![TrainerId(481)],

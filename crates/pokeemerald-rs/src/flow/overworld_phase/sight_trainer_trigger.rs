@@ -41,10 +41,11 @@ use assets::trainers::TrainerId;
 use assets::TrainerType;
 use engine::event_data::EventData;
 use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
-use engine::overworld::{trainer_can_see_player, MapRuntime, PlayerState};
+use engine::overworld::{trainer_can_see_player, ConnectedMapData, MapRuntime, PlayerState};
 
 use crate::flow::npc_trainer_battle;
 
+use super::connections::MapConnections;
 use super::sight_trainer_approach::SightApproach;
 use super::{ActiveBattle, OverworldPhase, PartyReserves};
 
@@ -236,6 +237,7 @@ struct SightScan {
 fn find_sight_trainer(
     objects: &ObjectEventCollection,
     runtime: &MapRuntime<'_>,
+    maps: &dyn ConnectedMapData,
     player: &PlayerState,
     event_data: &EventData,
 ) -> SightScan {
@@ -265,7 +267,7 @@ fn find_sight_trainer(
         if already_defeated(entry.id, event_data) {
             continue;
         }
-        if !trainer_can_see_player(live, objects, runtime, player) {
+        if !trainer_can_see_player(live, objects, runtime, maps, player) {
             continue;
         }
         scan.any_cone_reached = true;
@@ -455,9 +457,15 @@ impl OverworldPhase {
     ///   field.
     pub(super) fn begin_sight_trainer_approach_if_seen(&mut self) -> SightTrainerOutcome {
         let runtime = self.scene.runtime();
+        let maps = MapConnections::terrain_only(
+            &self.connection_pack,
+            self.pack_source.clone(),
+            self.map_id,
+        );
         let scan = find_sight_trainer(
             &self.object_events,
             &runtime,
+            &maps,
             &self.player,
             &self.save1.event_data,
         );

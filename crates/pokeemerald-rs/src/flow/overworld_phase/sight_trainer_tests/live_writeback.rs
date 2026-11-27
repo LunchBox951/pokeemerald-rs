@@ -14,7 +14,9 @@
 
 use assets::MovementType;
 use engine::overworld::object_event::ObjectEventCollection;
-use engine::overworld::{trainer_can_see_player, Direction, ObjectEventState, PlayerState};
+use engine::overworld::{
+    trainer_can_see_player, Direction, NoConnectedMaps, ObjectEventState, PlayerState,
+};
 use platform::{ButtonState, Buttons};
 
 use super::super::test_support::pressed;
@@ -204,6 +206,7 @@ fn the_stopped_trainers_cone_is_measured_from_where_it_stopped() {
             andrew,
             objects,
             &phase.scene.runtime(),
+            &NoConnectedMaps,
             &PlayerState::new(tile, 3, Direction::North),
         )
     };

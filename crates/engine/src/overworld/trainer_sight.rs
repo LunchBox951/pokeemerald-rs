@@ -15,7 +15,7 @@ use assets::TrainerType;
 
 use super::collision::{directionally_impassable, elevation_mismatch, elevations_compatible};
 use super::direction::Direction;
-use super::map_runtime::MapRuntime;
+use super::map_runtime::{ConnectedMapData, MapRuntime};
 use super::metatile_behavior::MB_NORMAL;
 use super::object_event::{LiveObjectEvent, ObjectEventCollection};
 use super::player::PlayerState;
@@ -27,6 +27,9 @@ use super::player::PlayerState;
 /// object events that can stand on the line (`trainer_see.c:301-312`). Hide flags are the
 /// scheduler's admission concern, so none is read here.
 ///
+/// Terrain reads reach the backup-layout band `maps` supplies, so a trainer a connection crossing
+/// carried past the map's own edge still sees along it.
+///
 /// Returns `false` when `trainer` is not active (the scheduler has not admitted it, or has
 /// retired it), for any other [`TrainerType`], a sight range of `0`, or an
 /// [`assets::ObjectEvent::trainer_sight_or_berry_tree_id`] that fails to parse as
@@ -37,6 +40,7 @@ pub fn trainer_can_see_player(
     trainer: &LiveObjectEvent,
     objects: &ObjectEventCollection,
     runtime: &MapRuntime<'_>,
+    maps: &dyn ConnectedMapData,
     player: &PlayerState,
 ) -> bool {
     let template = trainer.template();
@@ -64,6 +68,7 @@ pub fn trainer_can_see_player(
         trainer_elevation: state.elevation(),
         objects,
         runtime,
+        maps,
     };
     sight_line_clear(&world, trainer_pos, facing, distance, player)
 }
@@ -100,6 +105,7 @@ struct SightWorld<'a> {
     /// The live object events that can block an intermediate tile.
     objects: &'a ObjectEventCollection,
     runtime: &'a MapRuntime<'a>,
+    maps: &'a dyn ConnectedMapData,
 }
 
 /// Whether the straight line from `trainer_pos` to the tile `distance`
@@ -114,6 +120,7 @@ fn sight_line_clear(
     let SightWorld {
         trainer_elevation,
         runtime,
+        maps,
         ..
     } = *world;
     let (dx, dy) = facing.delta();
@@ -122,7 +129,7 @@ fn sight_line_clear(
     // behavior is read once and reused for every step rather than re-read
     // per tile (`trainer_see.c:328`).
     let standing_behavior = runtime
-        .metatile_behavior(trainer_pos.0, trainer_pos.1)
+        .metatile_behavior_in_band(trainer_pos.0, trainer_pos.1, maps)
         .unwrap_or(MB_NORMAL);
 
     let intermediate_tiles = distance.saturating_sub(1);
@@ -142,13 +149,15 @@ fn sight_line_clear(
     // order `GetCollisionAtCoords` checks in, not the intermediate-tile
     // mask (`trainer_see.c:339`); the object check below has no
     // `ELEVATION_MULTI_LEVEL` wildcard, unlike [`elevation_mismatch`].
-    let Some(cell) = runtime.metatile_cell(x, y) else {
+    let Some(cell) = runtime.metatile_cell_in_band(x, y, maps) else {
         return false;
     };
     if cell.collision != 0 {
         return false;
     }
-    let target_behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
+    let target_behavior = runtime
+        .metatile_behavior_in_band(x, y, maps)
+        .unwrap_or(MB_NORMAL);
     if directionally_impassable(standing_behavior, target_behavior, facing) {
         return false;
     }
@@ -179,14 +188,17 @@ fn tile_blocks_intermediate_sight(
         trainer_elevation,
         objects,
         runtime,
+        maps,
     } = *world;
-    let Some(cell) = runtime.metatile_cell(x, y) else {
+    let Some(cell) = runtime.metatile_cell_in_band(x, y, maps) else {
         return true;
     };
     if cell.collision != 0 {
         return true;
     }
-    let target_behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
+    let target_behavior = runtime
+        .metatile_behavior_in_band(x, y, maps)
+        .unwrap_or(MB_NORMAL);
     if directionally_impassable(standing_behavior, target_behavior, facing) {
         return true;
     }
@@ -210,7 +222,9 @@ mod tests {
     use super::*;
     use crate::event_data::EventData;
     use crate::overworld::collision::ELEVATION_TRANSITION;
-    use crate::overworld::object_event_harness::{admit, admitted};
+    use crate::overworld::map_runtime::NoConnectedMaps;
+    use crate::overworld::metatile_behavior::MB_IMPASSABLE_EAST;
+    use crate::overworld::object_event_harness::{admit, admitted, Neighbours, Terrain};
     use assets::{MapConnection, MapEvents, MapHeader, MapId, MovementType, ObjectEvent};
 
     fn cell(metatile_id: u16, collision: u8, elevation: u8) -> u16 {
@@ -364,7 +378,7 @@ mod tests {
             event_data,
         );
         let live = *objects.get(trainer.local_id).unwrap();
-        trainer_can_see_player(&live, &objects, runtime, player)
+        trainer_can_see_player(&live, &objects, runtime, &NoConnectedMaps, player)
     }
 
     #[test]
@@ -523,7 +537,7 @@ mod tests {
         let live = *objects.get(1).unwrap();
         let player = player_at(5, 8, 3);
         assert!(
-            !trainer_can_see_player(&live, &objects, &runtime, &player),
+            !trainer_can_see_player(&live, &objects, &runtime, &NoConnectedMaps, &player),
             "the admitted blocker still stands on the line"
         );
         // The blocker holds the tile it leaves until its step settles.
@@ -532,7 +546,7 @@ mod tests {
         blocker_state.settle_previous_position();
         let live = *objects.get(1).unwrap();
         assert!(
-            trainer_can_see_player(&live, &objects, &runtime, &player),
+            trainer_can_see_player(&live, &objects, &runtime, &NoConnectedMaps, &player),
             "the admitted trainer still sees once the line is clear"
         );
     }
@@ -550,6 +564,7 @@ mod tests {
             &live,
             &objects,
             &runtime,
+            &NoConnectedMaps,
             &player_at(5, 8, 3)
         ));
     }
@@ -752,7 +767,7 @@ mod tests {
         let mut objects = admitted(templates, (5, 5));
         edit(objects.get_mut(local_id).unwrap().state_mut());
         let live = *objects.get(1).unwrap();
-        trainer_can_see_player(&live, &objects, &runtime, player)
+        trainer_can_see_player(&live, &objects, &runtime, &NoConnectedMaps, player)
     }
 
     #[test]
@@ -896,5 +911,123 @@ mod tests {
         }
         assert_eq!(player.previous_position(), (5, 8));
         assert!(live_sees(vec![t], turn_south, 1, &player));
+    }
+
+    const WEST: MapId = MapId("MAP_WEST");
+
+    /// An east-facing range-3 trainer standing at `west_x` on the west map's row 5, admitted there
+    /// and carried east across the connection into the entered map's backup band.
+    fn carried_west_trainer(west_x: i16) -> (ObjectEventCollection, LiveObjectEvent) {
+        let templates: &'static [ObjectEvent] = Box::leak(Box::new([trainer(
+            west_x,
+            5,
+            3,
+            MovementType::FaceRight,
+            "3",
+        )]));
+        let mut departed = ObjectEventCollection::from_templates(templates);
+        admit(&mut departed, (i32::from(west_x), 5), &EventData::new());
+        let objects = departed.carry_across_connection(WEST, MapId("MAP_TEST"), &[], (-20, 0));
+        let live = *objects.find(Some(WEST), 1).expect("carried trainer");
+        assert!(live.is_active());
+        assert_eq!(live.state().position(), (i32::from(west_x) - 20, 5));
+        (objects, live)
+    }
+
+    /// A 20x20 map with a west connection to `neighbour`.
+    fn entered_with_west_neighbour(neighbour: Terrain) -> (Terrain, Neighbours) {
+        let entered = Terrain::flat_sized(20, 20).with_connections(vec![MapConnection {
+            direction: assets::Direction::West,
+            offset: 0,
+            target: WEST,
+        }]);
+        (entered, Neighbours::new(vec![(WEST, neighbour)]))
+    }
+
+    #[test]
+    fn a_trainer_carried_into_the_west_band_sees_across_the_connection() {
+        let (objects, live) = carried_west_trainer(18);
+        let (entered, maps) = entered_with_west_neighbour(Terrain::flat_sized(20, 20));
+        let runtime = entered.runtime();
+        assert!(runtime
+            .metatile_cell_in_band(-1, 5, &maps)
+            .is_some_and(|c| c.collision == 0 && c.elevation == 3));
+        let player = player_at(0, 5, 3);
+        assert!(trainer_can_see_player(
+            &live, &objects, &runtime, &maps, &player
+        ));
+        assert!(
+            !trainer_can_see_player(&live, &objects, &runtime, &NoConnectedMaps, &player),
+            "without the connected maps the band tile reads nothing and blocks"
+        );
+    }
+
+    /// Whether the trainer carried from the west map's `(18, 5)` sees a player at `(0, 5)`, with
+    /// `neighbour` as the west map.
+    fn carried_trainer_sees_across(neighbour: Terrain) -> bool {
+        let (objects, live) = carried_west_trainer(18);
+        let (entered, maps) = entered_with_west_neighbour(neighbour);
+        trainer_can_see_player(
+            &live,
+            &objects,
+            &entered.runtime(),
+            &maps,
+            &player_at(0, 5, 3),
+        )
+    }
+
+    #[test]
+    fn a_blocked_band_cell_breaks_the_line_of_a_carried_trainer() {
+        let mut walled = Terrain::flat_sized(20, 20);
+        walled.set_wall((19, 5));
+        assert!(carried_trainer_sees_across(Terrain::flat_sized(20, 20)));
+        assert!(!carried_trainer_sees_across(walled));
+    }
+
+    #[test]
+    fn an_elevation_mismatched_band_cell_breaks_the_line_of_a_carried_trainer() {
+        let mut raised = Terrain::flat_sized(20, 20);
+        raised.set_elevation((19, 5), 4);
+        assert!(carried_trainer_sees_across(Terrain::flat_sized(20, 20)));
+        assert!(!carried_trainer_sees_across(raised));
+    }
+
+    #[test]
+    fn a_band_tile_no_connection_covers_blocks_a_carried_trainer() {
+        let (objects, live) = carried_west_trainer(18);
+        let entered = Terrain::flat_sized(20, 20);
+        let runtime = entered.runtime();
+        assert!(!trainer_can_see_player(
+            &live,
+            &objects,
+            &runtime,
+            &NoConnectedMaps,
+            &player_at(0, 5, 3)
+        ));
+    }
+
+    #[test]
+    fn an_adjacent_band_trainer_keeps_its_standing_tile_directional_wall() {
+        let player = player_at(0, 5, 3);
+        let (objects, live) = carried_west_trainer(19);
+        let (entered, maps) = entered_with_west_neighbour(Terrain::flat_sized(20, 20));
+        assert!(trainer_can_see_player(
+            &live,
+            &objects,
+            &entered.runtime(),
+            &maps,
+            &player
+        ));
+
+        let mut walled = Terrain::flat_sized(20, 20);
+        walled.set_behavior((19, 5), MB_IMPASSABLE_EAST);
+        let (entered, maps) = entered_with_west_neighbour(walled);
+        assert!(!trainer_can_see_player(
+            &live,
+            &objects,
+            &entered.runtime(),
+            &maps,
+            &player
+        ));
     }
 }

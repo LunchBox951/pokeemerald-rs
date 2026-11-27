@@ -429,6 +429,7 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
                 .expect("the collection seeds Rhett's entry"),
             &objects,
             &scene.runtime(),
+            &engine::overworld::NoConnectedMaps,
             &player,
         ),
         "Rhett's real cone must reach a player standing one tile south of him over real \
