@@ -8,9 +8,11 @@ use super::plan::{
     BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan, BattlerPlan, BlobPlan,
     CryPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, MapLayoutPlan, NamingScreenPlan,
     OpeningScenePlan, PalettePlan, PartyMenuPlan, ProfilePlan, ReportLine, Resolution,
-    StarterChooserPlan, TileAnimPlan, TilesetPlan,
+    SightTrainerIntroSpeechPlan, StarterChooserPlan, TileAnimPlan, TilesetPlan,
 };
-use super::plan::{TrainerBattlerPlan, TrainerFrontPlan};
+use super::plan::{
+    TrainerBattlerPlan, TrainerClassNamePlan, TrainerDefeatSpeechPlan, TrainerFrontPlan,
+};
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
 ///
@@ -71,6 +73,7 @@ fn header(sha1: &str, lines: &[ReportLine]) -> String {
 //! machine derived and checked it; change the generator and regenerate.
 
 use crate::reader::GbaPtr;
+use crate::roots::SightTrainerIntroSpeechRoot;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
@@ -78,7 +81,7 @@ use crate::roots::{{
     KeysplitRoot, MapLayoutRoot, NamingScreenRoots, OpeningSceneRoots, PaletteRoot, PartyMenuRoots,
     PokeBallRoot, PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
     StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    TrainerDefeatSpeechRoot, VoicegroupRoot,
 }};
 use crate::roots::{{TrainerBackRoot, TrainerBattlerRoots}};
 use crate::roots::{{TrainerFrontRoot, TrainerFrontRoots}};
@@ -137,6 +140,9 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
     field_message_roots(&mut out, &plan.field_messages);
+    trainer_defeat_speech_roots(&mut out, &plan.trainer_defeat_speeches);
+    sight_trainer_intro_speech_roots(&mut out, &plan.sight_trainer_intro_speeches);
+    trainer_class_name_roots(&mut out, &plan.trainer_class_names);
     battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
@@ -498,6 +504,45 @@ fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
     let _ = writeln!(out, "    }},");
 }
 
+fn trainer_defeat_speech_roots(out: &mut String, speeches: &TrainerDefeatSpeechPlan) {
+    let _ = writeln!(out, "    trainer_defeat_speeches: &[");
+    for speech in &speeches.speeches {
+        let script = speech.script.map_or_else(
+            || "None".to_owned(),
+            |script| format!("Some({})", gba_ptr_expression(script)),
+        );
+        let _ = writeln!(
+            out,
+            "        TrainerDefeatSpeechRoot {{ symbol: {:?}, addr: {}, script: {script} }},",
+            speech.symbol,
+            gba_ptr_expression(speech.addr)
+        );
+    }
+    let _ = writeln!(out, "    ],");
+}
+
+fn sight_trainer_intro_speech_roots(out: &mut String, speeches: &SightTrainerIntroSpeechPlan) {
+    let _ = writeln!(out, "    sight_trainer_intro_speeches: &[");
+    for speech in &speeches.speeches {
+        let _ = writeln!(
+            out,
+            "        SightTrainerIntroSpeechRoot {{ symbol: {:?}, addr: {}, script: {} }},",
+            speech.symbol,
+            gba_ptr_expression(speech.addr),
+            gba_ptr_expression(speech.script)
+        );
+    }
+    let _ = writeln!(out, "    ],");
+}
+
+fn trainer_class_name_roots(out: &mut String, names: &TrainerClassNamePlan) {
+    let _ = writeln!(
+        out,
+        "    trainer_class_names: Some({}),",
+        gba_ptr_expression(names.addr)
+    );
+}
+
 fn field_message_roots(out: &mut String, messages: &FieldMessagePlan) {
     let _ = writeln!(out, "    field_messages: &[");
     for message in &messages.messages {
@@ -726,6 +771,19 @@ mod tests {
     }
 
     #[test]
+    fn the_trainer_class_name_root_renders_as_one_present_address() {
+        use super::trainer_class_name_roots;
+        use crate::gen_rom_profile::plan::TrainerClassNamePlan;
+
+        let mut out = String::new();
+        trainer_class_name_roots(&mut out, &TrainerClassNamePlan { addr: 0x083C_4E10 });
+        assert_eq!(
+            out,
+            "    trainer_class_names: Some(GbaPtr::at(0x083C_4E10)),\n"
+        );
+    }
+
+    #[test]
     fn battle_message_roots_render_one_address_per_line() {
         use super::battle_message_roots;
         use crate::gen_rom_profile::plan::{BattleMessagePlan, SpecialMessagePlan};
@@ -925,8 +983,10 @@ mod bag_field_tests {
     use crate::gen_rom_profile::plan::{
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
         BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, InterfacePlan,
-        NamingScreenPlan, OpeningScenePlan, PalettePlan, PartyMenuPlan, ProfilePlan, SpritePlan,
-        StarterChooserPlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan, TrainerFrontPlan,
+        NamingScreenPlan, OpeningScenePlan, PalettePlan, PartyMenuPlan, ProfilePlan,
+        SightTrainerIntroSpeechPlan, SpritePlan, StarterChooserPlan, TextWindowPlan,
+        TitleScreenPlan, TrainerBattlerPlan, TrainerClassNamePlan, TrainerDefeatSpeechPlan,
+        TrainerFrontPlan,
     };
     use rom_import::Encoding;
 
@@ -1355,6 +1415,11 @@ mod bag_field_tests {
     #[test]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
+        let front_plan = || TrainerFrontPlan {
+            front_table: base,
+            palette_table: base,
+            trainers: vec![],
+        };
         let plan = ProfilePlan {
             tilesets: vec![],
             title_screen: TitleScreenPlan {
@@ -1387,6 +1452,9 @@ mod bag_field_tests {
                 specials: vec![],
             },
             field_messages: FieldMessagePlan { messages: vec![] },
+            trainer_defeat_speeches: TrainerDefeatSpeechPlan { speeches: vec![] },
+            sight_trainer_intro_speeches: SightTrainerIntroSpeechPlan { speeches: vec![] },
+            trainer_class_names: TrainerClassNamePlan { addr: base },
             battle_anims: BattleAnimationPlan {
                 tables: [base; 4],
                 programs: vec![],
@@ -1401,17 +1469,9 @@ mod bag_field_tests {
                 shiny_palette_table: base,
                 species: vec![],
             },
-            trainer_front: TrainerFrontPlan {
-                front_table: base,
-                palette_table: base,
-                trainers: vec![],
-            },
+            trainer_front: front_plan(),
             trainer_battlers: TrainerBattlerPlan {
-                front: TrainerFrontPlan {
-                    front_table: base,
-                    palette_table: base,
-                    trainers: vec![],
-                },
+                front: front_plan(),
                 back_table: base,
                 back_palette_table: base,
                 backs: vec![],

@@ -41,10 +41,12 @@ use crate::new_game;
 use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
 use crate::start_menu::StartMenu;
 
+use self::trainer_party::PartyReserves;
 pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
 mod battle_start_stats;
+mod birth_island_rock;
 mod connections;
 mod escalator_arrival;
 mod field_friendship;
@@ -65,6 +67,8 @@ mod sight_trainer_trigger;
 mod start_menu;
 mod step;
 mod take_item_message;
+mod take_mail;
+mod trainer_party;
 mod white_out;
 mod wild_battle;
 
@@ -160,12 +164,14 @@ pub(super) enum ActiveBattle {
     Rival {
         battle: battle::Battle,
         trainer_id: assets::trainers::TrainerId,
+        reserves: PartyReserves,
     },
     /// A Route 103 sight-trainer battle, with the trainer it is fought
     /// against.
     SightTrainer {
         battle: battle::Battle,
         trainer_id: assets::trainers::TrainerId,
+        reserves: PartyReserves,
     },
 }
 
@@ -239,13 +245,13 @@ pub(crate) struct OverworldPhase {
     /// hands off to draw from it in turn, so the sequence is the one
     /// upstream would produce.
     ///
-    /// Seeded to `0` -- retail Emerald compiles out its RTC reseed
-    /// (`pokeemerald/src/main.c:229-236` is `#ifdef BUGFIX`), so
-    /// `gRngValue` stays zero until `SeedRngAndSetTrainerId` reseeds it
-    /// from a hardware timer this port does not model, leaving a fresh
-    /// run deterministic where the real game is not (tracked as the
-    /// ledger's NOT-modelled `src/main.c#SeedRngAndSetTrainerId`
-    /// artifact) -- then advanced by new-game initialization's single
+    /// Seeded from the session's [`new_game::RngSeedSource`]: a fresh 16-bit
+    /// value in a real session, standing in for the hardware timer
+    /// `SeedRngAndSetTrainerId` reads (`pokeemerald/src/main.c:208-214`);
+    /// [`new_game::NEW_GAME_RNG_SEED`] (`0`, the boot `gRngValue`, since retail
+    /// compiles out the RTC reseed at `main.c:229-236`) in a headless
+    /// scenario or test, keeping those runs reproducible -- then advanced by
+    /// new-game initialization's single
     /// trainer-ID draw (the id's high half; the low half reuses the raw
     /// seed itself, [`crate::new_game::trainer_id_bytes`]) before
     /// overworld play begins.
@@ -447,16 +453,36 @@ impl OverworldPhase {
     /// # Errors
     ///
     /// Returns an error if the spawn room's scene fails to load.
+    #[cfg(test)]
     pub(super) fn load(
         source: crate::pack_source::PackSource,
         options: new_game::NewGameOptions,
         identity: new_game::NewGameIdentity,
     ) -> Result<Self, OverworldSceneError> {
+        Self::load_seeded(source, options, identity, new_game::NEW_GAME_RNG_SEED)
+    }
+
+    /// [`Self::load`] with the session's RNG `seed` named: the trainer ID's
+    /// low half and the start of the field stream
+    /// (`SeedRngAndSetTrainerId`, `pokeemerald/src/main.c:208-214`). The
+    /// production boundary draws it from
+    /// [`new_game::RngSeedSource`]; [`Self::load`] pins
+    /// [`new_game::NEW_GAME_RNG_SEED`] for every deterministic test.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the spawn room's scene fails to load.
+    pub(super) fn load_seeded(
+        source: crate::pack_source::PackSource,
+        options: new_game::NewGameOptions,
+        identity: new_game::NewGameIdentity,
+        seed: u32,
+    ) -> Result<Self, OverworldSceneError> {
         // The identity is committed to the save first; the first scene then
         // loads with that save's event data and the selected avatar, so no
         // male or empty-flag frame is ever composed.
         let (initial_save1, initial_save2) = new_game::init_save_blocks_with_identity(
-            &mut engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED),
+            &mut engine::rng::Rng::new(seed),
             options,
             identity,
         );
@@ -476,6 +502,7 @@ impl OverworldPhase {
             source,
             options,
             identity,
+            seed,
         );
         // The stand-in for the un-ported starter handout: without a lead,
         // every encounter would be rolled and dropped. Deliberately draws
@@ -505,10 +532,29 @@ impl OverworldPhase {
     /// known map; [`ContinueError::Scene`] if that map's scene will not load
     /// (most commonly: no extracted pack); [`ContinueError::ContinueGameWarp`]
     /// if a flagged save's `continue_game_warp` does not land.
+    #[cfg(test)]
     pub(super) fn continue_saved_game(
         source: crate::pack_source::PackSource,
         block1: SaveBlock1,
+        block2: SaveBlock2,
+    ) -> Result<Self, ContinueError> {
+        Self::continue_saved_game_seeded(source, block1, block2, new_game::NEW_GAME_RNG_SEED)
+    }
+
+    /// [`Self::continue_saved_game`] with the field stream's start `seed`
+    /// named, as [`Self::load_seeded`] names a new game's. A save holds no
+    /// RNG state, so every continue starts the stream afresh; the production
+    /// boundary draws `seed` per continue so two boots do not replay one
+    /// stream.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::continue_saved_game`].
+    pub(super) fn continue_saved_game_seeded(
+        source: crate::pack_source::PackSource,
+        block1: SaveBlock1,
         mut block2: SaveBlock2,
+        seed: u32,
     ) -> Result<Self, ContinueError> {
         if let Some((warp_map, destination)) = take_continue_game_warp(&block1, &mut block2)? {
             return Self::continue_at_continue_game_warp(
@@ -517,6 +563,7 @@ impl OverworldPhase {
                 block2,
                 warp_map,
                 destination,
+                seed,
             );
         }
         let map_id = saved_map_id(block1.location).ok_or(ContinueError::UnknownLocation {
@@ -533,7 +580,7 @@ impl OverworldPhase {
             block2.player_gender.into(),
             &block1.event_data,
         )?;
-        let mut phase = Self::from_saved(scene, map_id, block1, block2);
+        let mut phase = Self::from_saved_seeded(scene, map_id, block1, block2, seed);
         // The one production caller: retains the source the scene above
         // actually loaded through, overriding `from_saved`'s inert
         // `Runtime` default, so every later load this phase performs
@@ -570,6 +617,7 @@ impl OverworldPhase {
         block2: SaveBlock2,
         warp_map: assets::MapId,
         destination: WarpData,
+        seed: u32,
     ) -> Result<Self, ContinueError> {
         let refused = ContinueError::ContinueGameWarp { destination };
         if assets::MapHeaderTable::new().header(warp_map).is_err()
@@ -589,7 +637,7 @@ impl OverworldPhase {
         let Some(landing) = connections::saved_location_landing(&scene, destination) else {
             return Err(refused);
         };
-        let mut phase = Self::from_saved(scene, warp_map, block1, block2);
+        let mut phase = Self::from_saved_seeded(scene, warp_map, block1, block2, seed);
         phase.pack_source = source;
         phase.commit_saved_location_landing(
             warp_map,
@@ -623,11 +671,27 @@ impl OverworldPhase {
     /// [`Self::continue_saved_game`] overwrites [`Self::pack_source`]
     /// immediately afterward, so its only other caller -- a test with an
     /// already-decoded `scene` -- is spared an inert parameter.
+    #[cfg(test)]
     pub(super) fn from_saved(
+        scene: OverworldScene,
+        map_id: assets::MapId,
+        block1: SaveBlock1,
+        block2: SaveBlock2,
+    ) -> Self {
+        Self::from_saved_seeded(scene, map_id, block1, block2, new_game::NEW_GAME_RNG_SEED)
+    }
+
+    /// [`Self::from_saved`] starting the field stream from `seed`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::from_saved`].
+    pub(super) fn from_saved_seeded(
         scene: OverworldScene,
         map_id: assets::MapId,
         mut block1: SaveBlock1,
         block2: SaveBlock2,
+        seed: u32,
     ) -> Self {
         assert_scene_owns_map(&scene, map_id);
         // A zeroed `last_heal_location` resolves to a real map (group
@@ -675,11 +739,13 @@ impl OverworldPhase {
             tick: 0,
             connection_pack: OnceCell::new(),
             pack_source: crate::pack_source::PackSource::Runtime,
-            // Seeded exactly as `Self::new` seeds a new game's stream: a
-            // continue never reaches the naming screen, upstream's only
-            // reseed point on the way to the field, so it leaves the
-            // stream at the same boot value, merely unspent.
-            rng: engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED),
+            // Seeded as `Self::new` seeds a new game's stream. Upstream's
+            // continue never reaches the naming screen, its one reseed point
+            // on the way to the field, but the title and main menu spend a
+            // timing-dependent number of draws first, so no two boots reach
+            // the field at one stream position; the port models none of those
+            // draws, and a `seed` drawn per continue stands in for them.
+            rng: engine::rng::Rng::new(seed),
             wild: WildEncounterState::new(),
             wild_table_screen: None,
             wild_lead_refusal: None,
@@ -790,6 +856,7 @@ impl OverworldPhase {
             pack_source,
             new_game::NewGameOptions::DEFAULT,
             new_game::NewGameIdentity::DEFAULT,
+            new_game::NEW_GAME_RNG_SEED,
         )
     }
 
@@ -808,6 +875,10 @@ impl OverworldPhase {
     /// seed itself, not a second draw
     /// ([`new_game::init_save_blocks`]'s module docs) -- and the advanced
     /// generator remains owned by the phase for all subsequent draws.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the scene's own inputs beside the new game's options, identity and seed; both callers name each"
+    )]
     fn new(
         scene: OverworldScene,
         map_id: assets::MapId,
@@ -816,9 +887,10 @@ impl OverworldPhase {
         pack_source: crate::pack_source::PackSource,
         options: new_game::NewGameOptions,
         identity: new_game::NewGameIdentity,
+        seed: u32,
     ) -> Self {
         assert_scene_owns_map(&scene, map_id);
-        let mut rng = engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED);
+        let mut rng = engine::rng::Rng::new(seed);
         let (mut save1, save2) =
             new_game::init_save_blocks_with_identity(&mut rng, options, identity);
         connections::run_on_transition_map_script(map_id, &mut save1.event_data);
@@ -1022,12 +1094,16 @@ impl OverworldPhase {
         self.active_battle = match active {
             ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle, buttons),
             ActiveBattle::First(battle) => self.advance_first_battle_frame(battle, buttons),
-            ActiveBattle::Rival { battle, trainer_id } => {
-                self.advance_route103_rival_battle_frame(battle, trainer_id)
-            }
-            ActiveBattle::SightTrainer { battle, trainer_id } => {
-                self.advance_sight_trainer_battle_frame(battle, trainer_id)
-            }
+            ActiveBattle::Rival {
+                battle,
+                trainer_id,
+                reserves,
+            } => self.advance_route103_rival_battle_frame(battle, trainer_id, reserves),
+            ActiveBattle::SightTrainer {
+                battle,
+                trainer_id,
+                reserves,
+            } => self.advance_sight_trainer_battle_frame(battle, trainer_id, reserves),
         };
         true
     }
@@ -1084,6 +1160,8 @@ mod animation_tick_tests;
 mod battle_start_stats_tests;
 #[cfg(test)]
 mod bedroom_collision_tests;
+#[cfg(test)]
+mod birth_island_rock_tests;
 #[cfg(test)]
 mod connection_live_objects_tests;
 #[cfg(test)]
@@ -1169,6 +1247,8 @@ mod route103_rival_tests;
 #[cfg(test)]
 mod running_tests;
 #[cfg(test)]
+mod session_seed_tests;
+#[cfg(test)]
 mod sight_trainer_tests;
 #[cfg(test)]
 mod stat_badge_tests;
@@ -1180,6 +1260,8 @@ mod tall_grass_tests;
 mod test_support;
 #[cfg(test)]
 mod traded_lead_battle_tests;
+#[cfg(test)]
+mod trainer_party_tests;
 #[cfg(test)]
 mod warp_tests;
 #[cfg(test)]
@@ -1247,6 +1329,7 @@ mod scene_ownership_tests {
             crate::pack_source::PackSource::Runtime,
             new_game::NewGameOptions::DEFAULT,
             new_game::NewGameIdentity::DEFAULT,
+            new_game::NEW_GAME_RNG_SEED,
         );
     }
 

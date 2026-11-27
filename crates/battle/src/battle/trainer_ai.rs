@@ -63,6 +63,30 @@ const QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD: u16 = 80;
 const RESISTED_DRAIN_PENALTY_THRESHOLD: u16 = 50;
 const RESISTED_DRAIN_PENALTY: i8 = -3;
 const STAT_DROP_DISCOURAGEMENT_THRESHOLD: u16 = 50;
+/// `AI_CV_Paralyze` (`data/battle_ai_scripts.s:1524`-`:1534`): a faster target
+/// rolls `if_random_less_than 20` for +3; otherwise a user at or below 70% HP
+/// scores -1.
+const PARALYZE_FASTER_BONUS_THRESHOLD: u16 = 20;
+const PARALYZE_FASTER_BONUS: i8 = 3;
+const PARALYZE_USER_HP_THRESHOLD: u32 = 70;
+/// The tie-break draw is `Random() & 1` (`src/battle_main.c:4745`).
+const SPEED_TIE_DRAW_MASK: u16 = 1;
+/// `AI_CV_SpeedUp` (`data/battle_ai_scripts.s:956`-`:965`): a slower target
+/// costs three points; a faster one rolls `if_random_less_than 70` for +3.
+const SPEED_UP_BONUS_THRESHOLD: u16 = 70;
+const SPEED_UP_BONUS: i8 = 3;
+const SPEED_UP_SLOWER_TARGET_PENALTY: i8 = -3;
+/// The one- and two-stage Speed raises, both routed to `AI_CV_SpeedUp`.
+const SPEED_RAISE_EFFECTS: [MoveEffect; 2] = [MoveEffect::SPEED_UP, MoveEffect::SPEED_UP_2];
+/// Cutoffs and rolls of `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:1536`-`:1545`).
+const VITAL_THROW_USER_HP_CEILING: u32 = 60;
+const VITAL_THROW_USER_HP_FLOOR: u32 = 40;
+const VITAL_THROW_GATE_THRESHOLD: u16 = 180;
+const VITAL_THROW_PENALTY_THRESHOLD: u16 = 50;
+/// `AI_CV_SpeedDown` (`data/battle_ai_scripts.s:1142`-`:1151`): a target that
+/// is not faster scores -3; a faster one rolls `if_random_less_than 70` for +2.
+const SPEED_DROP_NOT_FASTER_PENALTY: i8 = -3;
+const SPEED_DROP_FASTER_BONUS_THRESHOLD: u16 = 70;
 const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
 const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
 const DEFENSE_DROP_USER_HP_THRESHOLD: u32 = 70;
@@ -145,12 +169,8 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
 ];
 
 /// Rows whose `AI_CheckViability` branch is not ported
-/// (`data/battle_ai_scripts.s:686,706,708`).
-const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 3] = [
-    MoveEffect::HIGH_CRITICAL,
-    MoveEffect::SPEED_DOWN_HIT,
-    MoveEffect::VITAL_THROW,
-];
+/// (`data/battle_ai_scripts.s:686`).
+const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 1] = [MoveEffect::HIGH_CRITICAL];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -218,7 +238,8 @@ enum ScoreableEffect {
     UnchangedAfterPrologue(MoveEffect),
     /// Any other shared stat-stage label (see [`ai_stat_label`]). Its
     /// `AI_CheckViability` and `AI_SetupFirstTurn` branches are not ported,
-    /// except that Defense Curl has no viability branch.
+    /// except that Defense Curl has no viability branch and the Speed raises
+    /// have `AI_CV_SpeedUp`.
     StatLabel(MoveEffect, StatChangeEffect),
 }
 
@@ -251,12 +272,13 @@ impl ScoreableEffect {
         }
     }
 
-    /// `AI_CheckViability` branches on Paralyze, Confuse and Leech Seed
-    /// (`data/battle_ai_scripts.s:687,704,711`), and `AI_SetupFirstTurn` rolls
-    /// for all four (`:2667,2668,2685,2687`); neither is ported. Focus Energy
-    /// has no viability branch.
+    /// `AI_CheckViability` branches on Confuse and Leech Seed
+    /// (`data/battle_ai_scripts.s:687,711`), and `AI_SetupFirstTurn` rolls
+    /// for all four (`:2667,2668,2685,2687`); neither is ported. Paralyze's
+    /// viability branch (`:704`) is ported, so only its setup roll refuses it.
+    /// Focus Energy has no viability branch.
     const fn supported_with_status_handler(self, flags: AiFlags) -> bool {
-        let viability_branch = !matches!(self, Self::FocusEnergy);
+        let viability_branch = !matches!(self, Self::FocusEnergy | Self::Paralyze);
         !(flags.contains(AiFlags::SETUP_FIRST_TURN)
             || viability_branch && flags.contains(AiFlags::CHECK_VIABILITY))
     }
@@ -275,6 +297,7 @@ impl ScoreableEffect {
             Self::StatLabel(effect, _) => {
                 return !flags.contains(AiFlags::SETUP_FIRST_TURN)
                     && (effect == MoveEffect::DEFENSE_CURL
+                        || SPEED_RAISE_EFFECTS.contains(&effect)
                         || !flags.contains(AiFlags::CHECK_VIABILITY));
             }
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
@@ -1083,6 +1106,12 @@ fn score_viability(
         ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ABSORB) => {
             score_drain_viability(dex, scores, slot, move_id, user, target, rng)?;
         }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::SPEED_DOWN_HIT) => {
+            score_speed_down_hit_viability(scores, slot, move_id, user, target, rng);
+        }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::VITAL_THROW) => {
+            score_vital_throw_viability(scores, slot, user, target, rng);
+        }
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
         | ScoreableEffect::FocusEnergy
@@ -1090,13 +1119,14 @@ fn score_viability(
         ScoreableEffect::HighRiskForDamage => {
             return Err(BattleError::UnscoreableMoveEffect(move_id))
         }
+        ScoreableEffect::StatLabel(effect, _) if SPEED_RAISE_EFFECTS.contains(&effect) => {
+            score_speed_up_viability(scores, slot, user, target, rng);
+        }
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
         // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
-        ScoreableEffect::Paralyze
-        | ScoreableEffect::Confuse
-        | ScoreableEffect::LeechSeed
-        | ScoreableEffect::StatLabel(..) => {
+        ScoreableEffect::Paralyze => score_paralyze_viability(scores, slot, user, target, rng),
+        ScoreableEffect::Confuse | ScoreableEffect::LeechSeed | ScoreableEffect::StatLabel(..) => {
             return Err(BattleError::UnscoreableMoveEffect(move_id));
         }
         ScoreableEffect::AttackDown => {
@@ -1130,6 +1160,113 @@ fn score_always_hit_viability(
     };
     if rolls && random_roll_is_at_least(rng, ALWAYS_HIT_BONUS_THRESHOLD) {
         scores.adjust(slot, SLIGHTLY_ENCOURAGE);
+    }
+}
+
+/// `if_target_faster` (`asm/macros/battle_ai_script.inc:595`-`:597`), i.e.
+/// `GetWhoStrikesFirst(user, target, TRUE) == 1`
+/// (`src/battle_ai_script_commands.c:1268`-`:1273`). `ignoreChosenMoves` zeroes
+/// both moves, so priority never decides (`src/battle_main.c:4743`-`:4753`).
+/// An equal Speed draws once (`Random() & 1`, `:4745`) and neither
+/// result means "target faster": the draw selects between the user going first
+/// and upstream's third, tied outcome, so it is spent and discarded.
+fn target_is_faster(
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> bool {
+    let user_speed = user.speed_for_turn_order();
+    let target_speed = target.speed_for_turn_order();
+    if user_speed == target_speed {
+        let _ = rng.next_u16() & SPEED_TIE_DRAW_MASK;
+    }
+    user_speed < target_speed
+}
+
+/// `AI_CV_SpeedUp` (`data/battle_ai_scripts.s:661`, `:690`, `:956`-`:965`),
+/// shared by the one- and two-stage raises: a user that is not already
+/// outsped loses three; otherwise one roll of 70 or more gains three.
+fn score_speed_up_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if !target_is_faster(user, target, rng) {
+        scores.adjust(slot, SPEED_UP_SLOWER_TARGET_PENALTY);
+    } else if random_roll_is_at_least(rng, SPEED_UP_BONUS_THRESHOLD) {
+        scores.adjust(slot, SPEED_UP_BONUS);
+    }
+}
+
+/// `AI_CV_Paralyze` (`data/battle_ai_scripts.s:704`, `:1524`-`:1534`): a
+/// faster target rolls once and gains three from a low byte of 20; otherwise a
+/// user whose truncated HP percentage is at most 70 loses one, with no roll.
+fn score_paralyze_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if target_is_faster(user, target, rng) {
+        if random_roll_is_at_least(rng, PARALYZE_FASTER_BONUS_THRESHOLD) {
+            scores.adjust(slot, PARALYZE_FASTER_BONUS);
+        }
+    } else if current_hp_percent(user) <= PARALYZE_USER_HP_THRESHOLD {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+    }
+}
+
+/// `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:708`, `:1536`-`:1545`). The
+/// speed query runs first, so a tie's draw is spent before any HP check.
+fn score_vital_throw_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if target_is_faster(user, target, rng) {
+        return;
+    }
+    let user_hp = current_hp_percent(user);
+    if user_hp > VITAL_THROW_USER_HP_CEILING {
+        return;
+    }
+    if user_hp >= VITAL_THROW_USER_HP_FLOOR
+        && !random_roll_is_at_least(rng, VITAL_THROW_GATE_THRESHOLD)
+    {
+        return;
+    }
+    if random_roll_is_at_least(rng, VITAL_THROW_PENALTY_THRESHOLD) {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+    }
+}
+
+/// `AI_CV_SpeedDownFromChance` (`data/battle_ai_scripts.s:1136`-`:1140`): only
+/// Icy Wind, Rock Tomb and Mud Shot reach `AI_CV_SpeedDown`
+/// (`:1142`-`:1151`); any other move with the effect ends at once, with no
+/// draw and no score change.
+fn score_speed_down_hit_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if !matches!(
+        move_id,
+        MoveId::ICY_WIND | MoveId::ROCK_TOMB | MoveId::MUD_SHOT
+    ) {
+        return;
+    }
+    if !target_is_faster(user, target, rng) {
+        scores.adjust(slot, SPEED_DROP_NOT_FASTER_PENALTY);
+    } else if random_roll_is_at_least(rng, SPEED_DROP_FASTER_BONUS_THRESHOLD) {
+        scores.adjust(slot, ENCOURAGE);
     }
 }
 
@@ -2510,8 +2647,16 @@ mod drain_viability_tests;
 #[cfg(test)]
 mod leech_seed_tests;
 #[cfg(test)]
+mod paralyze_viability_tests;
+#[cfg(test)]
 mod prologue_tests;
 #[cfg(test)]
 mod quick_attack_tests;
 #[cfg(test)]
+mod speed_drop_viability_tests;
+#[cfg(test)]
+mod speed_raise_viability_tests;
+#[cfg(test)]
 mod stat_stage_tests;
+#[cfg(test)]
+mod vital_throw_viability_tests;

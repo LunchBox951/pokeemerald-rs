@@ -2,7 +2,7 @@
 //! tick, how a new game and a continue enter, and that ticking is not random.
 
 use super::test_support::*;
-use super::{ActiveBattle, OverworldPhase, WildBattle};
+use super::{ActiveBattle, OverworldPhase, PartyReserves, WildBattle};
 use crate::new_game;
 use engine::overworld::{Direction, PlayerState};
 use engine::rng::Rng;
@@ -144,10 +144,12 @@ fn every_battle_frame_ticks_once() {
         ActiveBattle::Rival {
             battle: npc(&mut rng),
             trainer_id,
+            reserves: PartyReserves::default(),
         },
         ActiveBattle::SightTrainer {
             battle: npc(&mut rng),
             trainer_id,
+            reserves: PartyReserves::default(),
         },
     ];
     for variant in variants {

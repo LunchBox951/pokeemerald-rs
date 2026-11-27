@@ -262,10 +262,10 @@
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`], [`secondary::EFFECT_CONFUSE_HIT`],
-//! [`secondary::EFFECT_SPEED_DOWN_HIT`], [`secondary::EFFECT_ACCURACY_DOWN_HIT`]
-//! and [`secondary::EFFECT_THAW_HIT`] and the two non-Minimized flinch
-//! wrappers ([`secondary::is_flinch_hit_effect`]) are the seven resolved; the
-//! other 24 are not, including
+//! [`secondary::EFFECT_SPEED_DOWN_HIT`], [`secondary::EFFECT_ACCURACY_DOWN_HIT`],
+//! [`secondary::EFFECT_ATTACK_DOWN_HIT`] and [`secondary::EFFECT_THAW_HIT`] and
+//! the two non-Minimized flinch wrappers ([`secondary::is_flinch_hit_effect`])
+//! are the eight resolved; the other 23 are not, including
 //! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
 //! `EFFECT_RECOIL` for any move but Struggle (Take Down and
 //! Submission stay refused), OHKO, Counter, Bide and the rest of the end-of-turn
@@ -360,9 +360,10 @@ pub use rollout::{
     is_rollout_effect, next_attempt, RolloutAttempt, EFFECT_ROLLOUT, SERIES_ATTEMPTS,
 };
 pub use secondary::{
-    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_flinch_hit_effect, is_poison_hit_effect,
-    is_secondary_effect, is_speed_down_hit_effect, is_thaw_hit_effect, spend_effect_chance_draw,
-    SecondaryApplication, Trampoline, EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
+    is_accuracy_down_hit_effect, is_attack_down_hit_effect, is_confuse_hit_effect,
+    is_flinch_hit_effect, is_poison_hit_effect, is_secondary_effect, is_speed_down_hit_effect,
+    is_thaw_hit_effect, spend_effect_chance_draw, SecondaryApplication, Trampoline,
+    EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
 };
 pub use stat_change::{
     is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,

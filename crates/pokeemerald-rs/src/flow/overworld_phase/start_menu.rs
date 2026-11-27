@@ -36,6 +36,7 @@ use crate::game_save::{SaveFileStatus, SaveSlot, StoreOutcome};
 use crate::party;
 use crate::start_menu::{self, SaveMode, SaveTarget, StartMenu, StartMenuOutcome};
 
+use super::connections::MapConnections;
 use super::{take_item_message, OverworldPhase};
 use crate::overworld::NpcDialog;
 
@@ -77,6 +78,13 @@ impl OverworldPhase {
         match outcome {
             StartMenuOutcome::Open => self.start_menu = Some(menu),
             StartMenuOutcome::Closed => {}
+            StartMenuOutcome::TakeItem if self.lead_holds_mail() => {
+                // A mail holder gets `MENU_MAIL`, not `MENU_ITEM`
+                // (`SetPartyMonFieldSelectionActions`, `party_menu.c:2631-2634`),
+                // so TAKE is `CursorCb_TakeMail`; its prompts run in the menu.
+                menu.begin_take_mail();
+                self.start_menu = Some(menu);
+            }
             // The menu is dropped first, so the take runs with field control
             // already back; the message box then takes it again.
             StartMenuOutcome::TakeItem => self.show_take_item_outcome(),
@@ -84,8 +92,17 @@ impl OverworldPhase {
         // As in `step`: the menu is a task, so the sprites run after it
         // (`OverworldBasic`, `src/overworld.c:1465-1476`).
         self.advance_object_events();
-        self.scene
-            .advance_tall_grass(&self.player, &self.object_events, &self.save1.event_data);
+        let maps = MapConnections::terrain_only(
+            &self.connection_pack,
+            self.pack_source.clone(),
+            self.map_id,
+        );
+        self.scene.advance_tall_grass(
+            &self.player,
+            &self.object_events,
+            &self.save1.event_data,
+            &maps,
+        );
         // After the menu's own tasks, so a save written this frame holds the
         // time as the frame began, as in [`Self::step`].
         self.tick_play_time();
@@ -166,7 +183,9 @@ impl OverworldPhase {
         ));
     }
 
-    /// Test-only: the start menu's take-item hook without its message box.
+    /// Test-only: the start menu's take-item hook without its message box
+    /// (the ordinary-item path; a mail holder goes to
+    /// [`Self::lead_holds_mail`]'s flow instead and is refused here).
     /// `CursorCb_TakeItem` (`pokeemerald/src/party_menu.c:3273-3298`) on the
     /// lead: moves the lead's held item into the bag
     /// ([`party::take_held_item`]) and, only when it moved, merges the lead
@@ -230,6 +249,11 @@ impl OverworldPhase {
     fn show_take_item_outcome(&mut self) {
         let staged = self.stage_take_lead_held_item();
         let outcome = staged.as_ref().map(|staged| staged.outcome);
+        if matches!(outcome, Some(party::TakeHeldItem::HoldsMail(_))) {
+            // `StartMenuOutcome::TakeItem` sends a mail holder to the mail flow
+            // first, so this is not reachable from the menu; nothing to show.
+            return;
+        }
         let nickname = self
             .lead
             .as_ref()
@@ -313,8 +337,8 @@ struct StagedTake {
 ///
 /// `phase` is a [`RefCell`] because [`SaveTarget::player_text_speed`] repairs
 /// saved state through the trait's `&self` receiver.
-struct PhaseSaveTarget<'a> {
-    phase: RefCell<&'a mut OverworldPhase>,
+pub(super) struct PhaseSaveTarget<'a> {
+    pub(super) phase: RefCell<&'a mut OverworldPhase>,
     save_slot: &'a mut SaveSlot,
 }
 

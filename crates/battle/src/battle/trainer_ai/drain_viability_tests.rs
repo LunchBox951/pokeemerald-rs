@@ -148,13 +148,11 @@ fn check_viability_admits_draining_moves_and_keeps_the_other_refusals() {
             "{move_id:?}"
         );
     }
-    for move_id in [MoveId::SLASH, MoveId::MUD_SHOT, MoveId::VITAL_THROW] {
-        assert_eq!(
-            ensure_scoreable(&dex, move_id, viability_flags),
-            Err(BattleError::UnscoreableMoveEffect(move_id)),
-            "{move_id:?}"
-        );
-    }
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::SLASH, viability_flags),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::SLASH)),
+        "still-unported HIGH_CRITICAL"
+    );
 }
 
 #[test]

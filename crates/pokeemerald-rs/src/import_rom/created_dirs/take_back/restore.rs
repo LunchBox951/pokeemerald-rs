@@ -96,7 +96,7 @@ pub(super) fn holds_this_level(
 /// `renameat` that refuses to replace an existing destination where the
 /// platform can say so (Linux, Android, Apple); elsewhere it refuses with
 /// `ENOSYS` rather than emulate that with a racy check.
-fn rename_without_replacing(
+pub(super) fn rename_without_replacing(
     from_dir: impl AsFd,
     from: impl rustix::path::Arg + Copy,
     to_dir: impl AsFd,
@@ -470,7 +470,7 @@ const NAME_MAX: usize = 255;
 /// cut short (at a character boundary if it is valid UTF-8) so the result
 /// fits [`NAME_MAX`]; a full-length name would otherwise get `ENAMETOOLONG`
 /// for every candidate.
-fn restored_name(name: &OsStr, n: u32) -> std::ffi::OsString {
+pub(super) fn restored_name(name: &OsStr, n: u32) -> std::ffi::OsString {
     use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 
     let suffix = format!(".restored-{n}");
