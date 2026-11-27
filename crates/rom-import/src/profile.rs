@@ -147,6 +147,20 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_profile_records_exactly_the_sight_trainer_intro_inventory() {
+        use assets::SIGHT_TRAINER_INTRO_SCRIPTS;
+
+        let roots = EMERALD_US_REV0.roots.sight_trainer_intro_speeches;
+        assert_eq!(roots.len(), SIGHT_TRAINER_INTRO_SCRIPTS.len());
+        for (root, script) in roots.iter().zip(SIGHT_TRAINER_INTRO_SCRIPTS) {
+            assert_eq!(root.symbol, script);
+            assert_ne!(root.addr, crate::reader::GbaPtr::AT_BASE, "{script}");
+            assert_ne!(root.script, crate::reader::GbaPtr::AT_BASE, "{script}");
+            assert_ne!(root.script, root.addr, "{script}");
+        }
+    }
+
+    #[test]
     fn the_shipped_profile_records_the_trainer_class_name_table() {
         let table = EMERALD_US_REV0.roots.trainer_class_names;
         let table = table.expect("the shipped profile locates gTrainerClassNames");

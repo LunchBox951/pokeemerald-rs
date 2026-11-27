@@ -38,6 +38,7 @@ pub(crate) mod naming_screen;
 pub(crate) mod opening_scene;
 pub(crate) mod party_menu;
 pub(crate) mod poke_ball;
+pub(crate) mod sight_trainer_intro_speeches;
 pub(crate) mod song;
 pub(crate) mod sprites;
 pub(crate) mod starter_choose;
@@ -77,6 +78,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     battle_messages::write,
     field_messages::write,
     trainer_defeat_speeches::write,
+    sight_trainer_intro_speeches::write,
     trainer_class_names::write,
     battle_anim::write,
     bag::write,
