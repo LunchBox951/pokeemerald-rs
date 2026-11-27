@@ -26,6 +26,13 @@ pub(super) fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
     .with_private_object_event_rng()
 }
 
+/// [`route_101_trigger_phase`] holding the provisional starter, so a fired trigger can start its battle.
+pub(super) fn route_101_trigger_phase_with_lead(player: PlayerState) -> OverworldPhase {
+    let mut phase = route_101_trigger_phase(player);
+    phase.set_fresh_lead_for_test(crate::new_game::provisional_starter());
+    phase
+}
+
 /// The same Route 101 grid with `specials` overriding tile behaviours at the given cells.
 pub(super) fn route_101_trigger_phase_with_special_tiles(
     player: PlayerState,
