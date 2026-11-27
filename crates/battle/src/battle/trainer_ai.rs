@@ -78,6 +78,10 @@ const SPEED_UP_BONUS: i8 = 3;
 const SPEED_UP_SLOWER_TARGET_PENALTY: i8 = -3;
 /// The one- and two-stage Speed raises, both routed to `AI_CV_SpeedUp`.
 const SPEED_RAISE_EFFECTS: [MoveEffect; 2] = [MoveEffect::SPEED_UP, MoveEffect::SPEED_UP_2];
+/// The two-stage Attack and Defense drops, routed to `AI_CV_AttackDown` and
+/// `AI_CV_DefenseDown` (`data/battle_ai_scripts.s:695-696`).
+const TWO_STAGE_ATTACK_DEFENSE_DROPS: [MoveEffect; 2] =
+    [MoveEffect::ATTACK_DOWN_2, MoveEffect::DEFENSE_DOWN_2];
 /// Cutoffs and rolls of `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:1536`-`:1545`).
 const VITAL_THROW_USER_HP_CEILING: u32 = 60;
 const VITAL_THROW_USER_HP_FLOOR: u32 = 40;
@@ -239,7 +243,8 @@ enum ScoreableEffect {
     /// Any other shared stat-stage label (see [`ai_stat_label`]). Its
     /// `AI_CheckViability` and `AI_SetupFirstTurn` branches are not ported,
     /// except that Defense Curl has no viability branch and the Speed raises
-    /// have `AI_CV_SpeedUp`.
+    /// have `AI_CV_SpeedUp`; the two-stage Attack and Defense drops reuse
+    /// `AI_CV_AttackDown` and `AI_CV_DefenseDown`.
     StatLabel(MoveEffect, StatChangeEffect),
 }
 
@@ -298,6 +303,7 @@ impl ScoreableEffect {
                 return !flags.contains(AiFlags::SETUP_FIRST_TURN)
                     && (effect == MoveEffect::DEFENSE_CURL
                         || SPEED_RAISE_EFFECTS.contains(&effect)
+                        || TWO_STAGE_ATTACK_DEFENSE_DROPS.contains(&effect)
                         || !flags.contains(AiFlags::CHECK_VIABILITY));
             }
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
@@ -1125,15 +1131,16 @@ fn score_viability(
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
         // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
+        ScoreableEffect::AttackDown | ScoreableEffect::StatLabel(MoveEffect::ATTACK_DOWN_2, _) => {
+            score_attack_drop_viability(scores, slot, user, target, rng);
+        }
+        ScoreableEffect::DefenseDown
+        | ScoreableEffect::StatLabel(MoveEffect::DEFENSE_DOWN_2, _) => {
+            score_defense_drop_viability(scores, slot, user, target, rng);
+        }
         ScoreableEffect::Paralyze => score_paralyze_viability(scores, slot, user, target, rng),
         ScoreableEffect::Confuse | ScoreableEffect::LeechSeed | ScoreableEffect::StatLabel(..) => {
             return Err(BattleError::UnscoreableMoveEffect(move_id));
-        }
-        ScoreableEffect::AttackDown => {
-            score_attack_drop_viability(scores, slot, user, target, rng);
-        }
-        ScoreableEffect::DefenseDown => {
-            score_defense_drop_viability(scores, slot, user, target, rng);
         }
     }
     Ok(())
@@ -2638,6 +2645,8 @@ mod tests {
 
 #[cfg(test)]
 mod always_hit_viability_tests;
+#[cfg(test)]
+mod attack_defense_drop_viability_tests;
 #[cfg(test)]
 mod attract_tests;
 #[cfg(test)]
