@@ -70,9 +70,12 @@ fn phase_with_mail_lead(slot: usize, mail_id: u8, item: ItemId) -> OverworldPhas
 /// Opens the menu and selects TAKE; the mail flow starts on the next frame.
 fn select_take(phase: &mut OverworldPhase, save_slot: &mut SaveSlot) {
     phase.open_synthetic_start_menu();
-    // The menu reopens on the entry last used.
-    if phase.start_menu().unwrap().selected() != StartMenuItem::TakeItem {
-        phase.advance_start_menu_frame(pressed(Buttons::DOWN), save_slot);
+    // The menu reopens on the entry last used; TAKE is two below BAG, the
+    // first item.
+    for _ in 0..2 {
+        if phase.start_menu().unwrap().selected() != StartMenuItem::TakeItem {
+            phase.advance_start_menu_frame(pressed(Buttons::DOWN), save_slot);
+        }
     }
     assert_eq!(
         phase.start_menu().unwrap().selected(),

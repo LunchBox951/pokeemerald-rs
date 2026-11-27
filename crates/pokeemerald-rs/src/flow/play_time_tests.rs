@@ -14,7 +14,7 @@ use crate::game_save::{SaveFileStatus, SaveSlot, SavedGame};
 use crate::main_menu::{synthetic_scene, MainMenuType};
 use crate::new_game;
 use crate::pack_source::PackSource;
-use crate::start_menu::StartMenu;
+use crate::start_menu::{StartMenu, StartMenuItem};
 use crate::title::TitleScene;
 use engine::save::{PlayTime, SaveBlock1, SaveBlock2};
 use platform::Buttons;
@@ -129,8 +129,15 @@ fn frames_until_the_file_is_written(
 ) -> u64 {
     let before = std::fs::read(path).ok();
     for frame in 1..=SAVE_FLOW_FRAME_BUDGET {
-        let buttons = match phase.start_menu().and_then(StartMenu::yes_no_cursor) {
+        let menu = phase.start_menu();
+        let buttons = match menu.and_then(StartMenu::yes_no_cursor) {
             Some(1) => pressed(Buttons::UP),
+            // BAG is the first item, so walk the cursor to SAVE before choosing.
+            None if menu
+                .is_some_and(|menu| !menu.saving() && menu.selected() != StartMenuItem::Save) =>
+            {
+                pressed(Buttons::DOWN)
+            }
             _ => pressed(Buttons::A),
         };
         assert!(phase.advance_start_menu_frame(buttons, slot));

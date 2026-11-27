@@ -1,6 +1,9 @@
 //! Fake save medium and input helpers shared by start-menu test suites.
 
-use super::{ReturnMailToBag, SaveMode, SaveTarget, SendMailToPc, TakeMailTarget};
+use super::{
+    synthetic_start_menu_at, ReturnMailToBag, SaveMode, SaveTarget, SendMailToPc, StartMenu,
+    TakeMailTarget,
+};
 use crate::game_save::SaveFileStatus;
 use engine::text::render::TextSpeed;
 use engine::text::Token;
@@ -95,3 +98,8 @@ impl TakeMailTarget for FakeTarget {
 /// the longest WARNING message at `TextSpeed::Mid`
 /// (`crate::flow::save_continue_support` documents the arithmetic).
 pub(super) const FRAME_BUDGET: usize = 4_000;
+
+/// A synthetic menu with the cursor on SAVE, the second item.
+pub(super) fn save_selected_menu() -> StartMenu {
+    synthetic_start_menu_at(1)
+}

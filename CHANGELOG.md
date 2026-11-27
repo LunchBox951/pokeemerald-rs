@@ -4,6 +4,11 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.147.0] - 2026-11-27
+
+- BAG is now the first choice on the field start menu. Choosing it fades the field to black, opens the Bag with your saved items, and closing it fades back to the field with the start menu reopened on BAG, as in the original game. The Bag tidies its pockets when you open it, and it remembers where you were when you reopen it. Items you rearranged or tossed stay that way while you play, and are kept in your save file once you SAVE. Using and registering items from the field Bag are still being prepared.
+- Aurora Beam can now lower the target's Attack. Hyper Cutter, Clear Body, White Smoke and Shield Dust block the drop, as in the original game.
+
 ## [0.0.146.0] - 2026-11-26
 
 - Choosing TAKE on a lead Pokémon holding MAIL now asks whether to send the removed MAIL to your PC. YES stores it in your PC's mailbox, or says the mailbox is full; NO offers to return the MAIL to your BAG with its message erased, as in the original game.
@@ -649,6 +654,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
+[0.0.147.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/70716a1449d6563071896a7cb44180f542daeae2...dev
 [0.0.146.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d5cf383bd4fc090f5bcf411248fcced1508e8d8d...dev
 [0.0.145.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d065fce456fcf84399616885376c66d6ca8ea64c...dev
 [0.0.144.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e4071950fffc09a11102ef9f9a020d18bceb1806...dev

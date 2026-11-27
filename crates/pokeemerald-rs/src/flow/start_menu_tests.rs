@@ -293,7 +293,7 @@ fn an_open_start_menu_freezes_movement_and_exit_writes_nothing() {
 
     assert_eq!(
         phase.start_menu().expect("still open").selected(),
-        StartMenuItem::Save
+        StartMenuItem::Bag
     );
     phase.advance_start_menu_frame(pressed(Buttons::UP), &mut save_slot);
     assert_eq!(
@@ -326,7 +326,7 @@ fn item_window_pixels(phase: &OverworldPhase) -> Vec<u32> {
     const LEFT: usize = 22 * 8;
     const TOP: usize = 8;
     const WIDTH: usize = 7 * 8;
-    const HEIGHT: usize = (3 * 2 + 2) * 8;
+    const HEIGHT: usize = (4 * 2 + 2) * 8;
     let frame = phase.compose_frame();
     (TOP..TOP + HEIGHT)
         .flat_map(|y| (LEFT..LEFT + WIDTH).map(move |x| (y, x)))
@@ -401,7 +401,7 @@ fn the_start_menu_cursor_wraps() {
     phase.open_synthetic_start_menu();
 
     let selected = |phase: &OverworldPhase| phase.start_menu().map(StartMenu::selected);
-    assert_eq!(selected(&phase), Some(StartMenuItem::Save));
+    assert_eq!(selected(&phase), Some(StartMenuItem::Bag));
     phase.advance_start_menu_frame(pressed(Buttons::UP), &mut save_slot);
     assert_eq!(
         selected(&phase),
@@ -411,22 +411,22 @@ fn the_start_menu_cursor_wraps() {
     phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
     assert_eq!(
         selected(&phase),
-        Some(StartMenuItem::Save),
+        Some(StartMenuItem::Bag),
         "DOWN from the last item wraps to the first"
     );
 }
 
-/// A fresh session's first start menu opens on `SAVE`, `sStartMenuCursorPos`'s
+/// A fresh session's first start menu opens on BAG, `sStartMenuCursorPos`'s
 /// own zeroed-EWRAM default (`start_menu.c:83`) -- the state a session's
 /// retained cursor is constructed in, whether the phase came from
 /// [`crate::new_game`] or [`OverworldPhase::from_saved`].
 #[test]
-fn a_fresh_session_opens_the_start_menu_on_save() {
+fn a_fresh_session_opens_the_start_menu_on_bag() {
     let mut phase = new_game_phase();
     phase.open_synthetic_start_menu();
     assert_eq!(
         phase.start_menu().unwrap().selected(),
-        StartMenuItem::Save,
+        StartMenuItem::Bag,
         "a session that has never closed a menu opens on the first item"
     );
 }
@@ -434,7 +434,7 @@ fn a_fresh_session_opens_the_start_menu_on_save() {
 /// `sStartMenuCursorPos` (`start_menu.c:83`) has session lifetime: closing
 /// the menu with `A` on `EXIT` (`StartMenuExitCallback`, `:750-757`) does
 /// not reset it, so the next `START` opens back on `EXIT`, not `SAVE`
-/// (issue: "Field start menu reopens on SAVE instead of the previously
+/// (issue: "Field start menu reopens on BAG instead of the previously
 /// selected entry").
 #[test]
 fn reopening_after_a_on_exit_keeps_the_cursor_on_exit() {
@@ -465,7 +465,7 @@ fn reopening_after_a_on_exit_keeps_the_cursor_on_exit() {
     assert_eq!(
         phase.start_menu().unwrap().selected(),
         StartMenuItem::Exit,
-        "reopening must land back on EXIT, not reset to SAVE"
+        "reopening must land back on EXIT, not reset to BAG"
     );
 }
 
@@ -497,7 +497,7 @@ fn reopening_after_start_or_b_keeps_the_cursor() {
         assert_eq!(
             phase.start_menu().unwrap().selected(),
             StartMenuItem::Exit,
-            "{close_key:?}: reopening must land back on EXIT, not reset to SAVE"
+            "{close_key:?}: reopening must land back on EXIT, not reset to BAG"
         );
     }
 }

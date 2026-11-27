@@ -38,7 +38,10 @@ use crate::start_menu::{self, SaveMode, SaveTarget, StartMenu, StartMenuOutcome}
 
 use super::connections::MapConnections;
 use super::{take_item_message, OverworldPhase};
+
+mod bag;
 use crate::overworld::NpcDialog;
+pub(super) use bag::FieldBag;
 
 impl OverworldPhase {
     /// Drives an already-open start menu for one frame; returns whether the
@@ -56,17 +59,20 @@ impl OverworldPhase {
         buttons: ButtonState,
         save_slot: &mut SaveSlot,
     ) -> bool {
+        if self.start_menu.is_none() {
+            return false;
+        }
+        if self.advance_bag_trip(buttons) {
+            // The clock runs through the fades and the bag screen as through
+            // any other frame (`PlayTimeCounter_Update`, `src/main.c:131-167`).
+            self.tick_play_time();
+            return true;
+        }
         let Some(mut menu) = self.start_menu.take() else {
             return false;
         };
 
-        self.take_field_lock();
-        // `StopPlayerAvatar` in `ShowStartMenu` (`start_menu.c:581-588`).
-        self.player.reset_movement_direction_to_facing();
-
-        // Step does not run on frames the menu owns.
-        self.advance_tileset_anim_tick();
-        self.scene.seed_tall_grass_placement(&self.player);
+        self.lock_field_for_menu();
 
         let mut target = PhaseSaveTarget {
             phase: RefCell::new(self),
@@ -88,7 +94,39 @@ impl OverworldPhase {
             // The menu is dropped first, so the take runs with field control
             // already back; the message box then takes it again.
             StartMenuOutcome::TakeItem => self.show_take_item_outcome(),
+            // The menu stays up, drawn, while the field fades out under it.
+            StartMenuOutcome::Bag => {
+                self.start_menu = Some(menu);
+                self.begin_bag_trip(buttons);
+            }
         }
+        self.advance_field_sprites();
+        // After the menu's own tasks, so a save written this frame holds the
+        // time as the frame began, as in [`Self::step`].
+        self.tick_play_time();
+        true
+    }
+
+    /// A frame of the field that a menu or the bag trip owns: input is
+    /// locked and the player stands still, but the tileset animation and the
+    /// sprites still run, as the field's main loop does around a task
+    /// (`OverworldBasic`, `src/overworld.c:1465-1476`).
+    pub(super) fn advance_locked_field_frame(&mut self) {
+        self.lock_field_for_menu();
+        self.advance_field_sprites();
+    }
+
+    fn lock_field_for_menu(&mut self) {
+        self.take_field_lock();
+        // `StopPlayerAvatar` in `ShowStartMenu` (`start_menu.c:581-588`).
+        self.player.reset_movement_direction_to_facing();
+
+        // Step does not run on frames the menu owns.
+        self.advance_tileset_anim_tick();
+        self.scene.seed_tall_grass_placement(&self.player);
+    }
+
+    fn advance_field_sprites(&mut self) {
         // As in `step`: the menu is a task, so the sprites run after it
         // (`OverworldBasic`, `src/overworld.c:1465-1476`).
         self.advance_object_events();
@@ -103,10 +141,6 @@ impl OverworldPhase {
             &self.save1.event_data,
             &maps,
         );
-        // After the menu's own tasks, so a save written this frame holds the
-        // time as the frame began, as in [`Self::step`].
-        self.tick_play_time();
-        true
     }
 
     /// Whether a fresh `START` press may open the menu this frame.
@@ -129,6 +163,7 @@ impl OverworldPhase {
             && !self.in_battle()
             && !self.mid_step()
             && self.dialog.is_none()
+            && !self.bag_trip_active()
             // Upstream gates this through `LockPlayerFieldControls` in
             // `ConfigureAndSetUpOneTrainerBattle` (`src/battle_setup.c`); the
             // port has no lock, and the approach is neither a battle nor a step.

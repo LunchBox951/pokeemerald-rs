@@ -42,9 +42,11 @@ impl OverworldPhase {
         self.pending_turn = None;
     }
 
-    /// Composes the finished frame with no palette stage.
+    /// Composes the finished frame with no palette stage, or the stage of the
+    /// bag trip that owns it.
     pub(in crate::flow) fn compose_frame(&self) -> Box<Frame> {
-        self.compose_frame_staged(PaletteStage::default())
+        self.compose_bag_trip_frame()
+            .unwrap_or_else(|| self.compose_frame_staged(PaletteStage::default()))
     }
 
     /// Composes the finished frame under `palette`: the scene for the current

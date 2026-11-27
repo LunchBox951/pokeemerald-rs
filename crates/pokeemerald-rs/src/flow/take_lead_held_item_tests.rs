@@ -106,6 +106,7 @@ fn selecting_take_in_the_open_menu_unblocks_a_refused_lead() {
 
     phase.open_synthetic_start_menu();
     phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
     assert_eq!(
         phase.start_menu().unwrap().selected(),
         StartMenuItem::TakeItem
@@ -146,6 +147,7 @@ fn selecting_take_with_a_full_bag_keeps_the_item_on_the_lead() {
 
     phase.open_synthetic_start_menu();
     phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
     phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
 
     assert_eq!(phase.save1().bag, bag);
@@ -167,6 +169,7 @@ fn a_full_bag_take_shows_the_player_why() {
 
     phase.open_synthetic_start_menu();
     phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
     phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
 
     let message_on_screen =
@@ -186,6 +189,7 @@ fn a_successful_take_shows_the_message_and_dismissing_it_frees_the_field() {
     let mut phase = phase_leading_with_sitrus_berry();
 
     phase.open_synthetic_start_menu();
+    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
     phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
     phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
 
@@ -225,6 +229,7 @@ fn a_take_whose_message_cannot_be_built_leaves_the_item_on_the_lead() {
     );
     phase.pack_source = crate::pack_source::PackSource::Test(missing);
 
+    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
     phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
     phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
 

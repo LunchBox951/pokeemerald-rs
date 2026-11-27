@@ -33,6 +33,17 @@ impl KeyRepeat {
         }
     }
 
+    /// A counter at rest whose last frame held `previous_held`, the remapped
+    /// `gMain.heldKeys`: for a host that starts counting on a frame whose
+    /// input it knows changed, so the first [`Self::advance`] compares
+    /// against the frame before as upstream does.
+    pub(crate) fn resting_after(start_delay: u8, previous_held: Buttons) -> Self {
+        Self {
+            previous_held,
+            ..Self::new(start_delay)
+        }
+    }
+
     /// `gMain.newAndRepeatedKeys` for this frame. Call it once per frame,
     /// whether or not the screen reads the result: upstream counts every frame.
     ///

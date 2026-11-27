@@ -37,7 +37,7 @@
     not(test),
     expect(
         dead_code,
-        reason = "the field and battle callers (#1765, #1779) are the production users"
+        reason = "the battle caller (#1779) is the other production user"
     )
 )]
 
@@ -65,6 +65,8 @@ use scroll::ArrowClock;
 use shake::BagShake;
 use swap::ItemSwap;
 use toss::ItemToss;
+
+pub(crate) use toss::pack_pockets;
 
 /// Which caller opened the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,7 +262,8 @@ pub(crate) struct BagScreen {
     /// and Down read, in the list and while swapping, and the TOSS count
     /// reads for all four directions. It opens at the boot delay of 40:
     /// upstream's session-global `gKeyRepeatStartDelay` is not
-    /// modelled, so a naming screen's 16 does not carry over.
+    /// modelled, so a naming screen's 16 does not carry over. A host that
+    /// counts for the screen ([`BagScreen::tick_repeated`]) bypasses it.
     repeat: KeyRepeat,
     done: Option<BagScreenResult>,
     /// Whether the choice that closed the screen was confirmed in a context
@@ -286,18 +289,44 @@ impl BagScreen {
     /// press is heard meanwhile and restarts it, unless the request has a
     /// link; every other input is dropped, not queued (`item_menu.c:1356-1370`).
     pub(crate) fn tick(&mut self, buttons: ButtonState) -> BagScreenTick {
+        let repeated = self.repeat.advance(buttons);
+        self.tick_repeated(buttons, repeated)
+    }
+
+    /// [`Self::tick`] for a host that counts the held-button repeat itself:
+    /// `repeated` is this frame's `gMain.newAndRepeatedKeys`, and the
+    /// screen's own counter is left alone. `ReadKeys` counts on every frame
+    /// of the session, the ones before the bag exists and the ones it does
+    /// not listen on included (`main.c:133,251-275`), so a host whose bag
+    /// opens with a button already held has to carry the count in.
+    pub(crate) fn tick_repeated(
+        &mut self,
+        buttons: ButtonState,
+        repeated: Buttons,
+    ) -> BagScreenTick {
         let pairs_before = self.arrow_pairs();
-        let outcome = self.handle_buttons(buttons);
+        let outcome = self.handle_buttons(buttons, repeated);
         self.age_arrows(pairs_before, self.arrow_pairs());
         self.shake.update();
         outcome
     }
 
-    fn handle_buttons(&mut self, buttons: ButtonState) -> BagScreenTick {
+    /// The animations' clocks: the bag picture's angle and the list's and
+    /// pocket-switch arrow pairs' samples, for tests that watch the screen
+    /// animate.
+    #[cfg(test)]
+    pub(crate) fn animation_clocks(&self) -> (u8, Option<u8>, Option<u8>) {
+        (
+            self.shake.angle(),
+            self.arrows.samples(),
+            self.switch_arrows.samples(),
+        )
+    }
+
+    fn handle_buttons(&mut self, buttons: ButtonState, repeated: Buttons) -> BagScreenTick {
         if let Some(result) = self.done {
             return BagScreenTick::Closed(result);
         }
-        let repeated = self.repeat.advance(buttons);
         if let Some(switch) = self.switch {
             self.advance_switch(switch, buttons);
             return BagScreenTick::Open;
@@ -549,3 +578,41 @@ mod glyph_tests;
 mod pack_fixture;
 #[cfg(test)]
 mod tests;
+
+/// The synthetic bag pack, for host tests that open the screen through a
+/// real pack file.
+#[cfg(test)]
+pub(crate) mod host_fixture {
+    use rendering::Rgb888;
+
+    /// Where the bag picture shows in the Items pocket, in
+    /// [`bag_picture_color`].
+    pub(crate) const BAG_PICTURE_AT: (usize, usize) = (68, 66);
+
+    /// Ticks a pocket switch runs for.
+    pub(crate) const SWITCH_TICKS: u8 = super::SWITCH_TICKS;
+
+    /// The pack bytes with every entry the screen reads, which also carries
+    /// the start menu's window frames, message box and normal font.
+    pub(crate) fn pack_bytes() -> Vec<u8> {
+        crate::pack_test_support::pack_bytes_with_fonts(super::pack_fixture::entries())
+    }
+
+    /// [`pack_bytes`] without any bag-screen entry, so the start menu opens
+    /// and the bag does not.
+    pub(crate) fn pack_bytes_without_the_bag_screen() -> Vec<u8> {
+        let kept = super::pack_fixture::entries()
+            .into_iter()
+            .filter(|entry| !entry.id.starts_with("bag/"))
+            .collect();
+        crate::pack_test_support::pack_bytes_with_fonts(kept)
+    }
+
+    /// The colour of the Items pocket's bag picture, a sprite.
+    pub(crate) fn bag_picture_color() -> Rgb888 {
+        super::pack_fixture::bag_frame_color(1)
+    }
+
+    /// The colour of the screen's background tilemap, a background layer.
+    pub(crate) const BACKGROUND: Rgb888 = super::pack_fixture::BACKGROUND;
+}

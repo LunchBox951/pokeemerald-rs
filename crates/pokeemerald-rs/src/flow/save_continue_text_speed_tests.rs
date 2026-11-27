@@ -59,9 +59,14 @@ fn frames_to_print_the_save_confirm(label: &str, text_speed: u8) -> usize {
     phase.open_synthetic_start_menu();
     assert_eq!(
         phase.start_menu().unwrap().selected(),
-        StartMenuItem::Save,
-        "SAVE is the first item, so a fresh menu opens on it"
+        StartMenuItem::Bag,
+        "BAG is the first item, so a fresh menu opens on it"
     );
+    assert!(
+        phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut slot),
+        "an open start menu owns its frame"
+    );
+    assert_eq!(phase.start_menu().unwrap().selected(), StartMenuItem::Save);
     assert!(
         phase.advance_start_menu_frame(pressed(Buttons::A), &mut slot),
         "an open start menu owns its frame"
