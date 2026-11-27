@@ -44,12 +44,11 @@
 //!   while it was being built, keeping what follows a `stop` that lands
 //!   before that callback; a `start` or `stop` that lands during that
 //!   build has the re-attaching stream built again for the new intent. A
-//!   `start` is read only once published whole ([`Shared::intent`]): the
-//!   transport acknowledges none still in progress, builds on none, and asks
-//!   again after [`HEALTH_POLL`]. A queue left while stopped is kept for the
-//!   next `start`. The first
-//!   attach keeps the queue: that is the producer's startup prefill,
-//!   whether or not it has already called `start`.
+//!   `start` still being published ([`Shared::intent`]) is not acknowledged
+//!   or built on; the transport asks again after [`HEALTH_POLL`]. A queue
+//!   left while stopped is kept for the next `start`. The first attach keeps
+//!   the queue: that is the producer's startup prefill, whether or not it
+//!   has already called `start`.
 //! - Each distinct [`TransportState`] is published once, in order, for the
 //!   application to report. At most [`shared::MAX_PENDING_EVENTS`] unpolled
 //!   transitions are kept; a caller that never polls loses the oldest, and
@@ -197,8 +196,7 @@ impl<H: OutputHost> Transport<H> {
             return now;
         }
         if self.live.is_none() {
-            // A start still being published is neither acknowledged nor
-            // attached across; look again once it is.
+            // A start still being published is looked at again once done.
             let Some(intent) = self.shared.intent() else {
                 return now + HEALTH_POLL;
             };
@@ -236,8 +234,7 @@ impl<H: OutputHost> Transport<H> {
 
     /// Whether `start` was called since the transport last looked, which
     /// with no stream attached means playback was meant to advance even if a
-    /// `stop` has landed since. `starts` is the count of an
-    /// [`Shared::intent`] snapshot, so it never includes an unfinished start.
+    /// `stop` has landed since. `starts` comes from a [`Shared::intent`].
     fn started_while_detached(&mut self, starts: u64) -> bool {
         let started = starts != self.seen_starts;
         self.seen_starts = starts;
@@ -347,8 +344,7 @@ impl<H: OutputHost> Transport<H> {
         let Some(live) = self.live.as_mut() else {
             return;
         };
-        // A start still being published is applied by a later poll, once its
-        // count and intent can be read together.
+        // A start still being published is applied by a later poll.
         let Some(Intent {
             starts: want_starts,
             running: want,
@@ -356,12 +352,8 @@ impl<H: OutputHost> Transport<H> {
         else {
             return;
         };
-        // A playing stream applied every start counted so far, whether or not
-        // the latest `stop` has been applied to it yet: one coalesced with a
-        // `stop` since the last poll, or finished after a play call that
-        // could not read it, is no missed playback when the stream is later
-        // retired. A loss of this playing stream still latches the queue as
-        // history.
+        // A playing stream applied every start counted so far, even one a
+        // `stop` has since coalesced with: no missed playback.
         if live.playing {
             self.seen_starts = want_starts;
         }
@@ -384,11 +376,8 @@ impl<H: OutputHost> Transport<H> {
             if result.is_ok() {
                 live.playing = want;
                 if want {
-                    // This stream applied the start `want` read, so it is no
-                    // missed playback when the stream is later retired.
-                    // `want_starts` is that start's count; a start that
-                    // landed during the call is read again, and one still
-                    // being published is left for a later poll.
+                    // This stream applied the start `want` read, and any that
+                    // landed during the call and are published.
                     self.seen_starts = self
                         .shared
                         .intent()
@@ -474,9 +463,7 @@ impl<H: OutputHost> Transport<H> {
         // Intent is read with pushes held off, so a `stop` that lands after
         // the read is followed by no push until the discard below is done:
         // what queues after it survives as a stopped queue, and the check
-        // after the build sees the changed intent. The count and the intent
-        // are one snapshot: a start still being published is not
-        // acknowledged, and nothing is decided or discarded until it is.
+        // after the build sees the changed intent.
         let mut held = consumer.hold_pushes();
         let Some(intent) = self.shared.intent() else {
             return Err(NotAttached::IntentChanged);
@@ -555,7 +542,7 @@ impl<H: OutputHost> Transport<H> {
         // that landed while it blocked would replay history or drop a
         // stopped queue, so drop the unplayed stream and decide again.
         // A `start` and `stop` that both landed meanwhile changed it too.
-        // A start still being published also changes it, once it finishes.
+        // A start still being published changes it once it finishes.
         if self.attached_before {
             match self.shared.intent() {
                 Some(now) if now.running == playing && now.starts == self.seen_starts => {}
@@ -569,8 +556,7 @@ impl<H: OutputHost> Transport<H> {
             self.check_live()?;
             played.map_err(|_| TransportFailure::ConnectFailed)?;
             // A start that landed after the intent read is applied by this
-            // stream too; only a first attach can get here with one. One
-            // still being published is counted when it is next read.
+            // stream too; only a first attach can get here with one.
             if let Some(intent) = self.shared.intent() {
                 self.seen_starts = intent.starts;
             }
@@ -622,8 +608,7 @@ impl<H: OutputHost> Transport<H> {
                     self.stale_queue = true;
                 }
             }
-            // A start being published is playback meant to advance; it stays
-            // unacknowledged for the re-attach to read once it is done.
+            // A start still being published is playback meant to advance.
             None => self.stale_queue = true,
         }
         self.live = None;
