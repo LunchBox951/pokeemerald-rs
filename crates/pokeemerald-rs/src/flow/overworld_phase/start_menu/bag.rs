@@ -1,24 +1,12 @@
 //! The start menu's BAG entry: the four black fades that carry the field to
 //! the bag screen and back, and the live-save state the bag edits.
 //!
-//! Upstream runs the trip as separate callbacks and tasks. Choosing BAG
-//! starts the field's fade to black on the selecting frame and waits for it
-//! (`StartMenuBagCallback`, `src/start_menu.c:670-682`); the bag then blackens
-//! its palettes and fades in (`GoToBagMenu`, `SetupBagMenu`,
-//! `src/item_menu.c:614-641,769-781`); a B in the list switches to the task
-//! that fades the bag out on the following frame (`Task_FadeAndCloseBagMenu`,
-//! `src/item_menu.c:1074-1099,1244-1258`); and the field returns with its
-//! start menu already drawn on the same item and fades in
-//! (`CB2_ReturnToFieldWithOpenMenu`, `src/overworld.c:1670-1674`;
-//! `FieldCB_ReturnToFieldOpenStartMenu`, `ReturnToFieldOpenStartMenu`,
-//! `src/field_screen_effect.c:95-99,424-443`), where field input stays
-//! locked until the menu's own task takes it over (`Task_ShowStartMenu`,
-//! `src/start_menu.c:561-576`).
-//!
-//! The start menu stays on [`OverworldPhase::start_menu`] for the whole trip:
-//! the port retains the windows upstream rebuilds, and the field's
-//! "a menu is open" freeze keeps holding. [`BagTrip`] owns the frame instead
-//! of the menu or the field from the selecting frame until the handoff.
+//! Upstream entry and exit points: `StartMenuBagCallback`
+//! (`src/start_menu.c:670-682`), `GoToBagMenu` and `SetupBagMenu`
+//! (`src/item_menu.c:614-641,769-781`), `Task_FadeAndCloseBagMenu`
+//! (`src/item_menu.c:1074-1099,1244-1258`), and
+//! `CB2_ReturnToFieldWithOpenMenu` (`src/overworld.c:1670-1674`) with
+//! `ReturnToFieldOpenStartMenu` (`src/field_screen_effect.c:95-99,424-443`).
 //!
 //! Every fade is a delay-zero black [`NormalPaletteFade`]: its `begin` is
 //! update call 1 and each later frame is one more call, so a fade is over
@@ -308,7 +296,7 @@ impl OverworldPhase {
     /// up on the next. A bag that cannot open returns to the field through
     /// the same black, as upstream's failed allocation installs its exit
     /// callback on this frame (`:614-621`).
-    fn open_bag(&self) -> BagTrip {
+    fn open_bag(&mut self) -> BagTrip {
         match bag_menu::open(&self.pack_source, &self.save1.bag, self.field_bag_request()) {
             Ok(screen) => BagTrip::BagSetup(Box::new(screen)),
             Err(err) => {
@@ -337,7 +325,14 @@ impl OverworldPhase {
     /// field's reload and the menu's rebuild follow, then the fade in
     /// (`FieldCB_ReturnToFieldOpenStartMenu`,
     /// `src/field_screen_effect.c:95-99,433-444`).
-    fn reload_field(&self) -> BagTrip {
+    ///
+    /// The reload destroys the field's sprites in `ReturnToFieldLocal` state
+    /// 0 and zeroes the tileset animation counters in state 1
+    /// (`src/overworld.c:1965-1977,2131-2134`). Nothing counts or draws
+    /// either until `CB2_Overworld` runs again on the frame after the fade
+    /// in begins (`:1465-1475,1638-1645`), so both are restarted here.
+    fn reload_field(&mut self) -> BagTrip {
+        self.reinit_field_tileset_animations();
         let menu_items = self
             .start_menu
             .as_ref()
@@ -401,6 +396,8 @@ fn bag_frame(screen: &BagScreen, palette: PaletteStage<'_>) -> Box<Frame> {
 
 #[cfg(test)]
 mod fade_tests;
+#[cfg(test)]
+mod field_reinit_tests;
 #[cfg(test)]
 mod save_tests;
 #[cfg(test)]
