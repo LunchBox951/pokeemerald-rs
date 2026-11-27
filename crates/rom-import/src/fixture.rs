@@ -27,6 +27,11 @@ use crate::sha1::sha1;
 /// valid pointer, LZ77 type byte, or header fixed byte, so a reader that
 /// wanders out of the region a test wrote fails instead of finding zeros
 /// that look like plausible data.
+///
+/// It is also the text terminator and a valid control operand, so a planted
+/// `FC 08 FF` is followed by filler and reads as `{PAUSE 255}` then `EOS`. A
+/// test that needs a text stream cut short plants it at the end of the image,
+/// where no filler follows.
 pub const FILLER: u8 = 0xFF;
 
 /// A builder for a synthetic ROM image.

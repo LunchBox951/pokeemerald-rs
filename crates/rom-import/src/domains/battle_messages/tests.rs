@@ -305,9 +305,9 @@ fn an_unterminated_special_stream_is_refused() {
 
 #[test]
 fn a_malformed_table_stream_names_its_id() {
-    // `0xFC 0x04` leads a control sequence with three argument bytes; the
-    // first `0xFF` cuts it short.
-    let rom = rom_of(fixture().write(STRINGS + 5 * CELL, &[0xFC, 0x04, 0xFF]));
+    // `0xFC 0x7F` leads no extended control the charmap assigns, so the
+    // schema refuses the stream the reader hands it.
+    let rom = rom_of(fixture().write(STRINGS + 5 * CELL, &[0xFC, 0x7F, 0xFF]));
     let err = written(&rom, family()).unwrap_err();
     assert!(
         matches!(
@@ -327,7 +327,7 @@ fn a_malformed_table_stream_names_its_id() {
 
 #[test]
 fn a_malformed_special_stream_names_its_index() {
-    let rom = rom_of(fixture().write(SPECIALS + 9 * CELL, &[0xFD, 0xFF]));
+    let rom = rom_of(fixture().write(SPECIALS + 9 * CELL, &[0xFC, 0x7F, 0xFF]));
     let err = written(&rom, family()).unwrap_err();
     assert!(
         matches!(
@@ -343,4 +343,67 @@ fn a_malformed_special_stream_names_its_index() {
         ),
         "{err}"
     );
+}
+
+/// Streams whose control operands hold `0xFF`, each ending at its last byte.
+const FF_OPERANDS: [&[u8]; 4] = [
+    // `{PAUSE 255}` then `EOS`: the filler after it is also `0xFF`.
+    &[0xFC, 0x08, 0xFF, 0xFF],
+    // Text around `{PAUSE 255}`, so a reader that stops early returns less.
+    &[0x01, 0xFC, 0x08, 0xFF, 0x02, 0xFF],
+    // A dynamic placeholder whose one operand byte is `0xFF`.
+    &[0x01, 0xFD, 0xFF, 0x02, 0xFF],
+    // `{COLOR_HIGHLIGHT_SHADOW}`-style three-byte operand, all `0xFF`.
+    &[0xFC, 0x04, 0xFF, 0xFF, 0xFF, 0x03, 0xFF],
+];
+
+#[test]
+fn a_control_operand_of_ff_is_read_through_to_the_real_eos() {
+    for planted in FF_OPERANDS {
+        let rom = rom_of(
+            fixture()
+                .write(STRINGS + 5 * CELL, planted)
+                .write(SPECIALS + 9 * CELL, planted),
+        );
+        let entries = written(&rom, family()).expect("a valid stream with an FF operand");
+        let table = BattleMessageTable::decode(&entries[0].2).expect("canonical bytes");
+        assert_eq!(
+            table.string(BATTLE_MESSAGE_TABLE_START + 5).unwrap(),
+            planted,
+            "{planted:02X?}"
+        );
+        assert_eq!(table.special(9).unwrap(), planted, "{planted:02X?}");
+    }
+}
+
+#[test]
+fn a_control_sequence_cut_by_the_end_of_the_image_is_refused() {
+    // Each is a valid prefix that needs one or more bytes the image lacks.
+    let cuts: [&[u8]; 4] = [&[0xFC], &[0xFC, 0x08], &[0xFC, 0x04, 0xFF, 0xFF], &[0xFD]];
+    for cut in cuts {
+        let at_end = ROM_SIZE - cut.len();
+        let table_rom = rom_of(fixture().write_ptr(TABLE, at(at_end)).write(at_end, cut));
+        let err = written(&table_rom, family()).unwrap_err();
+        assert!(
+            matches!(err, ImportError::Truncated { at, .. } if at == at_end),
+            "{cut:02X?}: {err}"
+        );
+
+        // The table is whole here, so the read reaches the special root.
+        let rom = rom_of(fixture().write(at_end, cut));
+        let mut specials = special_roots().to_vec();
+        specials[3].addr = at(at_end);
+        let err = written(
+            &rom,
+            BattleMessageRoots {
+                table: at(TABLE),
+                specials: Box::leak(specials.into_boxed_slice()),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ImportError::Truncated { at, .. } if at == at_end),
+            "{cut:02X?}: {err}"
+        );
+    }
 }

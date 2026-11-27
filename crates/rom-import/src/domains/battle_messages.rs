@@ -9,10 +9,12 @@
 //! inventory and owns the canonical encoding, so the checkout extractor and
 //! this reader cannot drift on the wire format.
 //!
-//! A stream's end is its first `0xFF`. Control sequences whose arguments
-//! could hold that byte are rejected by [`BattleMessageTable`]'s own token
-//! walk instead of being skipped here, so a cut inside one is a typed
-//! [`ImportError::BattleMessage`], never a short string.
+//! A stream's end is its first `0xFF` at a token boundary: a control
+//! sequence's operand may be `0xFF` (`FC 08 FF FF` is `{PAUSE 255}` then
+//! `EOS`), so [`stream`] steps over each sequence as upstream's printer does.
+//! One the image ends inside is [`ImportError::Truncated`], and one the
+//! charmap does not assign is left for [`BattleMessageTable`]'s own token
+//! walk to refuse as a typed [`ImportError::BattleMessage`].
 
 use assets::pack::{
     BattleMessageTable, BATTLE_MESSAGE_SLOT_COUNT, BATTLE_MESSAGE_SPECIAL_TEMPLATES,
@@ -122,22 +124,62 @@ fn check_roots(family: &BattleMessageRoots) -> Result<(), ImportError> {
     Ok(())
 }
 
-/// The bytes from `ptr` through the first `EOS`.
+/// The bytes from `ptr` through the `EOS` that ends its token string.
+///
+/// Walks token boundaries, so a `0xFF` control operand is not the
+/// terminator. The walk and the schema's own (`assets`' `text_tokens`) must
+/// agree on every sequence's length; a drift between them makes the schema
+/// refuse the stream (`bytes follow the terminator` or `missing terminator`)
+/// rather than accept a wrong one.
 ///
 /// # Errors
 ///
-/// [`ImportError::Truncated`] if the image ends before an `EOS`.
+/// [`ImportError::Truncated`] if the image ends before the `EOS`, including
+/// inside a control sequence.
 pub(super) fn stream<'a>(reader: &RomReader<'a>, ptr: GbaPtr) -> Result<&'a [u8], ImportError> {
     let start = ptr.offset();
     let tail = reader.tail(start)?;
-    let end = tail
-        .iter()
-        .position(|&byte| byte == EOS)
-        .ok_or(ImportError::Truncated {
-            at: start,
-            len: tail.len().saturating_add(1),
-        })?;
-    Ok(&tail[..=end])
+    let len = token_string_len(tail).ok_or(ImportError::Truncated {
+        at: start,
+        len: tail.len().saturating_add(1),
+    })?;
+    Ok(&tail[..len])
+}
+
+/// Operand bytes after an extended-control (`0xFC`) subcode, per the charmap
+/// (`charmap.txt:413-436`); `None` for a subcode it does not assign.
+const fn ext_ctrl_operands(sub: u8) -> Option<usize> {
+    match sub {
+        0x00 | 0x07 | 0x09 | 0x0A | 0x0F | 0x15..=0x18 => Some(0),
+        0x01..=0x03 | 0x05 | 0x06 | 0x08 | 0x0C..=0x0E | 0x11..=0x14 => Some(1),
+        0x0B | 0x10 => Some(2),
+        0x04 => Some(3),
+        _ => None,
+    }
+}
+
+/// The length through the `EOS` of the token string at the start of `bytes`,
+/// or `None` if `bytes` ends first.
+///
+/// A placeholder, dynamic, keypad-icon, or extra-symbol lead (`0xFD`,
+/// `0xF7`..=`0xF9`) takes one operand byte and an extended control takes the
+/// operands [`ext_ctrl_operands`] gives, so none of them can end the string. An
+/// unassigned extended control is stepped over as its lead alone: the schema
+/// refuses it when it walks the stream this returns.
+fn token_string_len(bytes: &[u8]) -> Option<usize> {
+    let mut i = 0;
+    loop {
+        let width = match *bytes.get(i)? {
+            EOS => return Some(i + 1),
+            0xFD | 0xF7..=0xF9 => 2,
+            0xFC => ext_ctrl_operands(*bytes.get(i + 1)?).map_or(1, |operands| 2 + operands),
+            _ => 1,
+        };
+        i += width;
+        if i > bytes.len() {
+            return None;
+        }
+    }
 }
 
 #[cfg(test)]

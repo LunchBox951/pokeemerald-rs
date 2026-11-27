@@ -7,10 +7,12 @@
 //! validates the inventory and owns the canonical encoding, so the checkout
 //! extractor and this reader cannot drift on the wire format.
 //!
-//! A stream's end is its first `0xFF`. Control sequences whose arguments
-//! could hold that byte are rejected by [`FieldMessageTable`]'s own token
-//! walk instead of being skipped here, so a cut inside one is a typed
-//! [`ImportError::FieldMessage`], never a short string.
+//! A stream's end is its first `0xFF` at a token boundary, so a `0xFF`
+//! control operand (`FC 08 FF FF` is `{PAUSE 255}` then `EOS`) does not end
+//! it early; the shared `stream` helper walks the tokens. A control sequence
+//! the charmap does not assign is a typed [`ImportError::FieldMessage`] from
+//! [`FieldMessageTable`]'s own token walk, and one the image ends inside is
+//! [`ImportError::Truncated`].
 
 use assets::pack::{FieldMessage, FieldMessageTable};
 use pack_format::{raw_entry, PackWriter};

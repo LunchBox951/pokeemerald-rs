@@ -257,9 +257,55 @@ fn an_address_off_the_image_or_an_unterminated_tail_is_refused() {
 }
 
 #[test]
-fn a_stream_cut_inside_a_control_sequence_is_a_schema_error() {
-    // `{PAUSE}` takes an argument byte; here `EOS` ends the stream first.
-    let rom = rom_of(fixture().write(stream_at(7), &[0xFC, 0x08, 0xFF]));
+fn a_pause_whose_operand_is_ff_is_read_through_to_the_real_eos() {
+    // `{PAUSE 255}` then `EOS`: the first `0xFF` is the operand, and the
+    // fixture's filler supplies the same byte after it.
+    for planted in [
+        &[0xFC, 0x08, 0xFF, 0xFF][..],
+        &[0xC1, 0xFC, 0x08, 0xFF, 0xC2, 0xFF][..],
+        &[0xC1, 0xFD, 0xFF, 0xC2, 0xFF][..],
+        &[0xFC, 0x04, 0xFF, 0xFF, 0xFF, 0xFF][..],
+    ] {
+        let rom = rom_of(fixture().write(stream_at(7), planted));
+        let entries = written(&rom, leak(roots())).expect("a valid PAUSE 255 stream");
+        let table = SightTrainerIntroSpeechTable::decode(&entries[0].2).expect("canonical bytes");
+        assert_eq!(
+            table.speech(SIGHT_TRAINER_INTRO_SCRIPTS[7]),
+            Some(planted),
+            "{planted:02X?}"
+        );
+    }
+}
+
+#[test]
+fn a_control_sequence_cut_by_the_end_of_the_image_is_refused() {
+    // `{PAUSE}` needs an operand byte the image no longer has.
+    for cut in [
+        &[0xFC][..],
+        &[0xFC, 0x08][..],
+        &[0xFC, 0x04, 0xFF, 0xFF][..],
+        &[0xFD][..],
+    ] {
+        let at_end = ROM_SIZE - cut.len();
+        let rom = rom_of(
+            fixture()
+                .write(at_end, cut)
+                .write(command_at(0), &command(0, at(at_end))),
+        );
+        let mut tail = roots();
+        tail[0].addr = at(at_end);
+        let err = written(&rom, leak(tail)).unwrap_err();
+        assert!(
+            matches!(err, ImportError::Truncated { at, .. } if at == at_end),
+            "{cut:02X?}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_stream_with_an_unassigned_control_is_a_schema_error() {
+    // `0xFC 0x7F` is no extended control the charmap assigns.
+    let rom = rom_of(fixture().write(stream_at(7), &[0xFC, 0x7F, 0xFF]));
     let err = written(&rom, leak(roots())).unwrap_err();
     assert!(
         matches!(
