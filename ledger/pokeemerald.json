@@ -32943,9 +32943,21 @@
     },
     "src/frontier_util.c": {
       "artifacts": {
+        "sFrontierBrainObjEventGfx": {
+          "reason": "src/frontier_util.c:668-677 sFrontierBrainObjEventGfx, transcribed as one overworld graphics id and female flag per facility in facility order, behind frontier_brain_identity. The Palace and Arena ids are out of numeric order and the Pyramid id is not contiguous with the rest. Pinned by unit tests and by an ignored test that re-parses the source table and the object-event constants. NOT modelled: the readers (src/frontier_util.c:2483-2493), graphics extraction, and object-event wiring.",
+          "rust_target": "crates/assets/src/frontier_brain_ids.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "sFrontierBrainStreakAppearances": {
           "reason": "src/frontier_util.c:86-95 sFrontierBrainStreakAppearances, transcribed as the seven facility rows of four bytes (silver streak, gold streak, repeat interval, streak adjustment), behind frontier_brain_thresholds, which refuses a facility id outside the table. The Dome's and Pyramid's zero adjustment stays distinct from the other facilities' one. Pinned field by field by unit tests and, with the battle_pike.c copy, by an ignored test that re-parses both source files. NOT modelled: GetFrontierBrainStatus (src/frontier_util.c:1659-1689) and the Brain status check at :2595-2600, symbol awarding, the Brain teams and speeches, and battle wiring.",
           "rust_target": "crates/assets/src/frontier_brain_thresholds.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sFrontierBrainTrainerIds": {
+          "reason": "src/frontier_util.c:719-728 sFrontierBrainTrainerIds, transcribed as one trainer id per facility in facility order (Anabel, Tucker, Spenser, Greta, Noland, Lucy, Brandon), behind frontier_brain_identity, which refuses a facility id outside the table. Pinned by unit tests and by an ignored test that re-parses the source table and the opponent constants. NOT modelled: the readers (src/frontier_util.c:2443-2465), Brain teams, names and speeches, and battle wiring.",
+          "rust_target": "crates/assets/src/frontier_brain_ids.rs",
           "spec": "S-4",
           "status": "ported"
         }
