@@ -1133,7 +1133,7 @@ fn score_viability(
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
         ScoreableEffect::Paralyze => score_paralyze_viability(scores, slot, user, target, rng),
         ScoreableEffect::LeechSeed => {
-            score_leech_seed_viability(dex, scores, slot, user, target, rng)?
+            score_leech_seed_viability(dex, scores, slot, user, target, rng)?;
         }
         ScoreableEffect::Confuse | ScoreableEffect::StatLabel(..) => {
             return Err(BattleError::UnscoreableMoveEffect(move_id));
