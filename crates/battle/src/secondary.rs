@@ -297,12 +297,14 @@ fn status_may_clear(defender: &BattlePokemon) -> bool {
 #[must_use]
 fn stat_drop_can_land(stat: ChangedStat, defender: &BattlePokemon) -> bool {
     let ability = defender.ability();
+    // `None` is "no own-stat guard"; `AbilityId::NONE` is a real value a
+    // defender can hold (`ABILITY_NONE`) and must never match it.
     let own_stat_guard = match stat {
-        ChangedStat::Accuracy => AbilityId::KEEN_EYE,
-        ChangedStat::Attack => AbilityId::HYPER_CUTTER,
-        _ => AbilityId::NONE,
+        ChangedStat::Accuracy => Some(AbilityId::KEEN_EYE),
+        ChangedStat::Attack => Some(AbilityId::HYPER_CUTTER),
+        _ => None,
     };
-    ability != own_stat_guard
+    own_stat_guard != Some(ability)
         && !matches!(
             ability,
             AbilityId::CLEAR_BODY | AbilityId::WHITE_SMOKE | AbilityId::SHIELD_DUST

@@ -3,13 +3,14 @@
 
 use super::{
     ensure_admissible, is_accuracy_down_hit_effect, is_attack_down_hit_effect,
-    is_speed_down_hit_effect, spend_effect_chance_draw, SecondaryApplication,
+    is_speed_down_hit_effect, spend_effect_chance_draw, stat_drop_can_land, SecondaryApplication,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::hit::ensure_resolvable;
 use crate::pokemon::{BattlePokemon, Ivs};
 use crate::script_rng::SequenceRng;
+use crate::stat_change::ChangedStat;
 use assets::{AbilityId, MoveId, SpeciesId};
 
 /// `EFFECT_ATTACK_DOWN_HIT` with a 10% `secondaryEffectChance`.
@@ -153,6 +154,38 @@ fn hyper_cutter_and_keen_eye_guard_only_their_own_stat() {
         spend_effect_chance_draw(&dex, AURORA_BEAM, true, &hitmonchan, &mut rng),
         Ok(SecondaryApplication::AttackDown)
     );
+}
+
+/// A defender whose `ability()` is `ABILITY_NONE`, as a saved single-ability
+/// species on ability slot 1 holds upstream. `BattlePokemon::new` cannot build
+/// one in this tree, so the state is reached through the crate-private
+/// `trace_ability`, which makes `ability()` read `NONE` exactly as a native
+/// `ABILITY_NONE` slot would.
+fn none_ability_defender(dex: &Dex) -> BattlePokemon {
+    let mut defender = mon(dex, SpeciesId(ZIGZAGOON));
+    defender.trace_ability(AbilityId::NONE);
+    assert_eq!(defender.ability(), AbilityId::NONE);
+    defender
+}
+
+#[test]
+fn a_defender_holding_ability_none_takes_the_speed_and_attack_drops() {
+    let dex = Dex::new();
+    let defender = none_ability_defender(&dex);
+    for stat in [ChangedStat::Speed, ChangedStat::Attack] {
+        assert!(stat_drop_can_land(stat, &defender), "{stat:?}");
+    }
+    for (move_id, expected) in [
+        (MoveId::CONSTRICT, SecondaryApplication::SpeedDown),
+        (AURORA_BEAM, SecondaryApplication::AttackDown),
+    ] {
+        let mut rng = SequenceRng::new([0]);
+        assert_eq!(
+            spend_effect_chance_draw(&dex, move_id, true, &defender, &mut rng),
+            Ok(expected),
+            "{move_id:?}"
+        );
+    }
 }
 
 #[test]
