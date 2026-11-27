@@ -68,6 +68,7 @@ pub mod battle_pike_rooms;
 pub mod battle_pike_wild_mons;
 pub mod battle_pyramid_items;
 pub mod berries;
+pub mod blender_npc_berries;
 pub mod bundled_overworld;
 pub mod credits;
 pub mod decorations;
