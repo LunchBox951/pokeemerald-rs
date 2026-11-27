@@ -33261,6 +33261,26 @@
       "status": "pending"
     },
     "src/lottery_corner.c": {
+      "artifacts": {
+        "GetLotteryNumber": {
+          "reason": "lottery_corner.c:154-160. lottery_corner::get_lottery_number: joins VAR_POKELOT_RND2 (0x404C, vars.h:96) as the high word and VAR_POKELOT_RND1 (0x404B, vars.h:95) as the low word into a u32 through EventData::var_get; round-trips every value SetLotteryNumber stores. The 16-bit truncating caller and script binding are not modelled.",
+          "rust_target": "crates/engine/src/overworld/lottery_corner.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetMatchingDigits": {
+          "reason": "lottery_corner.c:122-143. lottery_corner::matching_digits: counts equal decimal digits of the two u16 arguments from the units place, stopping at the first difference or after five digits; places beyond a number's length read as zero, so short numbers match through leading zeroes. No RNG, party or box scan, or winner selection; the caller PickLotteryCornerTicket is separate.",
+          "rust_target": "crates/engine/src/overworld/lottery_corner.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "SetLotteryNumber": {
+          "reason": "lottery_corner.c:146-152. lottery_corner::set_lottery_number: writes the low 16 bits of the u32 to VAR_POKELOT_RND1 (0x404B, vars.h:95) and the high 16 bits to VAR_POKELOT_RND2 (0x404C, vars.h:96) through EventData::var_set; no other variable or flag changes. The daily reseeding caller and script binding are not modelled.",
+          "rust_target": "crates/engine/src/overworld/lottery_corner.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
