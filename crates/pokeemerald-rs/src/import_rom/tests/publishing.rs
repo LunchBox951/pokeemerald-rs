@@ -239,7 +239,7 @@ fn a_re_import_under_an_owner_stripping_umask_publishes_an_owner_readable_pack()
 /// The umasks [`an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask`]
 /// imports under.
 #[cfg(unix)]
-const OWNER_STRIPPING_UMASKS: &[&str] = &["0444", "0277", "0477", "0022", "0177", "0777"];
+const OWNER_STRIPPING_UMASKS: &[&str] = &["0444", "0277", "0477", "0022", "0177", "0577", "0777"];
 
 /// Set in the child [`an_import_to_a_missing_nested_destination_keeps_owner_access_under_any_umask`]
 /// re-runs itself as, holding the umask that child imports under.
@@ -259,7 +259,7 @@ fn import_refuses_level_mode(mask: u32, no_procfs: bool) -> bool {
     if cfg!(target_os = "freebsd") {
         false
     } else if cfg!(any(target_os = "linux", target_os = "android")) {
-        no_procfs && left == 0
+        no_procfs && left & 0o500 == 0
     } else if cfg!(target_vendor = "apple") {
         left & 0o500 == 0
     } else {
@@ -281,10 +281,10 @@ fn import_refuses_level_mode(mask: u32, no_procfs: bool) -> bool {
 /// second time with the `/proc/self/fd` route unavailable. A level needs the
 /// owner's read or search bit to be pinned (Apple: search; Unix systems that
 /// pin with a read-mode open: read), and a mode with none left has no
-/// inode-bound restore: `0777` on Apple and on Linux and Android without
-/// procfs, `0444`, `0477` and `0777` on those other Unix systems (see
-/// [`import_refuses_level_mode`]). Those imports must fail with the
-/// diagnostic naming the umask and publish nothing, rather than `chmod` a
+/// inode-bound restore: `0577` and `0777` on Apple and on Linux and Android
+/// without procfs, `0444`, `0477`, `0577` and `0777` on those other Unix
+/// systems (see [`import_refuses_level_mode`]). Those imports must fail with
+/// the diagnostic naming the umask and publish nothing, rather than `chmod` a
 /// name; a privileged runner is never refused, so there they publish.
 #[cfg(unix)]
 #[test]

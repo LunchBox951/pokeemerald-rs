@@ -21,10 +21,13 @@
 //! check undoes the change.
 //!
 //! So a mode with no owner read left and no other inode-bound route is
-//! unsupported, and the create fails with a diagnostic naming the umask:
-//! mode `0000` (umask `0777`) on Apple, and on Linux and Android without
-//! procfs; and `0333`/`0300` (umasks `0444`, `0477`) on Unix systems that pin
-//! with a read-mode open. Every other umask imports on every Unix target;
+//! unsupported, and the create fails with a diagnostic naming the umask. By
+//! the owner bits `mkdirat(0777)` leaves: on Apple, and on Linux and Android
+//! without procfs, a mode with neither owner read nor owner search (owner
+//! bits `0` or `2`, as under umasks `0777` and `0577`); on Unix systems that
+//! pin with a read-mode open, any mode without owner read (owner bits `0` to
+//! `3`, as under umasks `0444`, `0477`, `0577`, `0677` and `0777`). Every
+//! other umask imports;
 //! Linux and Android are covered for every umask when procfs is mounted, and
 //! FreeBSD for every umask.
 //!
