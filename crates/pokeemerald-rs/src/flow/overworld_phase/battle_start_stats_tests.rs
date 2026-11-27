@@ -319,6 +319,13 @@ fn a_sight_approach_counts_only_when_it_hands_off_to_the_battle() {
     }
 
     phase.step(pressed(Buttons::A));
+    assert!(
+        !phase.is_sight_trainer_battle_active(),
+        "the confirm frame only ends `waitbuttonpress`"
+    );
+    assert_eq!(counts(&phase), (0, 0, 0), "confirm frame: still uncounted");
+
+    phase.step(ButtonState::new());
     assert!(phase.is_sight_trainer_battle_active(), "setup: handed off");
     assert_eq!(counts(&phase), (1, 0, 1), "trainer, not wild (:462-463)");
 
@@ -372,6 +379,7 @@ fn a_lost_sight_battle_keeps_the_start_count() {
     );
 
     phase.step(pressed(Buttons::A));
+    phase.step(ButtonState::new());
     assert!(phase.is_sight_trainer_battle_active(), "setup: handed off");
     assert_eq!(counts(&phase), (1, 0, 1));
     play_out_active_battle(&mut phase);
