@@ -78,6 +78,11 @@ pub const NUM_SPECIAL_VARS: u16 = SPECIAL_VARS_END - SPECIAL_VARS_START + 1;
 /// Remaining Repel steps (`VAR_REPEL_STEP_COUNT`, `include/constants/vars.h:51`). The
 /// ordinary variable is saved with the rest of `SaveBlock1`; nonzero means a Repel is active.
 pub const VAR_REPEL_STEP_COUNT: u16 = 0x4021;
+/// Steps taken on the S.S. Tidal cruise (`VAR_CRUISE_STEP_COUNT`, `include/constants/vars.h:94`).
+pub const VAR_CRUISE_STEP_COUNT: u16 = 0x404A;
+/// Cruise step count at which the cruise is over (`SS_TIDAL_MAX_STEPS`,
+/// `include/constants/field_specials.h:27`).
+pub const SS_TIDAL_MAX_STEPS: u16 = 205;
 /// Set after defeating Wally outside Mauville Gym; arms the first `PokéNav` call
 /// (`FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL`, `include/constants/flags.h:158`).
 pub const FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL: u16 = 0x88;
@@ -312,6 +317,22 @@ impl EventData {
         } else {
             Err(EventDataError::OutOfRange(id))
         }
+    }
+
+    /// Adds `delta` to the cruise step count while the cruise flag is set and
+    /// returns whether the count has reached [`SS_TIDAL_MAX_STEPS`]
+    /// (`CountSSTidalStep`, `src/field_specials.c:288-294`).
+    ///
+    /// The count wraps as a `u16`. With the flag clear nothing changes and the
+    /// result is `false`.
+    pub fn count_ss_tidal_step(&mut self, delta: u16) -> bool {
+        let flag = usize::from(FLAG_SYS_CRUISE_MODE);
+        if (self.flags[flag / FLAGS_PER_BYTE] >> (flag % FLAGS_PER_BYTE)) & 1 == 0 {
+            return false;
+        }
+        let count = &mut self.vars[usize::from(VAR_CRUISE_STEP_COUNT - VARS_START)];
+        *count = count.wrapping_add(delta);
+        *count >= SS_TIDAL_MAX_STEPS
     }
 
     /// Counts one step toward Wally's first `PokéNav` call and reports whether
@@ -806,6 +827,114 @@ mod tests {
         assert_eq!(restored.var_get(VARS_START), Ok(0xBEEF));
         assert_eq!(restored.flag_get(SPECIAL_FLAGS_START), Ok(false));
         assert_eq!(restored.var_get(SPECIAL_VARS_START), Ok(0));
+    }
+
+    fn cruise_data(flag: bool, count: u16) -> EventData {
+        let mut data = EventData::new();
+        if flag {
+            data.flag_set(FLAG_SYS_CRUISE_MODE).unwrap();
+        }
+        data.var_set(VAR_CRUISE_STEP_COUNT, count).unwrap();
+        data
+    }
+
+    #[test]
+    fn cruise_constants_match_upstream_headers() {
+        assert_eq!(FLAG_SYS_CRUISE_MODE, 0x88D);
+        assert_eq!(VAR_CRUISE_STEP_COUNT, 0x404A);
+        assert_eq!(SS_TIDAL_MAX_STEPS, 205);
+    }
+
+    #[test]
+    fn cruise_step_with_flag_clear_leaves_the_counter_and_reports_not_over() {
+        let mut data = cruise_data(false, 204);
+        assert!(!data.count_ss_tidal_step(1));
+        assert!(!data.count_ss_tidal_step(u16::MAX));
+        assert_eq!(data.var_get(VAR_CRUISE_STEP_COUNT), Ok(204));
+
+        let mut past = cruise_data(false, 300);
+        assert!(!past.count_ss_tidal_step(5));
+        assert_eq!(past.var_get(VAR_CRUISE_STEP_COUNT), Ok(300));
+    }
+
+    #[test]
+    fn cruise_step_zero_delta_keeps_the_count_and_still_reports_the_threshold() {
+        let mut data = cruise_data(true, 7);
+        assert!(!data.count_ss_tidal_step(0));
+        assert_eq!(data.var_get(VAR_CRUISE_STEP_COUNT), Ok(7));
+
+        let mut at_max = cruise_data(true, 205);
+        assert!(at_max.count_ss_tidal_step(0));
+        assert_eq!(at_max.var_get(VAR_CRUISE_STEP_COUNT), Ok(205));
+    }
+
+    #[test]
+    fn cruise_step_reaches_the_threshold_at_exactly_205() {
+        let mut data = cruise_data(true, 203);
+        assert!(!data.count_ss_tidal_step(1));
+        assert_eq!(data.var_get(VAR_CRUISE_STEP_COUNT), Ok(204));
+        assert!(data.count_ss_tidal_step(1));
+        assert_eq!(data.var_get(VAR_CRUISE_STEP_COUNT), Ok(205));
+    }
+
+    #[test]
+    fn cruise_step_from_204_by_one_is_over() {
+        let mut data = cruise_data(true, 204);
+        assert!(data.count_ss_tidal_step(1));
+        assert_eq!(data.var_get(VAR_CRUISE_STEP_COUNT), Ok(205));
+    }
+
+    #[test]
+    fn cruise_step_with_count_already_past_205_stays_over_and_keeps_counting() {
+        let mut data = cruise_data(true, 300);
+        assert!(data.count_ss_tidal_step(1));
+        assert_eq!(data.var_get(VAR_CRUISE_STEP_COUNT), Ok(301));
+    }
+
+    #[test]
+    fn cruise_step_large_delta_crosses_the_threshold_in_one_call() {
+        let mut data = cruise_data(true, 0);
+        assert!(data.count_ss_tidal_step(1000));
+        assert_eq!(data.var_get(VAR_CRUISE_STEP_COUNT), Ok(1000));
+    }
+
+    #[test]
+    fn cruise_step_wraps_as_u16_and_reads_not_over_after_the_wrap() {
+        let mut data = cruise_data(true, 0xFFFF);
+        assert!(!data.count_ss_tidal_step(1));
+        assert_eq!(data.var_get(VAR_CRUISE_STEP_COUNT), Ok(0));
+
+        let mut data = cruise_data(true, 65_500);
+        assert!(!data.count_ss_tidal_step(100));
+        assert_eq!(data.var_get(VAR_CRUISE_STEP_COUNT), Ok(64));
+
+        let mut data = cruise_data(true, 0xFFFF);
+        assert!(data.count_ss_tidal_step(300));
+        assert_eq!(data.var_get(VAR_CRUISE_STEP_COUNT), Ok(299));
+    }
+
+    #[test]
+    fn cruise_step_survives_a_save_round_trip_and_touches_nothing_else() {
+        let mut data = cruise_data(true, 100);
+        let other_var = VAR_CRUISE_STEP_COUNT + 1;
+        data.var_set(other_var, 0x1234).unwrap();
+        data.var_set(VAR_REPEL_STEP_COUNT, 37).unwrap();
+        data.flag_set(FLAG_SYS_SAFARI_MODE).unwrap();
+        data.flag_set(100).unwrap();
+        let before = data.clone();
+
+        assert!(!data.count_ss_tidal_step(104));
+        assert!(data.count_ss_tidal_step(1));
+
+        let restored = EventData::from_saved_state(*data.flag_bytes(), *data.vars_raw());
+        assert_eq!(restored.var_get(VAR_CRUISE_STEP_COUNT), Ok(205));
+        assert_eq!(restored.flag_bytes(), before.flag_bytes());
+        for index in 0..VARS_COUNT {
+            if index != usize::from(VAR_CRUISE_STEP_COUNT - VARS_START) {
+                assert_eq!(restored.vars_raw()[index], before.vars_raw()[index]);
+            }
+        }
+        assert_eq!(restored.var_get(other_var), Ok(0x1234));
     }
 
     fn wally_data(flag: bool, count: u16) -> EventData {
