@@ -32720,6 +32720,12 @@
           "spec": "S-5",
           "status": "stubbed"
         },
+        "GetSlotMachineId": {
+          "reason": "field_specials.c:1289-1326, called by the twelve MauvilleCity_GameCorner SlotMachine0-11 scripts (data/maps/MauvilleCity_GameCorner/scripts.inc:509-619) after setvar VAR_0x8004. engine::overworld::slot_machine_luck::slot_machine_luck adds the first Dewford trend's trendiness (7-bit) and rand to the per-machine seed (sSlotMachineRandomSeeds) in 32 bits, so the largest inputs do not wrap a 16-bit add, takes the sum modulo 12 and indexes sSlotMachineServiceDayIds when the service day is active, else sSlotMachineIds, returning a SlotMachineLuck with the SLOT_MACHINE_* ids of include/constants/slot_machine.h:4-12. slot_machine_luck_from_var reads the machine index from VAR_0x8004 without writing it. A machine index of 12 or more is refused, not read out of bounds as C does. The trend fields and the service-day flag (IsPokeNewsActive(POKENEWS_GAME_CORNER)) are caller-supplied inputs. No RNG. Not modelled: Dewford trend generation and save decoding, the PokeNews evaluation, the script-host binding of the special, and the slot-machine play (reels, payouts) that consumes the result.",
+          "rust_target": "crates/engine/src/overworld/slot_machine_luck.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "IncrementBirthIslandRockStepCount": {
           "reason": "field_specials.c:3377-3387, called from ProcessPlayerFieldInput on tookStep right after IncrementGameStat(GAME_STAT_STEPS) and before TryStartStepBasedScript (field_control_avatar.c:155-160). OverworldPhase::increment_birth_island_rock_step_count, run from count_took_step, advances VAR_DEOXYS_ROCK_STEP_COUNT (vars.h:72, a saved event var) on MAP_BIRTH_ISLAND_EXTERIOR only, as a u16 wrapping increment that stores zero once the result passes 99, so a loaded value of 99 or more resets rather than climbing and 0xFFFF wraps to zero with no panic and no RNG draw. A landing a coord event or door-shaped warp then claims is still counted; the forced landing, the escalator arrival's held walk-off and an unfinished crossing are not (take_stepped_onto), as for GAME_STAT_STEPS. Not modelled: the rock movement and palette (SetDeoxysRockPalette, the Deoxys triangle scripts), the puzzle outcome, the Deoxys encounter and the trip to the island.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/birth_island_rock.rs",
