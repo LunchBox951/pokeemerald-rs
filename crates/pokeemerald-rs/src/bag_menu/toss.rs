@@ -124,6 +124,15 @@ fn without(bag: &Bag, selection: BagSelection, count: u16) -> Option<Bag> {
     if stack.quantity == 0 {
         *stack = ItemSlot::default();
     }
+    pack(slots, by_item_id);
+    Some(bag)
+}
+
+/// `UpdatePocketItemList`'s packing of one pocket (`item_menu.c:1102-1114`):
+/// the occupied stacks move to the front in order
+/// (`CompactItemsInBagPocket`, `item.c:601-613`), or in item id order for
+/// TMs/HMs and berries (`SortBerriesOrTMHMs`, `item.c:615-633`).
+fn pack(slots: &mut [ItemSlot], by_item_id: bool) {
     let mut kept: Vec<ItemSlot> = slots
         .iter()
         .copied()
@@ -134,7 +143,22 @@ fn without(bag: &Bag, selection: BagSelection, count: u16) -> Option<Bag> {
     }
     kept.resize(slots.len(), ItemSlot::default());
     slots.copy_from_slice(&kept);
-    Some(bag)
+}
+
+/// `UpdatePocketItemLists` (`item_menu.c:1131-1136`): packs every pocket of
+/// `bag` in place, as opening the bag does to the save's own pockets.
+pub(crate) fn pack_pockets(bag: &mut Bag) {
+    for pocket in [
+        Pocket::Items,
+        Pocket::KeyItems,
+        Pocket::PokeBalls,
+        Pocket::TmHm,
+        Pocket::Berries,
+    ] {
+        if let Some((slots, by_item_id)) = pocket_slots(bag, pocket) {
+            pack(slots, by_item_id);
+        }
+    }
 }
 
 impl BagScreen {

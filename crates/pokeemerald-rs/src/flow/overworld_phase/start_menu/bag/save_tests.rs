@@ -263,3 +263,88 @@ fn play_time_counts_every_frame_of_the_trip() {
     // The frame the menu takes input back.
     tick(&mut session, Buttons::NONE);
 }
+
+/// `SetupBagMenu` state 10 runs `UpdatePocketItemLists` on the live pockets
+/// (`item_menu.c:725-726,1102-1114`): a gap left by `RemoveBagItem` is packed
+/// away by a BAG visit, so a later `AddBagItem` lands after the Antidote.
+#[test]
+fn a_bag_visit_packs_the_live_pockets() {
+    let mut s = session("bag-verify-pack");
+    let mut bag = Bag::default();
+    bag.items[1] = ItemSlot {
+        item_id: ItemId::ANTIDOTE.0,
+        quantity: 3,
+    };
+    s.phase_mut().save1.bag = bag;
+    s.open_the_bag();
+    s.close_the_bag();
+    let live = &s.phase().save1.bag;
+    assert_eq!(
+        live.items[0].item_id,
+        ItemId::ANTIDOTE.0,
+        "live bag: {:?}",
+        &live.items[..2]
+    );
+    let mut after = live.clone();
+    assert!(after.add_item(ItemId::POTION, 1));
+    assert_eq!(after.items[1].item_id, ItemId::POTION.0);
+}
+
+/// The TM/HM and berry pockets are ordered by item id instead
+/// (`SortBerriesOrTMHMs`, `item.c:615-633`; `item_menu.c:1107-1110`). The
+/// scratch pack draws one berry only, so the berries are packed without a
+/// visit.
+#[test]
+fn a_bag_visit_sorts_the_live_machines_by_item_id_as_packing_sorts_berries() {
+    let one = |item: ItemId| ItemSlot {
+        item_id: item.0,
+        quantity: 1,
+    };
+    let ids = |slots: &[ItemSlot]| [slots[0].item_id, slots[1].item_id, slots[2].item_id];
+    let mut s = session("bag-sort-pockets");
+    let mut bag = Bag::default();
+    bag.tms_hms[2] = one(ItemId::HM_CUT);
+    bag.tms_hms[5] = one(ItemId::TM_ROAR);
+    s.phase_mut().save1.bag = bag;
+    s.open_the_bag();
+    s.close_the_bag();
+    assert_eq!(
+        ids(&s.phase().save1.bag.tms_hms),
+        [ItemId::TM_ROAR.0, ItemId::HM_CUT.0, 0]
+    );
+
+    let mut berries = Bag::default();
+    berries.berries[0] = one(ItemId::ORAN_BERRY);
+    berries.berries[3] = one(ItemId::CHERI_BERRY);
+    crate::bag_menu::pack_pockets(&mut berries);
+    assert_eq!(
+        ids(&berries.berries),
+        [ItemId::CHERI_BERRY.0, ItemId::ORAN_BERRY.0, 0]
+    );
+}
+
+/// The packing is `SetupBagMenu`'s, which a failed `GoToBagMenu` never
+/// installs (`item_menu.c:614-621`): the live pockets keep their gap.
+#[test]
+fn a_bag_that_cannot_open_leaves_the_live_pockets_unpacked() {
+    let mut s = Session::new(
+        "bag-unpacked",
+        &host_fixture::pack_bytes_without_the_bag_screen(),
+    );
+    let mut bag = Bag::default();
+    bag.items[1] = ItemSlot {
+        item_id: ItemId::ANTIDOTE.0,
+        quantity: 3,
+    };
+    s.phase_mut().save1.bag = bag.clone();
+    s.open_start_menu();
+    s.choose_bag();
+    for _ in 0..200 {
+        if !s.phase().bag_trip_active() {
+            break;
+        }
+        s.frame(Buttons::NONE);
+    }
+    assert!(!s.phase().bag_trip_active(), "the trip never returned");
+    assert_eq!(s.phase().save1.bag, bag);
+}

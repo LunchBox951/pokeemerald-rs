@@ -296,9 +296,20 @@ impl OverworldPhase {
     /// up on the next. A bag that cannot open returns to the field through
     /// the same black, as upstream's failed allocation installs its exit
     /// callback on this frame (`:614-621`).
+    ///
+    /// Setting the bag up packs the save's own pockets
+    /// (`UpdatePocketItemLists`, `src/item_menu.c:725-726,1131-1136`), which
+    /// a bag that failed to open never reaches. Nothing reads the save
+    /// between this frame and the next, so the screen opens over the pockets
+    /// already packed.
     fn open_bag(&mut self) -> BagTrip {
-        match bag_menu::open(&self.pack_source, &self.save1.bag, self.field_bag_request()) {
-            Ok(screen) => BagTrip::BagSetup(Box::new(screen)),
+        let mut bag = self.save1.bag.clone();
+        bag_menu::pack_pockets(&mut bag);
+        match bag_menu::open(&self.pack_source, &bag, self.field_bag_request()) {
+            Ok(screen) => {
+                self.save1.bag = bag;
+                BagTrip::BagSetup(Box::new(screen))
+            }
             Err(err) => {
                 eprintln!("{err} -- returning to the field");
                 self.reload_field()

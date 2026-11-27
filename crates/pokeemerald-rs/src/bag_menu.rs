@@ -66,6 +66,8 @@ use shake::BagShake;
 use swap::ItemSwap;
 use toss::ItemToss;
 
+pub(crate) use toss::pack_pockets;
+
 /// Which caller opened the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BagScreenMode {
