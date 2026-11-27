@@ -32714,6 +32714,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "GetDeptStoreDefaultFloorChoice": {
+          "reason": "field_specials.c:1777-1810. default_floor_choice: maps the saved dynamic warp to the elevator floor-menu row, 5F to 0 down to 1F at 4 (map group 13, map numbers 20 to 16, per data/maps/map_groups.json); any other map, including the rooftop, another map in the group, or the same map number in another group, gives 0; warp id and coordinates are ignored. Upstream's two file-static scratch values (sLilycoveDeptStore_NeverRead, sLilycoveDeptStore_DefaultFloorChoice) are not modelled, since nothing else reads them. Pending, not modelled: SetDeptStoreFloor, the elevator script's menu, animation and sounds, and dynamic-warp serialization.",
+          "rust_target": "crates/engine/src/overworld/dept_store_floor.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "GetLeadMonFriendshipScore": {
           "reason": "field_specials.c:949-966: the classifier half. engine::field_specials::friendship_score maps a friendship byte to FriendshipScore: 0 is FRIENDSHIP_NONE, 1-49, 50-99, 100-149, 150-199 and 200-254 are the middle categories, and 255 (MAX_FRIENDSHIP, pokemon.h:196) is FRIENDSHIP_MAX, with ids 0 to 6 as in include/constants/pokemon.h:184-191. It is a pure function of the byte, with no mutation and no RNG draw. Not modelled: GetLeadMonIndex's choice of lead Pokemon (field_specials.c:1531-1542, the first party slot that is neither an Egg nor empty, else slot 0), reading MON_DATA_FRIENDSHIP from the party, dispatching the special (crate::script::specials lists only its name) and the branching on its result in VerdanturfTown_FriendshipRatersHouse_EventScript_FriendshipRater (data/maps/VerdanturfTown_FriendshipRatersHouse/scripts.inc:4-16) and SlateportCity_PokemonFanClub_EventScript_SootheBellWoman (data/maps/SlateportCity_PokemonFanClub/scripts.inc:189-195). The special has a third caller, PacifidlogTown_House2 (data/maps/PacifidlogTown_House2/scripts.inc:13,15), also not modelled.",
           "rust_target": "crates/engine/src/field_specials.rs",
