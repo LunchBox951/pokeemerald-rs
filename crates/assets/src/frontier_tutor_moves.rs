@@ -6,18 +6,22 @@ use std::fmt;
 
 use crate::battle_moves::MoveId;
 
+/// The row count of each tutor menu (`src/field_specials.c:3059-3085`).
 pub const TUTOR_MENU_LEN: usize = 10;
 
+/// Which of the two tutor menus a script selects with `gSpecialVar_0x8005`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FrontierTutorMenu {
-    /// Chosen when `gSpecialVar_0x8005` is `0` (`src/field_specials.c:3089-3092`).
+    /// `sBattleFrontier_TutorMoves1`, chosen when the selector is `0` (`src/field_specials.c:3089-3092`).
     First,
-    /// Chosen for any other `gSpecialVar_0x8005`.
+    /// `sBattleFrontier_TutorMoves2`, chosen for any other selector.
     Second,
 }
 
+/// A refused tutor menu lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontierTutorError {
+    /// The row is not below [`TUTOR_MENU_LEN`].
     InvalidRow(usize),
 }
 
@@ -63,6 +67,7 @@ const TUTOR_MOVES_2: [MoveId; TUTOR_MENU_LEN] = [
     MoveId::FIRE_PUNCH,
 ];
 
+/// Returns the ten moves of a menu, in menu order.
 #[must_use]
 pub const fn frontier_tutor_moves(menu: FrontierTutorMenu) -> &'static [MoveId; TUTOR_MENU_LEN] {
     match menu {
@@ -71,6 +76,8 @@ pub const fn frontier_tutor_moves(menu: FrontierTutorMenu) -> &'static [MoveId; 
     }
 }
 
+/// Returns the move a menu row teaches.
+///
 /// # Errors
 ///
 /// Returns [`FrontierTutorError::InvalidRow`] when `row` is not below [`TUTOR_MENU_LEN`].
