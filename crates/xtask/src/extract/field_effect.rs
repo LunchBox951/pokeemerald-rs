@@ -29,20 +29,17 @@ pub(super) fn extract_field_effects(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{extract_field_effects, ExtractError};
+    use crate::extract::owned_fixture::OwnedDir;
     use pack_format::PackWriter;
 
-    fn scratch_checkout(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-field-effect-{name}-{}",
-            std::process::id()
-        ))
+    fn scratch_checkout(base: &Path) -> OwnedDir {
+        OwnedDir::create_in(base, "pokeemerald-rs-extract-field-effect").expect("claim fixture")
     }
 
-    #[test]
-    fn a_checkout_missing_the_tall_grass_sources_is_refused() {
-        let upstream = scratch_checkout("missing");
-        let _ = std::fs::remove_dir_all(&upstream);
+    fn assert_missing_tall_grass_sources_are_refused(upstream: &Path) {
         let pics = upstream.join("graphics/field_effects/pics");
         let palettes = upstream.join("graphics/field_effects/palettes");
         std::fs::create_dir_all(&pics).expect("dir");
@@ -56,14 +53,13 @@ mod tests {
         .expect("palette");
 
         let mut writer = PackWriter::new();
-        extract_field_effects(&upstream, &mut writer).expect("complete");
+        extract_field_effects(upstream, &mut writer).expect("complete");
         assert_eq!(writer.len(), 2, "the sheet and its palette");
 
         std::fs::remove_file(palettes.join("general_1.pal")).expect("remove palette");
-        let palette = extract_field_effects(&upstream, &mut PackWriter::new());
+        let palette = extract_field_effects(upstream, &mut PackWriter::new());
         std::fs::remove_file(pics.join("tall_grass.png")).expect("remove sheet");
-        let sheet = extract_field_effects(&upstream, &mut PackWriter::new());
-        std::fs::remove_dir_all(&upstream).expect("cleanup");
+        let sheet = extract_field_effects(upstream, &mut PackWriter::new());
 
         let palette = palette.expect_err("palette");
         assert!(
@@ -74,6 +70,31 @@ mod tests {
         assert!(
             matches!(&sheet, ExtractError::ReadFailed(p, _) if p.ends_with("pics/tall_grass.png")),
             "{sheet:?}"
+        );
+    }
+
+    #[test]
+    fn a_checkout_missing_the_tall_grass_sources_is_refused() {
+        let upstream = scratch_checkout(&std::env::temp_dir());
+        assert_missing_tall_grass_sources_are_refused(upstream.path());
+    }
+
+    #[test]
+    fn a_populated_preexisting_directory_at_the_fixture_name_survives() {
+        let base = OwnedDir::create("pokeemerald-rs-extract-field-effect-base").expect("base");
+        let occupied = scratch_checkout(base.path());
+        std::fs::write(occupied.path().join("sentinel"), "precious").expect("sentinel");
+
+        let upstream = scratch_checkout(base.path());
+        assert_missing_tall_grass_sources_are_refused(upstream.path());
+
+        assert_ne!(upstream.path(), occupied.path());
+        assert_eq!(
+            std::fs::read(occupied.path().join("sentinel"))
+                .ok()
+                .as_deref(),
+            Some(&b"precious"[..]),
+            "the fixture reused a directory it never created"
         );
     }
 }
