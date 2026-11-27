@@ -4,7 +4,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.147.0] - 2026-11-26
+## [0.0.147.0] - 2026-11-27
 
 - BAG is now the first choice on the field start menu. Choosing it fades the field to black, opens the Bag with your saved items, and closing it fades back to the field with the start menu reopened on BAG, as in the original game. Items you rearranged or tossed stay that way, and the Bag remembers where you were when you reopen it. Using and registering items from the field Bag are still being prepared.
 
@@ -653,7 +653,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.147.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/57c36fb7428e202aad6bd0af7415ec9f7513fb31...dev
+[0.0.147.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e8c23563d5b292688dda2063f5a9f5fc3f8ebf84...dev
 [0.0.146.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d5cf383bd4fc090f5bcf411248fcced1508e8d8d...dev
 [0.0.145.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d065fce456fcf84399616885376c66d6ca8ea64c...dev
 [0.0.144.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e4071950fffc09a11102ef9f9a020d18bceb1806...dev

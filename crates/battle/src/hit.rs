@@ -23,8 +23,9 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::{
-    is_accuracy_down_hit_effect, is_confuse_hit_effect, is_flinch_hit_effect, is_poison_hit_effect,
-    is_speed_down_hit_effect, is_thaw_hit_effect, spend_effect_chance_draw, SecondaryApplication,
+    is_accuracy_down_hit_effect, is_attack_down_hit_effect, is_confuse_hit_effect,
+    is_flinch_hit_effect, is_poison_hit_effect, is_speed_down_hit_effect, is_thaw_hit_effect,
+    spend_effect_chance_draw, SecondaryApplication,
 };
 
 const ORDINARY_HIT_EFFECTS: [MoveEffect; 22] = [
@@ -128,7 +129,8 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
         return Err(BattleError::UnsupportedMoveType(move_id));
     }
     // `EFFECT_POISON_HIT`, `EFFECT_CONFUSE_HIT`, `EFFECT_SPEED_DOWN_HIT`,
-    // `EFFECT_ACCURACY_DOWN_HIT`, `EFFECT_THAW_HIT` and the two flinch wrappers
+    // `EFFECT_ACCURACY_DOWN_HIT`, `EFFECT_ATTACK_DOWN_HIT`, `EFFECT_THAW_HIT` and
+    // the two flinch wrappers
     // resolve through this same damage script while keeping their own
     // trampoline dispatch in `spend_effect_chance_draw`.
     if !is_ordinary_hit_effect(move_data.effect)
@@ -136,6 +138,7 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
         && !is_confuse_hit_effect(move_data.effect)
         && !is_speed_down_hit_effect(move_data.effect)
         && !is_accuracy_down_hit_effect(move_data.effect)
+        && !is_attack_down_hit_effect(move_data.effect)
         && !is_thaw_hit_effect(move_data.effect)
         && !is_flinch_hit_effect(move_data.effect)
         && move_id != STRUGGLE
