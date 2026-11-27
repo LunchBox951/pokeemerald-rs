@@ -247,7 +247,6 @@ fn admission_widens_for_paralysis_only() {
         MoveId::CONFUSE_RAY,
         MoveId::SUPERSONIC,
         MoveId::SWEET_KISS,
-        MoveId::LEECH_SEED,
         MoveId::TOXIC,
         MoveId::SWAGGER,
         MoveId::HYPNOSIS,

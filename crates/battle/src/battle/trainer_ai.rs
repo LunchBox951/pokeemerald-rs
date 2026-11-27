@@ -87,6 +87,11 @@ const VITAL_THROW_PENALTY_THRESHOLD: u16 = 50;
 /// is not faster scores -3; a faster one rolls `if_random_less_than 70` for +2.
 const SPEED_DROP_NOT_FASTER_PENALTY: i8 = -3;
 const SPEED_DROP_FASTER_BONUS_THRESHOLD: u16 = 70;
+/// `AI_CV_Toxic` (`data/battle_ai_scripts.s:1353`-`:1371`), reached by Leech Seed.
+const LEECH_SEED_HP_THRESHOLD: u32 = 50;
+const LEECH_SEED_PENALTY_THRESHOLD: u16 = 50;
+const LEECH_SEED_PENALTY: i8 = -3;
+const LEECH_SEED_BONUS_THRESHOLD: u16 = 60;
 const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
 const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
 const DEFENSE_DROP_USER_HP_THRESHOLD: u32 = 70;
@@ -272,13 +277,14 @@ impl ScoreableEffect {
         }
     }
 
-    /// `AI_CheckViability` branches on Confuse and Leech Seed
-    /// (`data/battle_ai_scripts.s:687,711`), and `AI_SetupFirstTurn` rolls
-    /// for all four (`:2667,2668,2685,2687`); neither is ported. Paralyze's
-    /// viability branch (`:704`) is ported, so only its setup roll refuses it.
+    /// `AI_CheckViability` branches on Confuse (`data/battle_ai_scripts.s:687`)
+    /// and `AI_SetupFirstTurn` rolls for all four (`:2667,2668,2685,2687`);
+    /// neither is ported. The Paralyze (`:704`) and Leech Seed (`:711`)
+    /// viability branches are ported, so only their setup roll refuses them.
     /// Focus Energy has no viability branch.
     const fn supported_with_status_handler(self, flags: AiFlags) -> bool {
-        let viability_branch = !matches!(self, Self::FocusEnergy | Self::Paralyze);
+        let viability_branch =
+            !matches!(self, Self::FocusEnergy | Self::Paralyze | Self::LeechSeed);
         !(flags.contains(AiFlags::SETUP_FIRST_TURN)
             || viability_branch && flags.contains(AiFlags::CHECK_VIABILITY))
     }
@@ -1126,7 +1132,10 @@ fn score_viability(
         // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
         ScoreableEffect::Paralyze => score_paralyze_viability(scores, slot, user, target, rng),
-        ScoreableEffect::Confuse | ScoreableEffect::LeechSeed | ScoreableEffect::StatLabel(..) => {
+        ScoreableEffect::LeechSeed => {
+            score_leech_seed_viability(dex, scores, slot, user, target, rng)?;
+        }
+        ScoreableEffect::Confuse | ScoreableEffect::StatLabel(..) => {
             return Err(BattleError::UnscoreableMoveEffect(move_id));
         }
         ScoreableEffect::AttackDown => {
@@ -1217,6 +1226,44 @@ fn score_paralyze_viability(
     } else if current_hp_percent(user) <= PARALYZE_USER_HP_THRESHOLD {
         scores.adjust(slot, SLIGHTLY_DISCOURAGE);
     }
+}
+
+/// `AI_CV_Toxic`'s bonus effects (`data/battle_ai_scripts.s:1364`-`:1365`).
+fn is_leech_seed_defensive_effect(effect: MoveEffect) -> bool {
+    effect == MoveEffect::SPECIAL_DEFENSE_UP || effect == MoveEffect::PROTECT
+}
+
+/// `AI_CV_Toxic` (`data/battle_ai_scripts.s:711`, `:1353`-`:1371`). Both scans
+/// read known moves, so a depleted slot counts
+/// (`src/battle_ai_script_commands.c:1092`-`:1106`, `:1901`-`:1917`).
+fn score_leech_seed_viability(
+    dex: &Dex,
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> Result<(), BattleError> {
+    let mut has_attacking_move = false;
+    let mut has_defensive_move = false;
+    for known in user.moves() {
+        let move_data = dex.move_data(known.move_id)?;
+        has_attacking_move |= move_data.power != 0;
+        has_defensive_move |= is_leech_seed_defensive_effect(move_data.effect);
+    }
+    if has_attacking_move {
+        for pokemon in [user, target] {
+            if current_hp_percent(pokemon) <= LEECH_SEED_HP_THRESHOLD
+                && random_roll_is_at_least(rng, LEECH_SEED_PENALTY_THRESHOLD)
+            {
+                scores.adjust(slot, LEECH_SEED_PENALTY);
+            }
+        }
+    }
+    if has_defensive_move && random_roll_is_at_least(rng, LEECH_SEED_BONUS_THRESHOLD) {
+        scores.adjust(slot, ENCOURAGE);
+    }
+    Ok(())
 }
 
 /// `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:708`, `:1536`-`:1545`). The
@@ -2646,6 +2693,8 @@ mod charge_tests;
 mod drain_viability_tests;
 #[cfg(test)]
 mod leech_seed_tests;
+#[cfg(test)]
+mod leech_seed_viability_tests;
 #[cfg(test)]
 mod paralyze_viability_tests;
 #[cfg(test)]
