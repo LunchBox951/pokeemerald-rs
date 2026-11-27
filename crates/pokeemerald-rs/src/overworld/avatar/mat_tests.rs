@@ -87,12 +87,12 @@ fn the_jump_mat_raises_the_oam_entry_by_the_hop_height() {
 fn the_jump_mat_hop_leaves_the_player_subpriority_on_the_ground() {
     let runtime = behavior_runtime(MB_SECRET_BASE_JUMP_MAT);
     let mut player = on_mat(&runtime, (1, 2), Direction::East);
-    let grounded = player_depth_sprite(&player, 0).parent_subpriority();
+    let grounded = player_depth_sprite(&player, 0, (0, 0)).parent_subpriority();
     assert_eq!(grounded, subpriority_from_bottom(88, 3, 1));
     for _ in 0..6 {
         render(&mut player, &runtime, None);
     }
-    let airborne = player_depth_sprite(&player, 0);
+    let airborne = player_depth_sprite(&player, 0, (0, 0));
     assert_eq!(
         airborne.top(),
         PLAYER_OBJ_Y - 12,
@@ -136,7 +136,7 @@ fn the_jump_mat_hop_keeps_the_player_in_front_of_an_object_one_tile_north() {
     let runtime = behavior_runtime(MB_SECRET_BASE_JUMP_MAT);
     let mut player = on_mat(&runtime, (1, 2), Direction::East);
     assert!(
-        object.parent_subpriority() > player_depth_sprite(&player, 0).parent_subpriority(),
+        object.parent_subpriority() > player_depth_sprite(&player, 0, (0, 0)).parent_subpriority(),
         "the grounded player ranks ahead of the object"
     );
     let mut airborne_frames = 0;
@@ -144,7 +144,7 @@ fn the_jump_mat_hop_keeps_the_player_in_front_of_an_object_one_tile_north() {
         render(&mut player, &runtime, None);
         airborne_frames += usize::from(mat::lift(&player) > 0);
         let ordered: Vec<OamEntry> =
-            order_sprites(&[object.clone(), player_depth_sprite(&player, 0)])
+            order_sprites(&[object.clone(), player_depth_sprite(&player, 0, (0, 0))])
                 .into_iter()
                 .map(SheetSprite::oam)
                 .collect();

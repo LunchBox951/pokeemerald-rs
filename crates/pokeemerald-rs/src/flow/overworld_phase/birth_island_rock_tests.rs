@@ -172,7 +172,7 @@ fn a_forced_landing_does_not_advance_the_count() {
 #[test]
 fn the_escalator_arrival_walk_off_does_not_advance_the_count() {
     let mut phase = phase_on(BIRTH_ISLAND_EXTERIOR);
-    phase.begin_escalator_arrival(true, BIRTH_ISLAND_HARBOR);
+    phase.start_escalator_walk_off();
     for _ in 0..40 {
         phase.step(ButtonState::new());
     }

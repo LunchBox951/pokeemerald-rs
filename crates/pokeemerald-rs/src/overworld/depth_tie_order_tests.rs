@@ -100,7 +100,7 @@ fn player() -> PlayerState {
 fn order(scene: &OverworldScene, objects: &ObjectEventCollection) -> Vec<SheetSprite> {
     scene
         .sprites
-        .live_entries(objects, &player(), &EventData::new(), &scene.grass)
+        .live_entries(objects, &player(), &EventData::new(), &scene.grass, (0, 0))
 }
 
 /// Whether the NPC's OBJ precedes the player's in `drawn`.

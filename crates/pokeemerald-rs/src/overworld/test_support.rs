@@ -36,7 +36,7 @@ impl super::OverworldScene {
         let binding = self.sprites.bindings()[graphics_id];
         let frame_block = binding.base_tile()..binding.base_tile() + binding.packed_tiles();
         self.sprites
-            .live_entries(objects, player, event_data, &self.grass)
+            .live_entries(objects, player, event_data, &self.grass, (0, 0))
             .into_iter()
             .filter(|entry| frame_block.contains(&entry.tile_index()))
             .collect()
@@ -56,7 +56,7 @@ impl super::OverworldScene {
         let frame_block = binding.base_tile()..binding.base_tile() + binding.packed_tiles();
         let drawn = self
             .sprites
-            .live_entries(objects, player, event_data, &self.grass);
+            .live_entries(objects, player, event_data, &self.grass, (0, 0));
         let npc = drawn
             .iter()
             .position(|entry| frame_block.contains(&entry.tile_index()))

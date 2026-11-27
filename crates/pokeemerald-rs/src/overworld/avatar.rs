@@ -221,7 +221,19 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
 /// `run_base_tile` is where the player's running sheet starts in the
 /// combined tileset; it is drawn from instead of the walking sheet at tile 0
 /// while [`run::draws_running_sheet`].
+#[cfg(test)]
 pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> SheetSprite {
+    player_entry_displaced(player, run_base_tile, (0, 0))
+}
+
+/// [`player_entry`] drawn `(dx, dy)` pixels from its fixed screen position: the
+/// sprite's `x2`/`y2` offsets, which move the OBJ but not the object event
+/// the camera follows (`pokeemerald/src/event_object_movement.c:2253-2271`).
+pub(super) fn player_entry_displaced(
+    player: &PlayerState,
+    run_base_tile: u16,
+    (dx, dy): (i8, i8),
+) -> SheetSprite {
     let (frame, h_flip) = frame_for(player);
     let sheet_base = if run::draws_running_sheet(player) {
         run_base_tile
@@ -231,8 +243,10 @@ pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> SheetSpr
     let sheet_tile = sheet_base + frame * FRAME_TILES;
     SheetSprite::new(
         OamEntry::new(
-            PLAYER_OBJ_X,
-            PLAYER_OBJ_Y.saturating_sub(mat::lift(player)),
+            PLAYER_OBJ_X.wrapping_add_signed(i16::from(dx)),
+            PLAYER_OBJ_Y
+                .saturating_sub(mat::lift(player))
+                .wrapping_add_signed(dy),
             sheet_tile,
             PLAYER_PALETTE_BANK,
             BitDepth::Bpp4,
@@ -247,11 +261,17 @@ pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> SheetSpr
     )
 }
 
-/// The player's sprite for depth sorting: drawn at its lifted OBJ, ranked by
-/// its grounded [`PLAYER_OBJ_Y`] (`event_object_movement.c:7773-7779`).
-pub(super) fn player_depth_sprite(player: &PlayerState, run_base_tile: u16) -> DepthSprite {
+/// The player's sprite for depth sorting: drawn at its lifted OBJ displaced
+/// by `offset`, ranked by its grounded [`PLAYER_OBJ_Y`]. Neither the lift nor
+/// the `x2`/`y2` displacement reaches the subpriority
+/// (`event_object_movement.c:7773-7786`).
+pub(super) fn player_depth_sprite(
+    player: &PlayerState,
+    run_base_tile: u16,
+    offset: (i8, i8),
+) -> DepthSprite {
     DepthSprite::single_over_ground(
-        player_entry(player, run_base_tile),
+        player_entry_displaced(player, run_base_tile, offset),
         PLAYER_OBJ_Y,
         player.previous_elevation(),
     )

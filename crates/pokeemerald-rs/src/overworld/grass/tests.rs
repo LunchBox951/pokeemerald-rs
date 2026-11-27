@@ -300,7 +300,7 @@ fn effect_lefts(
 ) -> Vec<i16> {
     scene
         .sprites
-        .live_entries(objects, player, &EventData::new(), &scene.grass)
+        .live_entries(objects, player, &EventData::new(), &scene.grass, (0, 0))
         .iter()
         .filter(|sprite| sprite.palette_bank() == GENERAL_1_BANK)
         .map(|sprite| sprite.x())
