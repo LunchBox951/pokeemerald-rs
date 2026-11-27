@@ -48,10 +48,30 @@ fn every_sight_trainer_id_resolves_with_the_expected_double_battle_flag() {
     }
 }
 
-/// Every transcribed intro speech is real, printable text: non-empty,
-/// Gen-3 encodable (`POKéMON`'s `é` and Pete's `…` included), and
-/// carrying *no* trailing `{P}`, exactly like the
-/// upstream strings it transcribes ([`SightTrainer::intro`]'s own docs).
+/// Every [`SIGHT_TRAINERS`] script keys an entry of the pack's intro-speech
+/// table, and every table entry is a [`SIGHT_TRAINERS`] script: the approach
+/// reads its speech by that key, so a script outside the table would open no
+/// box, and a table entry no row selects would be dead data.
+#[test]
+fn sight_trainer_scripts_are_exactly_the_pack_table_inventory() {
+    let mut rows: Vec<&str> = SIGHT_TRAINERS.iter().map(|entry| entry.script).collect();
+    rows.sort_unstable();
+    assert_eq!(rows, assets::SIGHT_TRAINER_INTRO_SCRIPTS);
+}
+
+/// Amy and Liv share one battle id, so only the script can tell their intro
+/// entries apart: the pack must key them separately.
+#[test]
+fn the_two_trainers_sharing_a_battle_id_have_distinct_scripts() {
+    let amy = sight_trainer_for_script("Route103_EventScript_Amy").expect("Amy's row");
+    let liv = sight_trainer_for_script("Route103_EventScript_Liv").expect("Liv's row");
+    assert_eq!(amy.id, liv.id);
+    assert_ne!(amy.script, liv.script);
+}
+
+/// Every intro speech the extracted pack holds for a [`SIGHT_TRAINERS`] script
+/// is real, printable text: non-empty, Gen-3 encodable, and carrying *no*
+/// trailing `{P}`, as upstream's own raw strings carry none.
 ///
 /// The button wait is the script's, not the text's: `waitbuttonpress`
 /// (`data/scripts/trainer_battle.inc:104`) is
@@ -62,10 +82,12 @@ fn every_sight_trainer_id_resolves_with_the_expected_double_battle_flag() {
 /// [`crate::overworld::dialog`]'s own "Script-level `waitbuttonpress`"
 /// module docs.
 #[test]
-fn every_intro_speech_is_encodable_and_leaves_the_button_wait_to_the_script() {
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_every_intro_speech_is_encodable_and_leaves_the_button_wait_to_the_script() {
+    let pack = assets::AssetPack::load_repo().expect("the checkout's extracted pack loads");
     for entry in SIGHT_TRAINERS {
-        let tokens = crate::authored_message::parse_message(entry.intro)
-            .unwrap_or_else(|err| panic!("{}'s intro speech is malformed: {err}", entry.script));
+        let tokens = SightApproach::intro_tokens(&pack, entry.script)
+            .unwrap_or_else(|err| panic!("{}'s intro speech is unreadable: {err}", entry.script));
         engine::text::encode(&tokens).unwrap_or_else(|err| {
             panic!(
                 "{}'s intro speech is not Gen-3 encodable: {err}",

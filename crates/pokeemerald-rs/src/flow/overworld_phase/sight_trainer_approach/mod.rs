@@ -60,6 +60,7 @@ use assets::trainers::TrainerId;
 use engine::overworld::{
     trainer_facing_movement_type, Direction, ObjectEventState, TilePos, WALK_FRAMES_PER_TILE,
 };
+use engine::text::Token;
 
 use super::PartyReserves;
 
@@ -146,6 +147,31 @@ enum ApproachStage {
     },
 }
 
+/// Why a trainer's intro speech could not be read from the pack.
+#[derive(Debug)]
+pub(super) enum IntroSpeechError {
+    /// The pack has no valid sight-trainer intro table.
+    Pack(assets::PackError),
+    /// The table holds no speech for this script.
+    UnknownScript(String),
+    /// The script's token stream does not decode.
+    Text(engine::text::TextError),
+}
+
+impl std::fmt::Display for IntroSpeechError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pack(err) => write!(f, "sight trainer intro table: {err}"),
+            Self::UnknownScript(script) => {
+                write!(f, "no intro speech for script {script:?} in the pack")
+            }
+            Self::Text(err) => write!(f, "sight trainer intro speech does not decode: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for IntroSpeechError {}
+
 /// One sight trainer's in-progress approach: which live object event is being
 /// walked, the speech it will give, and the battle waiting at the end of it.
 ///
@@ -176,9 +202,12 @@ pub(super) struct SightApproach {
     /// `InitTrainerApproachTask`'s `range` argument, `approachDistance - 1`
     /// -- how many tiles the trainer walks in total.
     walk_tiles: u8,
-    /// This trainer's own intro speech, in
-    /// [`crate::authored_message::parse_message`]'s authored form.
-    intro: &'static str,
+    /// The object-event script this trainer was selected through: the key of
+    /// its own intro speech in the asset pack's sight-trainer table
+    /// ([`Self::intro_tokens`]). The speech is read when the intro box opens,
+    /// not here, so an approach never holds game text of its own and a
+    /// refused cone never touches the pack.
+    script: &'static str,
     /// The already-constructed fight (struct docs).
     battle: battle::Battle,
     /// Which trainer that fight is against, for the defeated flag
@@ -199,7 +228,7 @@ impl SightApproach {
         local_id: u8,
         carried_from: Option<assets::MapId>,
         walk_tiles: u8,
-        intro: &'static str,
+        script: &'static str,
         battle: battle::Battle,
         trainer_id: TrainerId,
         reserves: PartyReserves,
@@ -208,7 +237,7 @@ impl SightApproach {
             local_id,
             carried_from,
             walk_tiles,
-            intro,
+            script,
             battle,
             trainer_id,
             reserves,
@@ -216,6 +245,42 @@ impl SightApproach {
                 frames_left: LOCK_HANDOFF_FRAMES_AT_REST,
             },
         }
+    }
+
+    /// The intro speech of `script`, decoded from `pack`'s script-keyed
+    /// sight-trainer table into the token stream
+    /// [`crate::overworld::dialog::NpcDialog::from_pack_at_speed`] prints.
+    ///
+    /// The table holds the raw charmap stream the script's own
+    /// `ShowTrainerIntroSpeech` text assembles to, so [`engine::text::decode`]
+    /// reproduces every glyph and control token as the printer takes it:
+    /// line breaks as [`Token::Newline`], `\l` as [`Token::PromptScroll`], and
+    /// the closing [`Token::End`]. Nothing is appended or stripped: the
+    /// button wait is the script's `waitbuttonpress`, not the text's.
+    ///
+    /// # Errors
+    ///
+    /// [`IntroSpeechError`] when the pack lacks the table or it is corrupt,
+    /// `script` is not in it, or its stream does not decode.
+    pub(super) fn intro_tokens(
+        pack: &assets::AssetPack,
+        script: &str,
+    ) -> Result<Vec<Token>, IntroSpeechError> {
+        let table = pack
+            .sight_trainer_intro_speeches()
+            .map_err(IntroSpeechError::Pack)?;
+        Self::intro_tokens_from(&table, script)
+    }
+
+    /// [`Self::intro_tokens`] over an already-validated table.
+    fn intro_tokens_from(
+        table: &assets::SightTrainerIntroSpeechTable<'_>,
+        script: &str,
+    ) -> Result<Vec<Token>, IntroSpeechError> {
+        let stream = table
+            .speech(script)
+            .ok_or_else(|| IntroSpeechError::UnknownScript(script.to_owned()))?;
+        engine::text::decode(stream).map_err(IntroSpeechError::Text)
     }
 
     /// The local ID of the live collection entry this approach is for.
@@ -241,7 +306,7 @@ impl SightApproach {
     /// `waitmessage`/`waitbuttonpress` half, as though the box had already
     /// been opened.
     ///
-    /// [`NpcDialog::open_at_speed`] reads the extracted asset pack, which CI
+    /// The intro box reads the extracted asset pack, which CI
     /// does not have, so the *handshake* (the battle waits for the box, the
     /// box waits for the player) would otherwise only ever be exercised on a
     /// developer machine. A test that puts the box there itself -- with
@@ -449,6 +514,56 @@ fn direction_to_face(from: TilePos, target: TilePos) -> Direction {
 }
 
 mod driver;
+
+/// Invented intro speeches and the synthetic pack entry that holds them, for
+/// tests: no CI fixture may carry upstream text, so every script gets a line
+/// of its own making whose length differs from every other script's.
+#[cfg(test)]
+pub(in crate::flow::overworld_phase) mod fixture {
+    use assets::SIGHT_TRAINER_INTRO_SCRIPTS;
+    use engine::text::Token;
+
+    /// The invented speech of `script`: `position + 1` glyphs on a second
+    /// line after a first line shared by none of them, so two scripts never
+    /// print the same text or the same number of glyphs.
+    pub(in crate::flow::overworld_phase) fn invented_tokens(script: &str) -> Vec<Token> {
+        let position = SIGHT_TRAINER_INTRO_SCRIPTS
+            .iter()
+            .position(|known| *known == script)
+            .expect("an invented speech exists only for an inventory script");
+        let mut tokens: Vec<Token> = "Invented line".chars().map(Token::Char).collect();
+        tokens.push(Token::Newline);
+        tokens.extend(std::iter::repeat_n(Token::Char('x'), position + 1));
+        tokens.push(Token::End);
+        tokens
+    }
+
+    /// How many glyphs the box prints for [`invented_tokens`] of `script`.
+    pub(in crate::flow::overworld_phase) fn invented_glyph_count(script: &str) -> usize {
+        invented_tokens(script)
+            .iter()
+            .filter(|token| matches!(token, Token::Char(_)))
+            .count()
+    }
+
+    /// The pack entry holding [`invented_tokens`] for all nine scripts.
+    pub(in crate::flow::overworld_phase) fn invented_table_entry() -> pack_format::PackEntry {
+        let streams: Vec<Vec<u8>> = SIGHT_TRAINER_INTRO_SCRIPTS
+            .iter()
+            .map(|script| {
+                engine::text::encode(&invented_tokens(script)).expect("invented text encodes")
+            })
+            .collect();
+        let table = assets::SightTrainerIntroSpeechTable::from_entries(
+            SIGHT_TRAINER_INTRO_SCRIPTS
+                .iter()
+                .copied()
+                .zip(streams.iter().map(Vec::as_slice)),
+        )
+        .expect("the invented speeches form a valid table");
+        pack_format::raw_entry("sight-trainer-intro-speech/table".into(), table.encode())
+    }
+}
 
 #[cfg(test)]
 mod tests;

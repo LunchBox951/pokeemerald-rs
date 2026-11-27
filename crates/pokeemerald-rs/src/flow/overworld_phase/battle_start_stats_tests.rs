@@ -347,7 +347,7 @@ fn a_lost_sight_battle_keeps_the_start_count() {
         1,
         None,
         1,
-        "Whoa!",
+        "Route103_EventScript_Rhett",
         battle,
         assets::trainers::TrainerId(703),
         super::PartyReserves::default(),

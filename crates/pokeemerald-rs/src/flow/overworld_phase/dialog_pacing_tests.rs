@@ -104,6 +104,7 @@ fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed
             FONT_BIT_DEPTH,
             0,
         ),
+        super::sight_trainer_approach::fixture::invented_table_entry(),
     ]);
 
     let frames_to_reveal_third_glyph = |saved_text_speed: u8| {
@@ -176,9 +177,9 @@ fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
     /// elapse before the box opens at all.
     const OPEN_FRAME_BUDGET: usize = 200;
     const PRINT_FRAME_BUDGET: usize = 64;
-    /// The stand-in intro ("Whoa!") carries at least this many glyphs before
-    /// its `{P}`-free end -- see [`SightApproach::intro`]'s own docs for why
-    /// there is no trailing prompt to race against.
+    /// The stand-in's invented intro carries at least this many glyphs before
+    /// its prompt-free end -- see [`SightApproach::intro_tokens`]'s own docs
+    /// for why there is no trailing prompt to race against.
     const GLYPH_TARGET: usize = 3;
     const OPTIONS_TEXT_SPEED_SLOW: u8 = 0;
     const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
@@ -199,6 +200,7 @@ fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
             FONT_BIT_DEPTH,
             0,
         ),
+        super::sight_trainer_approach::fixture::invented_table_entry(),
     ]);
 
     let frames_to_reveal_third_glyph = |saved_text_speed: u8| {

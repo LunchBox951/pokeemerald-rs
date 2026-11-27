@@ -4,7 +4,6 @@
 
 use platform::ButtonState;
 
-use crate::authored_message;
 use crate::overworld::NpcDialog;
 
 use super::super::sight_trainer_trigger::SightTrainerOutcome;
@@ -262,9 +261,8 @@ impl OverworldPhase {
     /// edge lands, and closes on that very tick. `start_sight_trainer_battle`
     /// therefore runs on the confirm frame itself, with no intervening clear
     /// and no post-clear reveal delay, exactly as upstream goes straight from
-    /// `waitbuttonpress` to `dotrainerbattle`. The intro strings carry no
-    /// trailing `{P}` for the same reason ([`super::super::sight_trainer_trigger`]'s
-    /// `SightTrainer::intro` docs).
+    /// `waitbuttonpress` to `dotrainerbattle`. The intro speeches carry no
+    /// trailing prompt for the same reason ([`super::SightApproach::intro_tokens`]).
     ///
     /// `ShowTrainerIntroSpeech` -> `ShowFieldMessage`
     /// (`pokeemerald/src/battle_setup.c:1378-1401`), so the box opens at
@@ -281,14 +279,11 @@ impl OverworldPhase {
     /// already built and paid for.
     fn advance_intro_message(&mut self, opened: bool, buttons: ButtonState) -> SightTrainerOutcome {
         if !opened {
-            let Some(intro) = self.sight_approach.as_ref().map(|approach| approach.intro) else {
+            let Some(script) = self.sight_approach.as_ref().map(|approach| approach.script) else {
                 return SightTrainerOutcome::Refused;
             };
-            let tokens = authored_message::parse_message(intro).unwrap_or_else(|err| {
-                panic!("sight trainer intro speech {intro:?} is malformed: {err}")
-            });
             let text_speed = self.field_dialog_text_speed();
-            match NpcDialog::open_at_speed(&self.pack_source, tokens, text_speed) {
+            match self.open_intro_dialog(script, text_speed) {
                 Ok(dialog) => {
                     self.dialog = Some(dialog);
                     if let Some(approach) = &mut self.sight_approach {
@@ -311,6 +306,23 @@ impl OverworldPhase {
         } else {
             self.start_sight_trainer_battle()
         }
+    }
+
+    /// The intro box for `script`: the pack is read once, for the script's own
+    /// speech out of its sight-trainer table and for the box's fonts and frame.
+    ///
+    /// # Errors
+    ///
+    /// The pack cannot be loaded, holds no usable speech for `script`, or
+    /// cannot supply the box's assets.
+    fn open_intro_dialog(
+        &self,
+        script: &str,
+        text_speed: engine::text::render::TextSpeed,
+    ) -> Result<NpcDialog, Box<dyn std::error::Error>> {
+        let pack = self.pack_source.load()?;
+        let tokens = super::SightApproach::intro_tokens(&pack, script)?;
+        Ok(NpcDialog::from_pack_at_speed(&pack, tokens, text_speed)?)
     }
 
     /// `dotrainerbattle` (`trainer_battle.inc:110`): the approach ends
@@ -405,7 +417,7 @@ impl OverworldPhase {
             templates[0].local_id,
             None,
             1,
-            "Whoa!",
+            "Route103_EventScript_Rhett",
             battle,
             TrainerId(703),
             super::super::PartyReserves::default(),

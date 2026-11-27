@@ -3,9 +3,12 @@
 use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
 
+use super::super::sight_trainer_approach::fixture;
 use super::super::test_support::pressed;
 use super::super::OverworldPhase;
 use super::support::*;
+use crate::pack_source::PackSource;
+use crate::pack_test_support::ScratchClaim;
 
 /// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-107`): the
 /// battle waits for the intro speech, the speech waits for the player, and
@@ -125,6 +128,12 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
     );
 }
 
+/// The first charmap byte of the control codes (`CHAR_PROMPT_SCROLL` and up),
+/// and the two this test's speech may hold (`include/characters.h`).
+const CONTROL_BYTES_START: u8 = 0xF7;
+const CHAR_NEWLINE: u8 = 0xFE;
+const EOS: u8 = 0xFF;
+
 /// The pack-gated companion to
 /// [`the_intro_speech_holds_the_battle_until_the_player_dismisses_it`]: that
 /// test only reaches `advance_intro_message`'s real `!opened` arm one frame
@@ -133,11 +142,11 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
 /// [`OverworldPhase::advance_intro_message`]'s actual
 /// `NpcDialog::open_at_speed` call and its `opened` latch also have a
 /// synthetic-pack sibling in `step_tests` (issue #1444); its `Err` fallback
-/// path (`sight_trainer_approach`'s own module doc comment) does not, and
-/// still only runs here. This one drives the real icon, the real
-/// zero-tile turn, and the real message box -- open, print every glyph, and
-/// dismiss through the script's own `waitbuttonpress` -- against the
-/// genuinely extracted
+/// path (`sight_trainer_approach`'s own module doc comment) is pinned below
+/// by `a_pack_without_the_intro_table_starts_the_battle_without_a_box`. This one drives the real icon, the real
+/// zero-tile turn, and the real message box -- open, print every glyph of
+/// the speech the pack holds for the trainer's script, and dismiss through
+/// the script's own `waitbuttonpress` -- against the genuinely extracted
 /// pack, the same way `frame_tests`' own
 /// `walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog` does
 /// for an ordinary NPC. `#[ignore]`d like this crate's other real-pack
@@ -177,15 +186,27 @@ fn real_pack_the_intro_message_opens_prints_and_dismisses_for_real() {
         "opening the box must not itself start the battle"
     );
 
-    // The exact real text this trainer's own `seed_approach` intro carries
-    // (`sight_trainer_tests` docs, "The stand-in party": the object event and
-    // the speech are real, only the party behind the battle is a stand-in).
-    let expected_tokens =
-        crate::authored_message::parse_message("Whoa!\nHow'd you get into a space this small?")
-            .expect("this test's own literal intro speech is a valid authored message");
-    let expected_glyph_count = expected_tokens
+    // What the box must print comes from the pack this test opened it from,
+    // read here a second time and counted by hand from the raw charmap bytes
+    // -- not from `intro_tokens`' own decode, and not from any committed text.
+    // Rhett's speech holds only printable glyphs and line breaks, which the
+    // assertion below pins, so each byte but the line breaks and the
+    // terminator is one glyph.
+    let pack = assets::AssetPack::load_repo().expect("the checkout's extracted pack loads");
+    let table = pack
+        .sight_trainer_intro_speeches()
+        .expect("the extracted pack carries the sight-trainer intro table");
+    let raw = table
+        .speech(RHETT_SCRIPT)
+        .expect("the table holds Rhett's own speech");
+    assert!(
+        raw.iter()
+            .all(|&byte| byte < CONTROL_BYTES_START || byte == CHAR_NEWLINE || byte == EOS),
+        "Rhett's speech is expected to hold nothing but glyphs and line breaks"
+    );
+    let expected_glyph_count = raw
         .iter()
-        .filter(|t| matches!(t, engine::text::Token::Char(_)))
+        .filter(|&&byte| byte != CHAR_NEWLINE && byte != EOS)
         .count();
     assert!(
         expected_glyph_count > 0,
@@ -326,4 +347,139 @@ fn a_finished_sight_battle_restores_the_lead_to_its_slot() {
     phase.assert_lead_at_slot_for_test(0);
     let lent = phase.take_lead_battler().expect("the loan was closed");
     phase.restore_lead_battler(lent);
+}
+
+/// A scratch pack holding the message-box assets, the font sheets and -- when
+/// `with_table` -- the invented intro table, for the production intro path to
+/// read through `PackSource::Test`. The guard removes the file on drop.
+fn claim_intro_pack(label: &str, with_table: bool) -> (ScratchClaim, PackSource) {
+    use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry};
+
+    let mut entries = vec![
+        image_entry("text-window/image/message_box", 56, 16, 4, 0),
+        palette_entry("text-window/palette/message_box", 16),
+        image_entry(
+            "font/normal/glyphs",
+            assets::fonts::SHEET_WIDTH,
+            assets::fonts::SHEET_HEIGHT,
+            2,
+            0,
+        ),
+    ];
+    if with_table {
+        entries.push(fixture::invented_table_entry());
+    }
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-sight-intro-{label}-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let claim = ScratchClaim::claim_with(path, pack_bytes_with_fonts(entries));
+    // `PackSource::Test` needs a `'static` path; leaked once per call and
+    // reclaimed when the test process exits, the idiom `dialog_pacing_tests`
+    // uses too.
+    let leaked: &'static std::path::Path = Box::leak(claim.path().to_path_buf().into_boxed_path());
+    (claim, PackSource::Test(leaked))
+}
+
+/// The production intro path prints the pack's entry for the approaching
+/// trainer's *script*: Amy and Liv share `TRAINER_AMY_AND_LIV_1` yet each
+/// opens with a speech of its own, and Rhett's differs from both.
+///
+/// Every speech here is invented (`sight_trainer_approach::fixture`), a
+/// different glyph count per script, so a lookup keyed by anything but the
+/// script -- the shared battle id, a fixed script, a first entry -- prints the
+/// wrong number of glyphs for at least one of the three.
+#[test]
+fn the_intro_box_prints_the_pack_entry_of_the_trainers_own_script() {
+    const SHARED_BATTLE_ID_SCRIPTS: [&str; 2] =
+        ["Route103_EventScript_Amy", "Route103_EventScript_Liv"];
+    const OPEN_FRAME_BUDGET: usize = 200;
+    const PRINT_FRAME_BUDGET: usize = 400;
+    const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
+
+    assert_ne!(
+        fixture::invented_glyph_count(SHARED_BATTLE_ID_SCRIPTS[0]),
+        fixture::invented_glyph_count(SHARED_BATTLE_ID_SCRIPTS[1]),
+        "setup: the two trainers sharing a battle id must have different invented speeches"
+    );
+    let (_guard, source) = claim_intro_pack("entries", true);
+    let (rx, ry) = RHETT_TILE;
+    for script in [
+        SHARED_BATTLE_ID_SCRIPTS[0],
+        SHARED_BATTLE_ID_SCRIPTS[1],
+        RHETT_SCRIPT,
+    ] {
+        let expected = fixture::invented_glyph_count(script);
+        let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+        phase.pack_source = source.clone();
+        phase.save2.options_text_speed = OPTIONS_TEXT_SPEED_FAST;
+        seed_approach_with_script(&mut phase, script, rhetts_object_event().local_id, None, 0);
+
+        let mut frames = 0;
+        while phase.dialog.is_none() {
+            frames += 1;
+            assert!(
+                frames <= OPEN_FRAME_BUDGET,
+                "{script}: the intro box must open against the synthetic pack"
+            );
+            phase.step(ButtonState::new());
+        }
+        let mut printed = 0;
+        for _ in 0..PRINT_FRAME_BUDGET {
+            phase.step(ButtonState::new());
+            printed = phase
+                .dialog
+                .as_ref()
+                .expect("the box waits for `waitbuttonpress`")
+                .revealed_glyph_count();
+            if printed >= expected {
+                break;
+            }
+        }
+        assert_eq!(
+            printed, expected,
+            "{script}: its own speech must print whole"
+        );
+        for _ in 0..FRAMES_STANDING_STILL {
+            phase.step(ButtonState::new());
+        }
+        assert_eq!(
+            phase
+                .dialog
+                .as_ref()
+                .expect("still waiting on the player")
+                .revealed_glyph_count(),
+            expected,
+            "{script}: no glyph of another speech may follow"
+        );
+    }
+}
+
+/// A pack that cannot supply the intro -- here, one without the table -- opens
+/// no box and starts the battle anyway, the way a missing font already does:
+/// the fight is built and paid for, and the player must not be stranded in a
+/// cutscene with no way out.
+#[test]
+fn a_pack_without_the_intro_table_starts_the_battle_without_a_box() {
+    const FRAME_BUDGET: usize = 200;
+
+    let (_guard, source) = claim_intro_pack("no-table", false);
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    phase.pack_source = source;
+    seed_approach(&mut phase, 0);
+
+    for frame in 0..FRAME_BUDGET {
+        phase.step(ButtonState::new());
+        assert!(
+            phase.dialog.is_none(),
+            "frame {frame}: there is no speech to print"
+        );
+        if phase.is_sight_trainer_battle_active() {
+            assert!(phase.sight_approach.is_none());
+            return;
+        }
+    }
+    panic!("the battle must start without the box within {FRAME_BUDGET} frames");
 }

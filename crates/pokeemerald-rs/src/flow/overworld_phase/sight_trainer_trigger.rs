@@ -68,93 +68,72 @@ use super::{ActiveBattle, OverworldPhase, PartyReserves};
 /// own scope -- it gates `CheckTrainer`, never the object event's spawn.
 const TRAINER_FLAGS_START: u16 = 0x500;
 
-/// One row of [`SIGHT_TRAINERS`]: an object event's `script` name, the
-/// trainer it fights as, and the speech it opens with.
+/// One row of [`SIGHT_TRAINERS`]: an object event's `script` name and the
+/// trainer it fights as.
+///
+/// The speech a row opens with is not carried here: the asset pack holds each
+/// script's own intro (`AssetPack::sight_trainer_intro_speeches`), keyed by
+/// this very `script`, and the approach's intro stage reads it from there
+/// ([`super::sight_trainer_approach`]) -- the line `ShowTrainerIntroSpeech`
+/// prints (`data/scripts/trainer_battle.inc:101-104`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SightTrainer {
     /// [`assets::ObjectEvent::script`], the key upstream would instead read
-    /// a trainer id out of by interpreting (module docs).
+    /// a trainer id out of by interpreting (module docs). It is also the key
+    /// of the pack's intro-speech table.
     script: &'static str,
     /// The `TRAINER_*` id in `include/constants/opponents.h`.
     id: TrainerId,
-    /// This trainer's own `Route103_Text_*Intro`, transcribed from
-    /// `data/text/trainers.inc` -- the line `ShowTrainerIntroSpeech` prints
-    /// (`data/scripts/trainer_battle.inc:101-104`,
-    /// [`super::sight_trainer_approach`]'s own intro stage). `\n`/`\l` are
-    /// spelled `\n`/`{L}` for [`crate::authored_message::parse_message`].
-    ///
-    /// Byte-identical to upstream's own raw strings, terminator aside: all
-    /// nine end `$` with no embedded `\p` (`data/text/trainers.inc:72-74`
-    /// Daisy, `:83-86` Amy, `:101-103` Liv, `:159-162` Andrew, `:172-174`
-    /// Miguel, `:200-202` Pete, `:213-215` Isabelle, `:224-226` Rhett,
-    /// `:236-237` Marcos). Before issue #410 this table appended a synthetic
-    /// trailing `{P}` to stand in for the script's own
-    /// `waitmessage`/`waitbuttonpress` pair; that wait is now
-    /// [`crate::overworld::dialog::NpcDialog::with_waitbuttonpress`], applied
-    /// by the [`crate::overworld::dialog::NpcDialog::open_at_speed`] the
-    /// intro stage opens through, so the text itself carries none of it --
-    /// `npc_scripts`' own `MSGBOX_DEFAULT` line took the same migration.
-    intro: &'static str,
 }
 
 /// Every one of Route 103's nine `TRAINER_TYPE_NORMAL` sight trainers, in
 /// `data/maps/Route103/map.json`'s own `object_events` order -- cross-checked
 /// against `data/maps/Route103/scripts.inc` for the script name,
-/// `include/constants/opponents.h` for the numeric id, and
-/// `data/text/trainers.inc` for the speech.
+/// `include/constants/opponents.h` for the numeric id.
 ///
 /// Amy and Liv share `TRAINER_AMY_AND_LIV_1` (`481`): both
 /// `Route103_EventScript_Amy` and `_Liv` are `trainerbattle_double
 /// TRAINER_AMY_AND_LIV_1` (`scripts.inc:207-230`), not two distinct
 /// single-battle ids -- which is also why they can never be *selected*, see
 /// [`trainer_data_wants_double_battle`]. Their intro lines still differ, so
-/// the speech is keyed by row rather than by id.
+/// the pack keys the speech by script rather than by id.
 #[rustfmt::skip]
 const SIGHT_TRAINERS: &[SightTrainer] = &[
     SightTrainer {
         script: "Route103_EventScript_Daisy",
         id: TrainerId(36), // TRAINER_DAISY
-        intro: "Did you feel the tug of our\nsoul-soothing fragrance?",
     },
     SightTrainer {
         script: "Route103_EventScript_Amy",
         id: TrainerId(481), // TRAINER_AMY_AND_LIV_1 (double)
-        intro: "AMY: I'm AMY.\nAnd this is my little sister LIV.{L}We battle together!",
     },
     SightTrainer {
         script: "Route103_EventScript_Liv",
         id: TrainerId(481), // TRAINER_AMY_AND_LIV_1 (double)
-        intro: "LIV: We battle together as one\nteam.",
     },
     SightTrainer {
         script: "Route103_EventScript_Andrew",
         id: TrainerId(336), // TRAINER_ANDREW
-        intro: "Gah! My fishing line's all snarled up!\nI'm getting frustrated and mean!{L}That's it! Battle me!",
     },
     SightTrainer {
         script: "Route103_EventScript_Miguel",
         id: TrainerId(293), // TRAINER_MIGUEL_1 (Oran Berry held item)
-        intro: "My POKéMON is delightfully adorable!\nDon't be shy--I'll show you!",
     },
     SightTrainer {
         script: "Route103_EventScript_Rhett",
         id: TrainerId(703), // TRAINER_RHETT
-        intro: "Whoa!\nHow'd you get into a space this small?",
     },
     SightTrainer {
         script: "Route103_EventScript_Marcos",
         id: TrainerId(702), // TRAINER_MARCOS
-        intro: "Did my guitar's wailing draw you in?",
     },
     SightTrainer {
         script: "Route103_EventScript_Isabelle",
         id: TrainerId(736), // TRAINER_ISABELLE
-        intro: "Watch where you're going!\nWe're going to crash!",
     },
     SightTrainer {
         script: "Route103_EventScript_Pete",
         id: TrainerId(735), // TRAINER_PETE
-        intro: "This sort of distance…\nYou should just swim it!",
     },
 ];
 
@@ -527,7 +506,7 @@ impl OverworldPhase {
                     live.template().local_id,
                     live.carried_from(),
                     walk_tiles,
-                    entry.intro,
+                    entry.script,
                     battle,
                     trainer_id,
                     reserves,
