@@ -525,3 +525,34 @@ fn a_refused_forced_replacement_does_not_pay_the_faint_again_on_a_later_turn() {
         .any(|event| matches!(event, BattleEvent::ExpGained { .. })));
     assert_eq!(battle.player().experience(), paid);
 }
+
+/// A restored slot-1 single-ability foe holds `ABILITY_NONE`, so the opposing
+/// Trace holder stays queued instead of copying on entry. Poisoned meanwhile,
+/// it must not copy the Immunity of the replacement that arrives later:
+/// upstream would cure the poison at move end (`battle_util.c:2873`-`:2951`),
+/// which the engine does not model, so the copy is refused and the holder is
+/// left as it was.
+#[test]
+fn a_queued_trace_copy_is_refused_when_the_holder_gained_a_status_meanwhile() {
+    let dex = Dex::new();
+    let player = at_one_hp(mon(&dex, SpeciesId::BULBASAUR, 100, &[MoveId::SLUDGE_BOMB]))
+        .with_ability_slot(1);
+    assert_eq!(player.ability(), AbilityId::NONE);
+    let reserve = mon(&dex, SpeciesId::ZANGOOSE, 100, &[SPLASH]);
+    assert_eq!(reserve.ability(), AbilityId::IMMUNITY);
+    let enemy = mon(&dex, SpeciesId::PORYGON2, 60, &[TACKLE]);
+    let mut rng = script(&[&C, &U, &H, &H, &[0; 16]]);
+    let mut battle =
+        Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
+            .expect("the healthy holder admits every copy it can reach");
+    assert!(battle.battler_states[1].trace_pending());
+
+    let refused = turn_with(&mut battle, 0, EnemyAction::Move(0), &mut rng);
+
+    assert_eq!(
+        refused,
+        Err(BattleError::UnportedAbilityInteraction(AbilityId::IMMUNITY))
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Poisoned);
+    assert_eq!(battle.enemy().ability(), AbilityId::TRACE);
+}

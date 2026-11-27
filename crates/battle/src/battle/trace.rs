@@ -38,10 +38,15 @@ pub(super) fn battle_start_states(
 impl Battle {
     /// Drains the opening entry's Trace queue. Its events wait for the first
     /// turn, because a constructor returns no events.
-    pub(super) fn settle_battle_start_trace(&mut self) {
+    ///
+    /// # Errors
+    ///
+    /// Returns what [`Battle::resolve_trace_queue`] returns.
+    pub(super) fn settle_battle_start_trace(&mut self) -> Result<(), BattleError> {
         let mut events = Vec::new();
-        self.resolve_trace_queue(&mut events);
+        self.resolve_trace_queue(&mut events)?;
         self.pending_entry_events = events;
+        Ok(())
     }
 
     /// `ABILITYEFFECT_TRACE`: every queued holder copies the opposing
@@ -50,20 +55,31 @@ impl Battle {
     /// opponent cannot be copied stays queued for a later drain. The pass
     /// repeats after each copy, as the script's re-entry does, so two Trace
     /// holders each settle once and the second copies the first's Trace.
-    pub(super) fn resolve_trace_queue(&mut self, events: &mut Vec<BattleEvent>) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::UnportedAbilityInteraction`] when a copy would
+    /// leave its holder with a status the copied ability forbids; the holder
+    /// is left unchanged.
+    pub(super) fn resolve_trace_queue(
+        &mut self,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
         if self.outcome.is_some() || self.player.pending_move_learn().is_some() {
-            return;
+            return Ok(());
         }
-        while self.settle_next_trace(events) {}
+        while self.settle_next_trace(events)? {}
+        Ok(())
     }
 
-    /// Every copy this drain makes is already admitted, so it checks no
-    /// status: the constructors screen each opening and replacement holder
-    /// ([`ensure_copies_admissible`]), a player holder cannot gain a status
-    /// between its entry and its copy, and an enemy holder returning from the
-    /// bench is screened by [`ensure_trace_reentry_admissible`] before it
-    /// enters.
-    fn settle_next_trace(&mut self, events: &mut Vec<BattleEvent>) -> bool {
+    /// A copy made on entry is already admitted: the constructors screen each
+    /// opening and replacement holder ([`ensure_copies_admissible`]), and an
+    /// enemy holder returning from the bench is screened by
+    /// [`ensure_trace_reentry_admissible`] before it enters. A copy that stays
+    /// queued past its entry, because the opposing battler held no ability
+    /// (a restored save's empty ability slot), can meet a holder that gained a
+    /// status meanwhile, so the copy is screened when it happens.
+    fn settle_next_trace(&mut self, events: &mut Vec<BattleEvent>) -> Result<bool, BattleError> {
         for holder in [BattlerSide::Player, BattlerSide::Enemy] {
             let (holder_mon, source) = match holder {
                 BattlerSide::Player => (&mut self.player, &self.enemy),
@@ -77,15 +93,18 @@ impl Battle {
             {
                 continue;
             }
+            let mut projected = holder_mon.clone();
+            projected.trace_ability(copied);
+            ensure_participant_admissible(&projected)?;
             holder_mon.trace_ability(copied);
             self.battler_states[holder.index()].settle_trace();
             events.push(BattleEvent::TracedAbility {
                 by_player: holder == BattlerSide::Player,
                 ability: copied,
             });
-            return true;
+            return Ok(true);
         }
-        false
+        Ok(false)
     }
 }
 

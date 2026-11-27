@@ -1215,6 +1215,59 @@ mod tests {
         }
     }
 
+    /// A restored slot-1 single-ability lead holds `ABILITY_NONE`
+    /// (`GetAbilityBySpecies`, `pokemon.c:4546-4554`), so a Trace member has
+    /// nothing to copy from it: the pre-flight must not project the species'
+    /// primary Intimidate, and must agree with `Battle::new_trainer`. The slot-0
+    /// control still projects Intimidate and is refused.
+    #[test]
+    fn the_pre_flight_trace_screen_reads_a_saved_slot_one_leads_empty_ability() {
+        let dex = Dex::new();
+        let moves = [MoveId::TACKLE];
+        let party = [TrainerPartyMon {
+            species: SpeciesId::PORYGON2,
+            level: 20,
+            moves: &moves,
+            personality: SLOT_0,
+            held_item: ItemId::NONE,
+        }];
+        let porygon2 = || {
+            crate::pokemon::BattlePokemon::new(
+                &Dex::new(),
+                SpeciesId::PORYGON2,
+                20,
+                fixed_ivs(0),
+                SLOT_0,
+                moves.to_vec(),
+            )
+            .expect("a valid Trace member")
+        };
+        let gyarados = lead(SpeciesId::GYARADOS);
+        assert_eq!(gyarados.ability(), assets::AbilityId::INTIMIDATE);
+        assert_eq!(
+            ensure_trainer_party_startable(&dex, &gyarados, TrainerId::JANI, &party),
+            Err(crate::error::BattleError::UnportedAbilityInteraction(
+                assets::AbilityId::INTIMIDATE
+            ))
+        );
+
+        let restored = gyarados.with_ability_slot(1);
+        assert_eq!(restored.ability(), assets::AbilityId::NONE);
+        assert_eq!(
+            ensure_trainer_party_startable(&dex, &restored, TrainerId::JANI, &party),
+            Ok(())
+        );
+        let mut rng = SequenceRng::new([0; 16]);
+        let constructed = crate::battle::Battle::new_trainer(
+            Dex::new(),
+            restored,
+            TrainerId::JANI,
+            vec![porygon2()],
+            &mut rng,
+        );
+        assert_eq!(constructed.map(|_| ()), Ok(()));
+    }
+
     #[test]
     fn an_out_of_range_trainer_id_is_rejected_rather_than_panicking() {
         assert_eq!(

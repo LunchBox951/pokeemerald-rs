@@ -40,6 +40,8 @@ const DITTO: SpeciesId = SpeciesId(132);
 const SPINDA: SpeciesId = SpeciesId(308);
 /// Water/Flying, Intimidate only: Electric is quadruple-effective.
 const GYARADOS: SpeciesId = SpeciesId(130);
+/// Bug/Flying, Speed Boost only.
+const NINJASK: SpeciesId = SpeciesId(302);
 
 fn mon(species: SpeciesId, moves: &[MoveId]) -> BattlePokemon {
     BattlePokemon::new(
@@ -108,6 +110,21 @@ fn restored_slot_one_jolteon_still_reads_as_volt_absorb_to_the_ai() {
     assert_eq!(jolteon.ability(), AbilityId(0));
     assert_eq!(ai_get_ability(&jolteon), Ok(AbilityId::VOLT_ABSORB));
     assert_eq!(bad_move_score(MoveId::SHOCK_WAVE, &jolteon), MINUS_12);
+}
+
+/// The stat-drop guard reads the same first-slot ability (`CheckIfAbilityBlocksStatChange`
+/// and `AI_CBM_SpeedDown` both go through `Cmd_get_ability`), so a restored slot-1 Ninjask,
+/// whose own ability is `ABILITY_NONE`, is still read as Speed Boost and a Speed drop is
+/// discouraged exactly as it is for the slot-0 holder.
+#[test]
+fn restored_slot_one_ninjask_still_guards_speed_drops_for_the_ai() {
+    let ninjask = mon(NINJASK, &[MoveId::POUND]);
+    let restored = ninjask.clone().with_ability_slot(1);
+    assert_eq!(ninjask.ability(), AbilityId::SPEED_BOOST);
+    assert_eq!(restored.ability(), AbilityId::NONE);
+    let guarded = bad_move_score(MoveId::STRING_SHOT, &ninjask);
+    assert_ne!(guarded, FULL, "fixture sanity: Speed Boost guards the drop");
+    assert_eq!(bad_move_score(MoveId::STRING_SHOT, &restored), guarded);
 }
 
 #[test]
