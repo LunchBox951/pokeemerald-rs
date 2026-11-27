@@ -53,6 +53,9 @@ fn a_fainted_sight_trainer_lead_sends_out_the_saved_reserve_and_files_both_slots
         phase.step(ButtonState::new());
     }
     phase.step(pressed(Buttons::A));
+    // The confirm frame only ends `waitbuttonpress`; the battle starts on
+    // the next one.
+    phase.step(ButtonState::new());
     assert!(
         phase.is_sight_trainer_battle_active(),
         "setup: the fight started"
