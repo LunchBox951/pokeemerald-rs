@@ -18,12 +18,13 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    // The production construction: an empty environment, so an inherited
+    // `GIT_DIR`/`GIT_INDEX_FILE` (a git hook running `cargo test` sets both)
+    // cannot send the fixture's mutating commands to another repository.
+    let out = checkout::git_command(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
-        .args(["-c", "commit.gpgsign=false", "-C"])
-        .arg(dir)
+        .args(["-c", "commit.gpgsign=false"])
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .output()
         .unwrap();
     assert!(out.status.success(), "git {args:?}: {out:?}");
@@ -628,3 +629,4 @@ fn a_symlinked_output_is_refused() {
 }
 
 mod checkout_reading;
+mod fixture_git_env;
