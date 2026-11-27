@@ -431,6 +431,7 @@ pub(super) mod procfs_unavailable {
         Guard(())
     }
 
+    #[cfg(target_os = "linux")]
     impl Drop for Guard {
         fn drop(&mut self) {
             UNAVAILABLE.with(|flag| flag.set(false));
@@ -507,13 +508,16 @@ pub(super) mod readable_open_refused {
     }
 
     /// Holds the open refused until dropped.
+    #[cfg(target_os = "linux")]
     pub(in crate::import_rom) struct Guard(());
 
+    #[cfg(target_os = "linux")]
     pub(in crate::import_rom) fn refuse() -> Guard {
         REFUSED.with(|flag| flag.set(true));
         Guard(())
     }
 
+    #[cfg(target_os = "linux")]
     impl Drop for Guard {
         fn drop(&mut self) {
             REFUSED.with(|flag| flag.set(false));
