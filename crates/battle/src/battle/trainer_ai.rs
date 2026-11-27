@@ -78,6 +78,8 @@ const SPEED_UP_BONUS: i8 = 3;
 const SPEED_UP_SLOWER_TARGET_PENALTY: i8 = -3;
 /// The one- and two-stage Speed raises, both routed to `AI_CV_SpeedUp`.
 const SPEED_RAISE_EFFECTS: [MoveEffect; 2] = [MoveEffect::SPEED_UP, MoveEffect::SPEED_UP_2];
+/// The one- and two-stage Speed drops, both routed to `AI_CV_SpeedDown`.
+const SPEED_DROP_EFFECTS: [MoveEffect; 2] = [MoveEffect::SPEED_DOWN, MoveEffect::SPEED_DOWN_2];
 /// Cutoffs and rolls of `AI_CV_VitalThrow` (`data/battle_ai_scripts.s:1536`-`:1545`).
 const VITAL_THROW_USER_HP_CEILING: u32 = 60;
 const VITAL_THROW_USER_HP_FLOOR: u32 = 40;
@@ -239,7 +241,7 @@ enum ScoreableEffect {
     /// Any other shared stat-stage label (see [`ai_stat_label`]). Its
     /// `AI_CheckViability` and `AI_SetupFirstTurn` branches are not ported,
     /// except that Defense Curl has no viability branch and the Speed raises
-    /// have `AI_CV_SpeedUp`.
+    /// and drops have `AI_CV_SpeedUp` and `AI_CV_SpeedDown`.
     StatLabel(MoveEffect, StatChangeEffect),
 }
 
@@ -298,6 +300,7 @@ impl ScoreableEffect {
                 return !flags.contains(AiFlags::SETUP_FIRST_TURN)
                     && (effect == MoveEffect::DEFENSE_CURL
                         || SPEED_RAISE_EFFECTS.contains(&effect)
+                        || SPEED_DROP_EFFECTS.contains(&effect)
                         || !flags.contains(AiFlags::CHECK_VIABILITY));
             }
             Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
@@ -1122,6 +1125,9 @@ fn score_viability(
         ScoreableEffect::StatLabel(effect, _) if SPEED_RAISE_EFFECTS.contains(&effect) => {
             score_speed_up_viability(scores, slot, user, target, rng);
         }
+        ScoreableEffect::StatLabel(effect, _) if SPEED_DROP_EFFECTS.contains(&effect) => {
+            score_speed_drop_viability(scores, slot, user, target, rng);
+        }
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
         // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect == MoveEffect::DEFENSE_CURL => {}
@@ -1245,6 +1251,22 @@ fn score_vital_throw_viability(
     }
 }
 
+/// `AI_CV_SpeedDown` (`data/battle_ai_scripts.s:669`, `:697`, `:1142`-`:1151`),
+/// shared by the one- and two-stage drops and the whitelisted damaging moves.
+fn score_speed_drop_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if !target_is_faster(user, target, rng) {
+        scores.adjust(slot, SPEED_DROP_NOT_FASTER_PENALTY);
+    } else if random_roll_is_at_least(rng, SPEED_DROP_FASTER_BONUS_THRESHOLD) {
+        scores.adjust(slot, ENCOURAGE);
+    }
+}
+
 /// `AI_CV_SpeedDownFromChance` (`data/battle_ai_scripts.s:1136`-`:1140`): only
 /// Icy Wind, Rock Tomb and Mud Shot reach `AI_CV_SpeedDown`
 /// (`:1142`-`:1151`); any other move with the effect ends at once, with no
@@ -1263,11 +1285,7 @@ fn score_speed_down_hit_viability(
     ) {
         return;
     }
-    if !target_is_faster(user, target, rng) {
-        scores.adjust(slot, SPEED_DROP_NOT_FASTER_PENALTY);
-    } else if random_roll_is_at_least(rng, SPEED_DROP_FASTER_BONUS_THRESHOLD) {
-        scores.adjust(slot, ENCOURAGE);
-    }
+    score_speed_drop_viability(scores, slot, user, target, rng);
 }
 
 /// `AI_CV_Absorb` (`data/battle_ai_scripts.s:789`-`:798`): a draining move the
@@ -2652,6 +2670,8 @@ mod paralyze_viability_tests;
 mod prologue_tests;
 #[cfg(test)]
 mod quick_attack_tests;
+#[cfg(test)]
+mod speed_down_status_viability_tests;
 #[cfg(test)]
 mod speed_drop_viability_tests;
 #[cfg(test)]

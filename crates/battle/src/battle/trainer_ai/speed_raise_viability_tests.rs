@@ -213,8 +213,6 @@ fn only_the_two_speed_raise_effects_take_the_speed_up_branch() {
         );
     }
     for effect in [
-        MoveEffect::SPEED_DOWN,
-        MoveEffect::SPEED_DOWN_2,
         MoveEffect::ATTACK_UP,
         MoveEffect::DEFENSE_UP,
         MoveEffect::SPECIAL_ATTACK_UP,
