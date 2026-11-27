@@ -249,14 +249,15 @@ impl ObjectEventCollection {
         }
     }
 
-    /// Retires the entry whose template declares `local_id`, the `RemoveObjectEvent` half of
-    /// `RemoveObjectEventByLocalIdAndMap` (`active = FALSE`,
-    /// `event_object_movement.c:1383-1397`): position queries stop returning it until a later
+    /// Retires the current map's entry whose template declares `local_id`, the `RemoveObjectEvent`
+    /// half of `RemoveObjectEventByLocalIdAndMap` (`active = FALSE`,
+    /// `event_object_movement.c:1383-1397`). An entry carried in from another map is never taken,
+    /// as upstream matches the map too. Position queries stop returning it until a later
     /// admission pass spawns it again. The script verb's `FlagSet` of the object's hide flag is
     /// the caller's, so that later pass does not respawn it. Returns whether an active entry was
     /// retired.
     pub fn remove_by_local_id(&mut self, local_id: u8) -> bool {
-        let Some(entry) = self.get_mut(local_id) else {
+        let Some(entry) = self.find_mut(None, local_id) else {
             return false;
         };
         let was_active = entry.lifecycle.is_active();
