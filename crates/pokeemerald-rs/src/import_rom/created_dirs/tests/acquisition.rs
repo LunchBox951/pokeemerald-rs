@@ -513,3 +513,28 @@ fn a_private_directory_warning_keeps_a_control_character_in_a_name_on_one_line()
         assert!(warning.contains("line\\nbreak"), "{warning:?}");
     }
 }
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_private_directory_moved_away_before_cleanup_is_not_reported_as_standing() {
+    // A writer of the parent moves the private directory away before cleanup
+    // reaches it. Nothing is at the private name any more, so the warning
+    // must not send the user to check a directory there.
+    let dir = TempDir::new("discard-moved-away");
+    let (parent, name, held) = private_directory_in(&dir.path);
+    let moved = dir.join("moved");
+    let private = dir.path.join(&name);
+    let aside = std::ffi::OsString::from(".import-fedcba9876543210");
+
+    let outcome = super::acquire::discard_private(&parent, &name, &aside, &held, &mut || {
+        fs::rename(&private, &moved).unwrap();
+    });
+
+    assert!(moved.is_dir(), "cleanup removed the directory moved away");
+    let warning = super::acquire::left_standing_warning(&outcome, std::ffi::OsStr::new("a"))
+        .expect("the user is told the directory was not removed");
+    assert!(
+        !warning.contains("check it before deleting") && warning.contains("moved away"),
+        "{warning:?}"
+    );
+}

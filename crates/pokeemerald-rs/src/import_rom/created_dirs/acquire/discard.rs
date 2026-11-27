@@ -22,6 +22,10 @@ pub(in super::super) enum Discard {
     /// What stands at `at` was not found to be the directory this run made
     /// (someone replaced it), so it was not touched beyond being put back.
     Foreign { at: std::ffi::OsString },
+    /// Nothing stood at `at` when cleanup reached it: someone moved this
+    /// run's directory away, so nothing was removed and where it is now is
+    /// unknown.
+    Gone { at: std::ffi::OsString },
 }
 
 /// Removes the directory this run made as `private` in `parent`, which
@@ -66,11 +70,17 @@ pub(in super::super) fn discard_private_with(
             // No rename that refuses to replace here, so the name is checked
             // and then unlinked, which a same-user writer can come between;
             // all it can cost is an empty directory of its own.
-            let unchanged =
-                rustix::fs::statat(&**parent, private, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-                    .ok()
-                    .zip(rustix::fs::fstat(held).ok())
-                    .is_some_and(|(found, ours)| same_directory_identity(&found, &ours));
+            let found =
+                rustix::fs::statat(&**parent, private, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
+            if matches!(found, Err(rustix::io::Errno::NOENT)) {
+                return Discard::Gone {
+                    at: private.to_owned(),
+                };
+            }
+            let unchanged = found
+                .ok()
+                .zip(rustix::fs::fstat(held).ok())
+                .is_some_and(|(found, ours)| same_directory_identity(&found, &ours));
             if !unchanged {
                 return Discard::Foreign {
                     at: private.to_owned(),
@@ -83,6 +93,11 @@ pub(in super::super) fn discard_private_with(
                     error: errno.into(),
                 },
             };
+        }
+        Err(rustix::io::Errno::NOENT) => {
+            return Discard::Gone {
+                at: private.to_owned(),
+            }
         }
         // Nothing was moved: it still stands at `private`.
         Err(errno) => {
@@ -141,6 +156,11 @@ pub(in super::super) fn left_standing_warning(outcome: &Discard, name: &OsStr) -
         Discard::Foreign { at } => Some(format!(
             "warning: {} was made while creating {name} but was replaced and was left \
              untouched; it is not this import's to delete",
+            rom_import::OneLinePath(std::path::Path::new(at))
+        )),
+        Discard::Gone { at } => Some(format!(
+            "warning: the directory {} made while creating {name} was moved away \
+             before it could be removed, and nothing was removed",
             rom_import::OneLinePath(std::path::Path::new(at))
         )),
     }
