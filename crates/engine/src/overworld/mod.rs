@@ -11,6 +11,7 @@ pub mod object_event;
 #[cfg(test)]
 pub(crate) mod object_event_harness;
 pub mod player;
+pub mod slot_machine_luck;
 pub mod trainer_sight;
 pub mod warp;
 pub mod wild_encounter;
