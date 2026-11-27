@@ -32737,6 +32737,18 @@
           "rust_target": "crates/engine/src/event_data.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "sBattleFrontier_TutorMoves1": {
+          "reason": "src/field_specials.c:3059-3071 sBattleFrontier_TutorMoves1, transcribed as the first Battle Frontier tutor menu's ten rows (Soft-Boiled through Swords Dance) as MoveId values behind frontier_tutor_move/frontier_tutor_moves, which refuse a row not below 10. Pinned row by row against raw MOVE_* values by unit tests and re-parsed from upstream by an ignored test. Data only: BufferBattleFrontierTutorMoveName, move names, prices, compatibility, teaching and the menu window are NOT modelled.",
+          "rust_target": "crates/assets/src/frontier_tutor_moves.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sBattleFrontier_TutorMoves2": {
+          "reason": "src/field_specials.c:3073-3085 sBattleFrontier_TutorMoves2, transcribed as the second Battle Frontier tutor menu's ten rows (Defense Curl through Fire Punch) as MoveId values behind frontier_tutor_move/frontier_tutor_moves, which refuse a row not below 10. Pinned row by row against raw MOVE_* values by unit tests and re-parsed from upstream by an ignored test. Data only: BufferBattleFrontierTutorMoveName, move names, prices, compatibility, teaching and the menu window are NOT modelled.",
+          "rust_target": "crates/assets/src/frontier_tutor_moves.rs",
+          "spec": "S-4",
+          "status": "ported"
         }
       },
       "category": "code.source",

@@ -83,6 +83,7 @@ pub mod facility_classes;
 pub mod fonts;
 pub mod frontier_brain_thresholds;
 pub mod frontier_exchange_corner;
+pub mod frontier_tutor_moves;
 pub mod hidden_item_flags;
 pub mod ingame_trades;
 pub mod items;
