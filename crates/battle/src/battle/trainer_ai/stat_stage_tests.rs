@@ -372,12 +372,13 @@ fn stat_labels_are_admitted_only_where_the_other_scripts_are_ported() {
             Err(BattleError::UnscoreableMoveEffect(move_id))
         };
         assert_eq!(setup, expected_setup, "{move_id:?} setup");
-        let expected_viability =
-            if has_dedicated_stat_drop_handler || move_id == MoveId::DEFENSE_CURL {
-                Ok(())
-            } else {
-                Err(BattleError::UnscoreableMoveEffect(move_id))
-            };
+        let expected_viability = if has_dedicated_stat_drop_handler
+            || matches!(move_id, MoveId::DEFENSE_CURL | MoveId::AGILITY)
+        {
+            Ok(())
+        } else {
+            Err(BattleError::UnscoreableMoveEffect(move_id))
+        };
         assert_eq!(viability, expected_viability, "{move_id:?} viability");
     }
 }

@@ -7,6 +7,8 @@
 
 use std::path::Path;
 
+use assets::PcWallpaperId;
+
 use super::bag::{fixed_ids, icon_ids};
 use super::battle_interface::healthbox_battle_bar_pack_id;
 use super::battle_interface::healthbox_element_pack_ids;
@@ -15,6 +17,7 @@ use super::battle_interface::healthbox_table_pack_ids;
 use super::battle_interface::pack_ids as battle_interface_pack_ids;
 use super::evolution_scene::pack_ids as evolution_scene_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
+use super::party_menu::pack_ids as party_menu_pack_ids;
 use super::poke_ball::pack_ids as poke_ball_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
@@ -356,6 +359,15 @@ pub(crate) fn sprite_palette_ids() -> Vec<String> {
         .collect()
 }
 
+/// The tall-grass picture: five 16x16 frames
+/// (`gFieldEffectObjectPic_TallGrass`, `sPicTable_TallGrass`).
+pub(crate) const TALL_GRASS_IMAGE_ID: &str = "field-effect/image/tall_grass";
+
+/// `gFieldEffectObjectPalette1`, which `FLDEFF_PAL_TAG_GENERAL_1` names and the
+/// tall-grass template binds (`field_effect_objects.h:2,96`). It is outside
+/// `sObjectEventSpritePalettes`, so it is not in [`sprite_palette_ids`].
+pub(crate) const GENERAL_1_PALETTE_ID: &str = "field-effect/palette/general_1";
+
 /// Title sheets built from a PNG, as `title/image/<stem>`.
 pub(crate) const TITLE_SCREEN_IMAGES: [&str; 6] = [
     "clouds",
@@ -395,8 +407,16 @@ pub(crate) const DOWN_ARROW_IMAGE_ID: &str = "interface/image/down_arrow";
 /// (`sDownArrowTiles`, `src/text.c:71`).
 pub(crate) const DOWN_ARROW_PNG: &str = "graphics/fonts/down_arrow.png";
 
+/// The pack id of the dark page-prompt arrow sheet, the one windows with
+/// `gTextFlags.useAlternateDownArrow` blit (`src/text.c:808-817`).
+pub(crate) const DARK_DOWN_ARROW_IMAGE_ID: &str = "interface/image/down_arrow_alt";
+
+/// The checkout path of that sheet, relative to the checkout root
+/// (`sDarkDownArrowTiles`, `src/text.c:72`).
+pub(crate) const DARK_DOWN_ARROW_PNG: &str = "graphics/fonts/down_arrow_alt.png";
+
 /// Every interface image pack id extraction writes and the generator requires.
-pub(crate) const INTERFACE_IMAGE_IDS: [&str; 1] = [DOWN_ARROW_IMAGE_ID];
+pub(crate) const INTERFACE_IMAGE_IDS: [&str; 2] = [DOWN_ARROW_IMAGE_ID, DARK_DOWN_ARROW_IMAGE_ID];
 
 /// Every title pack id the generator requires, in manifest order.
 pub(crate) fn title_ids() -> Vec<String> {
@@ -724,6 +744,12 @@ pub(crate) fn evolution_scene_ids() -> Vec<String> {
     evolution_scene_pack_ids()
 }
 
+/// Every `party-menu/` pack id extraction emits: four sheets, three
+/// palettes (the small Poké Ball sheet shares the Poké Ball's), and eight maps.
+pub(crate) fn party_menu_ids() -> Vec<String> {
+    party_menu_pack_ids()
+}
+
 /// Every `poke-ball/` pack id extraction emits: the closed-ball sheet, its
 /// palette, and the opened-ball sheet.
 pub(crate) fn poke_ball_ids() -> Vec<String> {
@@ -820,6 +846,145 @@ pub(crate) fn naming_screen_ids() -> Vec<String> {
         .iter()
         .map(|stem| format!("naming-screen/raw/{stem}"));
     images.chain(palettes).chain(tilemaps).collect()
+}
+
+/// Where the PC wallpapers' sources live, relative to the checkout:
+/// `WALLPAPERGFXDIR` in `graphics_file_rules.mk`. Each style owns the
+/// directory of its [`PcWallpaperId::stem`].
+pub(crate) const PC_WALLPAPER_DIRECTORY: &str = "graphics/pokemon_storage/wallpapers";
+
+/// One half of a wallpaper's tile sheet: the source PNG's size and how many of
+/// its leading 8x8 tiles upstream's build keeps.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PcWallpaperHalf {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) kept_tiles: u32,
+}
+
+/// One non-default wallpaper's sources. Upstream's `tiles.4bpp` is `frame.4bpp`
+/// followed by `bg.4bpp` (`graphics_file_rules.mk:178-278`), so the sheet is
+/// the frame's kept tiles and then the background's.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PcWallpaperSource {
+    pub(crate) wallpaper: PcWallpaperId,
+    pub(crate) frame: PcWallpaperHalf,
+    pub(crate) background: PcWallpaperHalf,
+}
+
+const fn pc_half(width: u32, height: u32, kept_tiles: u32) -> PcWallpaperHalf {
+    PcWallpaperHalf {
+        width,
+        height,
+        kept_tiles,
+    }
+}
+
+/// A half built without a `-num_tiles` cut keeps every tile of its PNG.
+const fn pc_whole_half(width: u32, height: u32) -> PcWallpaperHalf {
+    pc_half(width, height, width / 8 * (height / 8))
+}
+
+const fn pc_source(
+    wallpaper: PcWallpaperId,
+    frame: PcWallpaperHalf,
+    background: PcWallpaperHalf,
+) -> PcWallpaperSource {
+    PcWallpaperSource {
+        wallpaper,
+        frame,
+        background,
+    }
+}
+
+/// The twelve non-default wallpapers in `sWallpapers` order
+/// (`src/data/wallpapers.h`). Every `frame.png` is built with the
+/// `-num_tiles` the rules file gives it; only `beach/bg.png` and `river/bg.png`
+/// carry a cut of their own.
+pub(crate) const PC_WALLPAPERS: [PcWallpaperSource; 12] = [
+    pc_source(
+        PcWallpaperId::Crag,
+        pc_half(128, 32, 49),
+        pc_whole_half(32, 32),
+    ),
+    pc_source(
+        PcWallpaperId::Volcano,
+        pc_half(128, 32, 56),
+        pc_whole_half(16, 104),
+    ),
+    pc_source(
+        PcWallpaperId::Snow,
+        pc_half(128, 32, 57),
+        pc_whole_half(16, 88),
+    ),
+    pc_source(
+        PcWallpaperId::Cave,
+        pc_half(128, 32, 55),
+        pc_whole_half(16, 16),
+    ),
+    pc_source(
+        PcWallpaperId::Beach,
+        pc_half(120, 32, 46),
+        pc_half(24, 64, 23),
+    ),
+    pc_source(
+        PcWallpaperId::Seafloor,
+        pc_half(128, 32, 54),
+        pc_whole_half(32, 16),
+    ),
+    pc_source(
+        PcWallpaperId::River,
+        pc_half(128, 32, 51),
+        pc_half(24, 32, 11),
+    ),
+    pc_source(
+        PcWallpaperId::Sky,
+        pc_half(96, 32, 45),
+        pc_whole_half(32, 32),
+    ),
+    pc_source(
+        PcWallpaperId::Polkadot,
+        pc_half(128, 32, 54),
+        pc_whole_half(16, 24),
+    ),
+    pc_source(
+        PcWallpaperId::Pokecenter,
+        pc_half(80, 32, 35),
+        pc_whole_half(88, 16),
+    ),
+    pc_source(
+        PcWallpaperId::Machine,
+        pc_half(64, 40, 33),
+        pc_whole_half(16, 32),
+    ),
+    pc_source(
+        PcWallpaperId::Plain,
+        pc_half(24, 48, 18),
+        pc_whole_half(32, 8),
+    ),
+];
+
+/// A wallpaper's tilemap: 20x18 two-byte entries (`pc_wallpaper` module docs).
+pub(crate) const PC_WALLPAPER_TILEMAP_BYTES: usize = 20 * 18 * 2;
+
+/// Colours in each of a wallpaper's two palettes.
+pub(crate) const PC_WALLPAPER_PALETTE_COLORS: usize = 16;
+
+/// Every `pc-wallpaper/` pack id extraction emits: for each style, in
+/// `sWallpapers` order, the tile sheet, the tilemap and the two palettes.
+pub(crate) fn pc_wallpaper_ids() -> Vec<String> {
+    PC_WALLPAPERS
+        .iter()
+        .flat_map(|source| {
+            let id = source.wallpaper;
+            [
+                id.tiles_id(),
+                id.tilemap_id(),
+                id.frame_palette_id(),
+                id.background_palette_id(),
+            ]
+        })
+        .collect()
 }
 
 /// Every `battle-interface/` pack id extraction emits: the textbox sheet,

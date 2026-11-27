@@ -11,7 +11,8 @@ use super::common::{
     TREECKO,
 };
 use assets::items::ItemId;
-use battle::{BattlePokemon, Dex, Ivs};
+use assets::{AbilityId, MoveId, SpeciesId, Type};
+use battle::{Battle, BattlePokemon, BattleRng, Dex, Ivs, PlayerAction};
 use engine::save::{BoxPokemon, Pokemon};
 
 const TENTACOOL: assets::SpeciesId = assets::SpeciesId(72);
@@ -765,4 +766,259 @@ fn healing_a_record_saved_above_the_maximum_restores_the_maximum() {
     assert_eq!(decoded.moves()[0].pp, max + 1, "the heal starts from above");
     decoded.heal(&dex).unwrap();
     assert_eq!(decoded.moves()[0].pp, max);
+}
+
+/// `PokemonSubstruct3::modernFatefulEncounter` is bit 31 of the ribbon word at
+/// misc offset 8 (`pokeemerald/include/pokemon.h:150-175`).
+#[test]
+fn the_modern_fateful_encounter_bit_round_trips_through_the_record() {
+    let dex = Dex::new();
+    let plain = treecko_fixture();
+    assert!(!plain.is_modern_fateful_encounter());
+    let plain_record = to_save_pokemon(&dex, &plain);
+    let plain_misc = plain_record.box_data.substructures().unwrap().misc;
+    assert_eq!(plain_misc[8..12], [0; 4], "no ribbon, no fateful bit");
+    assert!(!from_save_pokemon(&dex, &plain_record)
+        .unwrap()
+        .is_modern_fateful_encounter());
+
+    let fateful = treecko_fixture().with_modern_fateful_encounter(true);
+    let record = to_save_pokemon(&dex, &fateful);
+    let misc = record.box_data.substructures().unwrap().misc;
+    assert_eq!(misc[8..12], 0x8000_0000u32.to_le_bytes());
+    let loaded = from_save_pokemon(&dex, &record).unwrap();
+    assert!(loaded.is_modern_fateful_encounter());
+    assert_eq!(loaded, fateful);
+
+    // A hand-set bit on an otherwise ordinary record is read too.
+    let mut substructures = plain_record.box_data.substructures().unwrap();
+    substructures.misc[8..12].copy_from_slice(&0x8000_0000u32.to_le_bytes());
+    let mut hand_set = plain_record;
+    hand_set.box_data.set_substructures(&substructures);
+    assert!(from_save_pokemon(&dex, &hand_set)
+        .unwrap()
+        .is_modern_fateful_encounter());
+}
+
+/// One primary-status word and what the codec must do with it.
+enum StatusWord {
+    /// A word `battle::Status1` models: it loads to the status and every save
+    /// path writes the identical word back.
+    Exact(u32, battle::Status1),
+    /// A word the battler cannot hold: both the decode and the load refuse it
+    /// with the original word, and the record's bytes stay as they were.
+    Malformed(u32),
+}
+
+/// `REQUEST_STATUS_BATTLE` copies and sets the whole status word
+/// (`pokeemerald/src/battle_controller_player.c:1636-1640`, `:1983-1987`):
+/// supported words round-trip exactly, and malformed words are refused.
+#[test]
+fn the_primary_status_word_converts_exactly_or_fails_closed_in_both_directions() {
+    let dex = Dex::new();
+    for row in status_word_table() {
+        match row {
+            StatusWord::Exact(word, expected) => {
+                assert_status_word_round_trips(&dex, word, expected);
+            }
+            StatusWord::Malformed(word) => assert_status_word_fails_closed(&dex, word),
+        }
+    }
+}
+
+fn status_word_table() -> Vec<StatusWord> {
+    let mut table = vec![
+        StatusWord::Exact(0, battle::Status1::Healthy),
+        StatusWord::Exact(8, battle::Status1::Poisoned),
+        StatusWord::Exact(16, battle::Status1::Burned),
+        StatusWord::Exact(32, battle::Status1::Frozen),
+        StatusWord::Exact(64, battle::Status1::Paralysed),
+    ];
+    table.extend(
+        (1u8..=7)
+            .map(|turns| StatusWord::Exact(u32::from(turns), battle::Status1::Asleep { turns })),
+    );
+    table.extend((0u8..=15).map(|counter| {
+        StatusWord::Exact(
+            0x80 | u32::from(counter) << 8,
+            battle::Status1::BadPoisoned { counter },
+        )
+    }));
+    let malformed: &[u32] = &[
+        // Two conditions at once: poison with burn, freeze or paralysis,
+        // every ordinary condition together, and sleep beside another.
+        0x18,
+        0x30,
+        0x48,
+        0x50,
+        0x60,
+        0x78,
+        0x09,
+        0x11,
+        0x21,
+        0x41,
+        0x0F,
+        // Toxic poison beside another condition or sleep.
+        0x88,
+        0x90,
+        0xA0,
+        0xC0,
+        0x81,
+        0xFF,
+        0x588,
+        0xFC0,
+        // A toxic counter without toxic poison.
+        0x100,
+        0x500,
+        0xF00,
+        0x108,
+        0x501,
+        // Bits above the counter, alone and beside supported words.
+        0x1000,
+        0x1080,
+        0x1F80,
+        0x8000,
+        0x1_0000,
+        0x8000_0000,
+        0xFFFF_FFFF,
+        0x1008,
+        0x1001,
+        0x2000,
+        0x4080,
+    ];
+    table.extend(malformed.iter().copied().map(StatusWord::Malformed));
+    table
+}
+
+fn assert_status_word_round_trips(dex: &Dex, word: u32, expected: battle::Status1) {
+    let mut record = to_save_pokemon(dex, &treecko_fixture());
+    record.status = word;
+
+    assert_eq!(
+        from_save_pokemon(dex, &record).unwrap().status1(),
+        expected,
+        "load: word {word:#x}"
+    );
+    assert_eq!(
+        LoadedLead::load_slot(dex, 0, &record)
+            .unwrap()
+            .battler()
+            .status1(),
+        expected,
+        "load_slot: word {word:#x}"
+    );
+    let mut loaded = LoadedLead::load(dex, &[record]).expect("a supported status decodes");
+    assert_eq!(
+        loaded.battler().status1(),
+        expected,
+        "party load: word {word:#x}"
+    );
+
+    assert_eq!(
+        loaded.merge_and_save(dex).status,
+        word,
+        "re-save over the loaded record: word {word:#x}"
+    );
+    assert_eq!(loaded.record().status, word, "kept record: word {word:#x}");
+    let mut fresh = treecko_fixture();
+    fresh.set_status1(expected);
+    assert_eq!(
+        to_save_pokemon(dex, &fresh).status,
+        word,
+        "fresh save: word {word:#x}"
+    );
+}
+
+fn assert_status_word_fails_closed(dex: &Dex, word: u32) {
+    let mut record = to_save_pokemon(dex, &treecko_fixture());
+    record.status = word;
+    let before = record;
+
+    let refusal = PartyError::UnsupportedStatus(word);
+    assert_eq!(
+        from_save_pokemon(dex, &record).unwrap_err(),
+        refusal,
+        "load: word {word:#x}"
+    );
+    assert_eq!(
+        LoadedLead::load_slot(dex, 0, &record).unwrap_err(),
+        refusal,
+        "load_slot: word {word:#x}"
+    );
+    assert_eq!(
+        LoadedLead::load(dex, &[record]).unwrap_err(),
+        refusal,
+        "a lone undecodable slot has nothing to fall back to: word {word:#x}"
+    );
+    assert_eq!(
+        record, before,
+        "no battler exists to re-save over it, so the record is untouched: word {word:#x}"
+    );
+}
+
+/// Every draw is zero: no tie and a hit, whatever the move.
+struct AllZero;
+
+impl BattleRng for AllZero {
+    fn next_u16(&mut self) -> u16 {
+        0
+    }
+}
+
+#[test]
+fn a_color_change_override_does_not_reach_the_saved_party_bytes() {
+    let dex = Dex::new();
+    let kecleon = BattlePokemon::new(
+        &dex,
+        SpeciesId::KECLEON,
+        50,
+        Ivs::default(),
+        FIXTURE_PERSONALITY,
+        vec![MoveId::SPLASH],
+    )
+    .unwrap();
+    let rattata = BattlePokemon::new(
+        &dex,
+        SpeciesId::RATTATA,
+        5,
+        Ivs::default(),
+        0,
+        vec![MoveId::DRAGON_RAGE],
+    )
+    .unwrap();
+    assert_eq!(kecleon.ability(), AbilityId::COLOR_CHANGE);
+    assert_eq!(kecleon.species_types(), [Type::Normal; 2]);
+    let mut unchanged = kecleon.clone();
+    let mut rng = AllZero;
+    let mut battle = Battle::new(dex.clone(), kecleon, rattata, false, &mut rng).unwrap();
+    battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(
+        battle.player().types(),
+        [Type::Dragon; 2],
+        "Dragon Rage must have changed the holder"
+    );
+    let mut changed = battle.player().clone();
+
+    // The control took the same Dragon Rage and spent the same Splash, so the two differ
+    // only in the override.
+    unchanged.apply_damage(40);
+    unchanged.deduct_pp(0).unwrap();
+    assert_eq!(changed.types(), [Type::Dragon; 2]);
+    assert_eq!(
+        to_save_pokemon(&dex, &changed).to_bytes(),
+        to_save_pokemon(&dex, &unchanged).to_bytes(),
+        "an active override must not reach the bytes"
+    );
+    changed.clear_battle_scratch();
+    unchanged.clear_battle_scratch();
+
+    // The codec never saves typing, so the bytes alone cannot see a leaked override.
+    assert_eq!(changed.types(), [Type::Normal; 2]);
+    assert_eq!(unchanged.types(), [Type::Normal; 2]);
+    let changed_bytes = to_save_pokemon(&dex, &changed).to_bytes();
+    let unchanged_bytes = to_save_pokemon(&dex, &unchanged).to_bytes();
+    assert_eq!(changed_bytes.len(), 100);
+    assert_eq!(changed_bytes, unchanged_bytes);
 }

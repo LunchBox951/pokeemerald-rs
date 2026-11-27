@@ -20,12 +20,16 @@ mod naming_screen;
 mod opening_scene;
 mod paletted_image;
 mod party_menu;
+mod pc_wallpaper;
 mod poke_ball;
 mod pokedex_graphics;
+mod sight_trainer_intro_speech;
 mod starter_chooser;
 mod text_printer;
 mod text_tokens;
 mod trainer_battler;
+mod trainer_class_names;
+mod trainer_defeat_speech;
 mod trainer_pic;
 
 use std::path::{Path, PathBuf};
@@ -58,10 +62,17 @@ pub use naming_screen::NamingScreenHandle;
 pub use opening_scene::{BirchSpeechHandle, WallClockHandle};
 pub use paletted_image::PalettedImage;
 pub use party_menu::{PartyMenuBackground, PartyMenuButton, PartyMenuHandle, PartyMenuSlot};
+pub use pc_wallpaper::{PcWallpaperHandle, PcWallpaperId, PcWallpaperTile};
 pub use poke_ball::PokeBallHandle;
 pub use pokedex_graphics::PokedexGraphicsHandle;
+pub use sight_trainer_intro_speech::{
+    SightTrainerIntroSpeechError, SightTrainerIntroSpeechTable, SIGHT_TRAINER_INTRO_COUNT,
+    SIGHT_TRAINER_INTRO_SCRIPTS,
+};
 pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
 pub use text_printer::TextPrinterDownArrow;
+pub use trainer_class_names::TrainerClassNameError;
+pub use trainer_defeat_speech::TrainerDefeatSpeechError;
 
 pub use trainer_battler::TrainerBattlerHandle;
 pub use trainer_pic::TrainerPicHandle;

@@ -29,6 +29,17 @@ impl SequenceRng {
     }
 }
 
+/// The forced-Struggle `GetMoveTarget` draw that selects the opposing battler
+/// on its first try when the opponent is the attacker: `Random() %
+/// gBattlersCount` is 0, the player (`pokeemerald/src/battle_util.c:3849`-
+/// `:3853`, called from `HandleAction_UseMove`, `:100`-`:105`).
+pub const STRUGGLE_TARGET_PLAYER: u16 = 0;
+
+/// The forced-Struggle `GetMoveTarget` draw that selects the opposing battler
+/// on its first try when the player is the attacker: `Random() %
+/// gBattlersCount` is 1, the opponent.
+pub const STRUGGLE_TARGET_ENEMY: u16 = 1;
+
 /// Concatenates labelled draw groups into one exact script.
 pub fn script(groups: &[&[u16]]) -> Vec<u16> {
     groups.concat()

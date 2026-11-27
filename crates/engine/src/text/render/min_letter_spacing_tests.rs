@@ -52,6 +52,7 @@ fn the_gap_span_accompanies_its_glyph_in_the_same_tick() {
             y: 1,
             width: 12 - NORMAL_A_ADVANCE,
             height: NORMAL_CLEAR_HEIGHT,
+            colors: TextColors::default(),
         })
     );
     assert_eq!(printer.cursor(), (12, 1));
@@ -156,6 +157,7 @@ fn explicit_clear_still_reports_its_span_on_an_idle_tick() {
             y: 1,
             width: 5,
             height: NORMAL_CLEAR_HEIGHT,
+            colors: TextColors::default(),
         })
     );
     assert_eq!(printer.cursor().0, 5);

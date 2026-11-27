@@ -51,6 +51,19 @@ impl Oscillator {
         }
     }
 
+    /// A square's contribution at its current duty position, without stepping
+    /// it: the level the sample about to be emitted would carry. `None` for
+    /// Wave and Noise, whose latch at a length expiry needs no refresh.
+    pub(super) fn square_held_contribution(&mut self, frame_gain: i32) -> Option<i32> {
+        match self {
+            Self::Square(square) => {
+                let level = square.held_level();
+                self.relatched_square_contribution(level, frame_gain)
+            }
+            Self::Wave { .. } | Self::Noise(_) => None,
+        }
+    }
+
     /// A square's contribution at a `level` its register write latched,
     /// without stepping it; `None` for Wave and Noise.
     pub(super) fn relatched_square_contribution(&self, level: i8, frame_gain: i32) -> Option<i32> {
@@ -193,6 +206,14 @@ impl Oscillator {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Undoes the admitted pitch's retime of an inherited square clock before
+    /// the first pass writes its own pitch; a no-op otherwise.
+    pub(super) fn rewind_inherited_clock(&mut self) {
+        if let Self::Square(square) = self {
+            square.rewind_to_predecessor_clock();
         }
     }
 

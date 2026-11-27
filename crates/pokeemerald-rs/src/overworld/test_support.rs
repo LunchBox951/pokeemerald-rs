@@ -42,6 +42,32 @@ impl super::OverworldScene {
             .collect()
     }
 
+    /// Whether `graphics_id`'s OBJ precedes the player's (palette bank 0) in the live draw
+    /// order, recording it as history as `compose_live` does.
+    #[must_use]
+    pub(crate) fn live_order_leads_for_test(
+        &self,
+        objects: &engine::overworld::object_event::ObjectEventCollection,
+        player: &engine::overworld::PlayerState,
+        event_data: &engine::event_data::EventData,
+        graphics_id: &str,
+    ) -> bool {
+        let binding = self.sprites.bindings()[graphics_id];
+        let frame_block = binding.base_tile()..binding.base_tile() + binding.packed_tiles();
+        let drawn = self
+            .sprites
+            .live_entries(objects, player, event_data, &self.grass);
+        let npc = drawn
+            .iter()
+            .position(|entry| frame_block.contains(&entry.tile_index()))
+            .expect("the NPC is drawn");
+        let player = drawn
+            .iter()
+            .position(|entry| entry.palette_bank() == 0)
+            .expect("the player is drawn");
+        npc < player
+    }
+
     /// The palette bank `graphics_id` is bound to.
     #[must_use]
     pub(crate) fn npc_palette_bank_for_test(&self, graphics_id: &str) -> u8 {
@@ -596,30 +622,42 @@ pub(crate) fn synthetic_scene_with_cell_elevation(
     pos: (u16, u16),
     elevation: u8,
 ) -> super::OverworldScene {
+    synthetic_scene_with_cell_elevations(width, height, &[(pos, elevation)])
+}
+
+/// [`synthetic_scene`], but each listed cell carries its own elevation instead
+/// of the fixture's uniform ground elevation.
+pub(crate) fn synthetic_scene_with_cell_elevations(
+    width: u16,
+    height: u16,
+    cells: &[((u16, u16), u8)],
+) -> super::OverworldScene {
     let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
-    assert!(
-        pos.0 < width && pos.1 < height,
-        "elevated tile {pos:?} must lie inside the {width}x{height} fixture"
-    );
-    let cell = assets::MetatileCell {
-        metatile_id: 0,
-        collision: 0,
-        elevation,
-    }
-    .pack();
     let grid = entries
         .iter_mut()
         .find(|e| e.id == "layout/map_test/map")
         .expect("the general fixture always fabricates its own layout entry");
-    let idx = (usize::from(pos.1) * usize::from(width) + usize::from(pos.0)) * 2;
-    grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    for &(pos, elevation) in cells {
+        assert!(
+            pos.0 < width && pos.1 < height,
+            "elevated tile {pos:?} must lie inside the {width}x{height} fixture"
+        );
+        let cell = assets::MetatileCell {
+            metatile_id: 0,
+            collision: 0,
+            elevation,
+        }
+        .pack();
+        let idx = (usize::from(pos.1) * usize::from(width) + usize::from(pos.0)) * 2;
+        grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    }
     synthetic_scene_result(
         write_synthetic_pack(entries),
         "gTileset_General",
         width,
         height,
     )
-    .expect("synthetic pack with an elevated cell should decode cleanly")
+    .expect("synthetic pack with elevated cells should decode cleanly")
 }
 
 pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(
@@ -713,11 +751,12 @@ pub(crate) fn synthetic_scene_with_tall_grass_sprites_and_events(
     let mut entries = special_tile_entries_at_elevations(width, height, specials);
     entries.extend(tall_grass_entries());
     for path in sprite_paths {
+        let (width, height) = synthetic_sheet_dimensions(path);
         entries.push(Entry {
             id: format!("sprite/{path}"),
             kind_tag: IMAGE_KIND_TAG,
-            meta: image_meta(144, 32, 8),
-            payload: vec![3u8; 144 * 32],
+            meta: image_meta(width, height, 8),
+            payload: vec![3u8; usize::try_from(width * height).unwrap()],
         });
     }
     synthetic_scene_result_with_connections_and_events(
@@ -878,7 +917,7 @@ pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&
 /// nine-frame 32x32 Zigzagoon.
 fn synthetic_sheet_dimensions(sprite_path: &str) -> (u32, u32) {
     match sprite_path {
-        "misc/birchs_bag" => (16, 16),
+        "misc/birchs_bag" | "misc/item_ball" => (16, 16),
         "pokemon/enemy_zigzagoon" => (288, 32),
         _ => (144, 32),
     }
@@ -910,6 +949,50 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
     sprite_paths: &[&str],
     with_tall_grass: bool,
 ) {
+    let entries = route101_oldale_entries(oldale_specials, sprite_paths, with_tall_grass);
+    write_scratch_exclusive(path, write_synthetic_pack(entries));
+}
+
+/// The bytes of [`write_route101_oldale_layout_pack_with`]'s pack (with the tall-grass sheet) where
+/// Route 101's cells at `route101_grass` hold the metatile Oldale's tileset decodes as
+/// `MB_TALL_GRASS`, so the same tiles read as tall grass from Oldale's connected band. The caller
+/// claims a scratch file for the bytes.
+pub(crate) fn route101_oldale_pack_bytes_with_route101_grass(
+    oldale_specials: &[((u16, u16), u8)],
+    route101_grass: &[(u16, u16)],
+    sprite_paths: &[&str],
+) -> Vec<u8> {
+    // The grass metatile follows `oldale_specials`' own, and sits on Oldale's `(0, 0)`.
+    let grass_metatile = FIRST_SPECIAL_METATILE_ID
+        + u16::try_from(oldale_specials.len()).expect("a fixture has few special tiles");
+    let specials: Vec<_> = oldale_specials
+        .iter()
+        .copied()
+        .chain([((0, 0), engine::overworld::metatile_behavior::MB_TALL_GRASS)])
+        .collect();
+    let mut entries = route101_oldale_entries(&specials, sprite_paths, true);
+    let grid = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/route101/map")
+        .expect("the fixture carries Route 101's layout");
+    let cell = assets::MetatileCell {
+        metatile_id: grass_metatile,
+        collision: 0,
+        elevation: WALKABLE_ELEVATION,
+    }
+    .pack();
+    for &(x, y) in route101_grass {
+        let idx = (usize::from(y) * 20 + usize::from(x)) * 2;
+        grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    }
+    write_synthetic_pack(entries)
+}
+
+fn route101_oldale_entries(
+    oldale_specials: &[((u16, u16), u8)],
+    sprite_paths: &[&str],
+    with_tall_grass: bool,
+) -> Vec<Entry> {
     let rename = |mut e: Entry, layout: &str| {
         if e.id == "layout/map_test/map" {
             e.id = format!("layout/{layout}/map");
@@ -952,5 +1035,84 @@ pub(crate) fn write_route101_oldale_layout_pack_with(
     if with_tall_grass {
         entries.extend(tall_grass_entries());
     }
+    entries
+}
+
+/// Writes a synthetic pack at `path` that loads the *real* bundled
+/// `MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB` header and layout (`building`
+/// over `lab`, 13x13) through [`super::load_room_from_source`], with the two
+/// `tv_turned_on` frames the `building` primary tileset animates, and an
+/// opaque sheet for each of `sprite_paths`, so a phase test can complete the
+/// first-battle conclusion's warp without an extracted pack.
+pub(crate) fn write_birchs_lab_layout_pack(path: &std::path::Path, sprite_paths: &[&str]) {
+    let mut entries: Vec<Entry> = synthetic_overworld_pack_entries_for("building", 13, 13)
+        .into_iter()
+        .map(|mut e| {
+            if e.id == "layout/map_test/map" {
+                e.id = "layout/littleroot_town_professor_birchs_lab/map".into();
+            } else if e.id == "layout/map_test/border" {
+                e.id = "layout/littleroot_town_professor_birchs_lab/border".into();
+            }
+            e
+        })
+        .collect();
+    entries.extend(
+        synthetic_overworld_pack_entries_for("lab", 13, 13)
+            .into_iter()
+            .filter(|e| e.id.starts_with("tileset/lab/")),
+    );
+    for n in 0..2u8 {
+        entries.push(Entry {
+            id: format!("tileset/building/anim/tv_turned_on/{n}"),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(8, 8 * 4, 4),
+            payload: vec![GROUND_PALETTE_INDEX; 8 * 8 * 4],
+        });
+    }
+    for sprite in sprite_paths {
+        let (width, height) = synthetic_sheet_dimensions(sprite);
+        entries.push(Entry {
+            id: format!("sprite/{sprite}"),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(width, height, 8),
+            payload: vec![3u8; usize::try_from(width * height).unwrap()],
+        });
+    }
     write_scratch_exclusive(path, write_synthetic_pack(entries));
+}
+
+/// The people and item sheets Birch's lab's visible object events draw
+/// (`MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB`: scientist, Birch, starter
+/// balls; the rival's variable graphic stays undrawn while its var is 0).
+const BIRCHS_LAB_SPRITES: [&str; 3] = ["scientist_1", "prof_birch", "misc/item_ball"];
+
+/// A scratch pack file that lets `MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB`
+/// load ([`write_birchs_lab_layout_pack`]), removed on drop. Hand
+/// [`Self::source`] to a phase so a warp into the lab succeeds without an
+/// extracted pack.
+pub(crate) struct BirchsLabPack {
+    path: std::path::PathBuf,
+}
+
+impl BirchsLabPack {
+    pub(crate) fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-birchs-lab-{}-{}.pack",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        write_birchs_lab_layout_pack(&path, &BIRCHS_LAB_SPRITES);
+        Self { path }
+    }
+
+    pub(crate) fn source(&self) -> crate::pack_source::PackSource {
+        crate::pack_source::PackSource::Explicit(self.path.as_path().into())
+    }
+}
+
+impl Drop for BirchsLabPack {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }

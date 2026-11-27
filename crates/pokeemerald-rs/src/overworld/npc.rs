@@ -3,8 +3,9 @@
 //! [`resolve_sprite_source`] is the complete graphics-id binding table: the
 //! protagonist sheets, the 16x32 people sheets, and the [`sheets`] rows for
 //! the other 16x16, 16x32, 32x32 and 48x48 graphics the checkpoint maps place.
-//! Hidden events are filtered through `engine::overworld::object_event_is_visible`,
-//! the same visibility used for interaction. A visible unsupported event remains
+//! Only entries the scheduler has admitted draw (`LiveObjectEvent::is_active`), the same set the
+//! interaction and collision queries scan; the hide flag is applied at admission. An active
+//! unsupported event remains
 //! interaction-ready but produces no [`OamEntry`]. `OBJ_EVENT_GFX_VAR_0` binds
 //! only when its event variable contains one of the two Route 103 rival ids;
 //! decoration slots remain unsupported. Code that clears a `FLAG_DECORATION_n`
@@ -21,8 +22,9 @@
 //! Upstream resolves equal-priority overlap with a y-derived subpriority
 //! (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7779`)
 //! taken from the sprite's bottom edge. [`rendering::SpriteLayer`] has no
-//! subpriority, so [`order_sprites`] reproduces it by giving the
-//! lower-on-screen object the lower OAM index. The 48x48 truck is twelve
+//! subpriority, so [`SpriteOrder`] reproduces it by giving the
+//! lower-on-screen object the lower OAM index, and keeping last frame's order
+//! where every sort key ties. The 48x48 truck is twelve
 //! horizontal OBJs (`sOamTable_48x48`) that sort as one object by the parent's
 //! priority and subpriority and all draw at priority 2.
 
@@ -328,7 +330,7 @@ struct WantedSheet {
 pub(super) fn resolve_bindings(
     pack: &AssetPack,
     player: PlayerCharacter,
-    object_events: &'static [ObjectEvent],
+    object_events: impl IntoIterator<Item = &'static ObjectEvent>,
     sprite_bytes: &mut Vec<u8>,
     event_data: &EventData,
 ) -> Result<HashMap<&'static str, SpriteBinding>, OverworldSceneError> {
@@ -426,10 +428,12 @@ mod oam;
 #[cfg(test)]
 use engine::overworld::PlayerState;
 #[cfg(test)]
+pub(super) use oam::order_sprites;
+#[cfg(test)]
 use oam::OAM_Y_MODULUS;
 pub(super) use oam::{
-    elevated_oam_entries, order_sprites, subpriority_from_bottom, wrap_oam_x, wrap_oam_y,
-    DepthSprite,
+    elevated_oam_entries, subpriority_from_bottom, wrap_oam_x, wrap_oam_y, DepthSprite, SpriteId,
+    SpriteOrder,
 };
 #[cfg(test)]
 use oam::{

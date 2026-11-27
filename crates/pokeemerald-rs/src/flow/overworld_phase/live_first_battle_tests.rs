@@ -17,15 +17,15 @@ use engine::overworld::{Direction, PlayerState};
 use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
-const NEEDS_PACK: &str = "needs a local pack: run `cargo xtask extract` first";
+pub(super) const NEEDS_PACK: &str = "needs a local pack: run `cargo xtask extract` first";
 /// The first Route 101 rescue coord event (`Route101/map.json`, elevation 3).
 const ROUTE_101_TRIGGER_TILE: (i32, i32) = (10, 19);
 /// `VAR_ROUTE101_STATE` (`include/constants/vars.h`): 1 arms the rescue, 2 marks it consumed.
 const VAR_ROUTE101_STATE: u16 = 0x4060;
-const TREECKO: SpeciesId = SpeciesId(277);
-const FAST_TEXT_SPEED: u8 = 2;
-const IDLE_FRAMES: usize = 300;
-const FRAME_LIMIT: usize = 6_000;
+pub(super) const TREECKO: SpeciesId = SpeciesId(277);
+pub(super) const FAST_TEXT_SPEED: u8 = 2;
+pub(super) const IDLE_FRAMES: usize = 300;
+pub(super) const FRAME_LIMIT: usize = 6_000;
 /// The visible glyphs of "TREECKO used\nGROWL!". At the fastest text speed
 /// each takes one printer tick.
 const GROWL_ANNOUNCEMENT_GLYPHS: usize = 18;
@@ -33,9 +33,9 @@ const GROWL_ANNOUNCEMENT_GLYPHS: usize = 18;
 /// Growl fights below ends a stat or miss message with `waitmessage
 /// B_WAIT_TIME_LONG` (`data/battle_scripts_1.s:556-560`, `:273-281`) before the
 /// next turn.
-const WAIT_TIME_LONG: usize = 64;
+pub(super) const WAIT_TIME_LONG: usize = 64;
 
-fn treecko(level: u8, moves: Vec<MoveId>) -> BattlePokemon {
+pub(super) fn treecko(level: u8, moves: Vec<MoveId>) -> BattlePokemon {
     let ivs = Ivs {
         hp: MAX_IV,
         attack: MAX_IV,
@@ -70,7 +70,7 @@ fn phase_in_battle(lead: BattlePokemon) -> OverworldPhase {
 
 /// A fresh A press on every sixteenth frame, so each prompt is answered soon
 /// and the held button speeds up at most one frame in sixteen.
-fn tapping(frame: usize) -> ButtonState {
+pub(super) fn tapping(frame: usize) -> ButtonState {
     if frame.is_multiple_of(16) {
         pressed(Buttons::A)
     } else {
@@ -85,7 +85,7 @@ fn engine_outcome(phase: &OverworldPhase) -> Option<BattleOutcome> {
     }
 }
 
-fn composed_pixels(phase: &OverworldPhase) -> Vec<u32> {
+pub(super) fn composed_pixels(phase: &OverworldPhase) -> Vec<u32> {
     phase.compose_frame().to_vec()
 }
 
@@ -303,5 +303,71 @@ fn a_rejected_battle_text_setup_leaves_the_rescue_armed() {
         phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
         Ok(1),
         "the rescue must stay armed after a setup rejection"
+    );
+}
+
+/// A Route 101 phase on the rescue tile whose battle text has no pack to load.
+fn phase_with_missing_pack() -> OverworldPhase {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let missing: &'static std::path::Path =
+        Box::leak(std::path::PathBuf::from("/nonexistent/birch-verify-pack").into_boxed_path());
+    let mut phase = OverworldPhase::for_test_with_source(
+        crate::overworld::test_support::synthetic_scene(25, 25),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((tx, ty), 3, Direction::East),
+        None,
+        crate::pack_source::PackSource::Test(missing),
+    );
+    phase.battle_text = BattleText::Played;
+    phase.rng = Rng::new(4242);
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
+    phase
+}
+
+/// The scripted opponent's personality and IVs, and the RNG state after the start.
+fn started_opponent(phase: &OverworldPhase) -> (u32, Ivs, u32) {
+    let Some(ActiveBattle::First(battle)) = &phase.active_battle else {
+        panic!("the first battle should be active");
+    };
+    let enemy = battle.enemy();
+    (enemy.personality(), enemy.ivs(), phase.rng.state())
+}
+
+/// A rejected battle-text setup draws nothing: the repaired retry starts the
+/// same opponent from the same stream as a clean start (`begin_first_battle`).
+#[test]
+fn a_rejected_battle_text_setup_leaves_the_rng_untouched() {
+    let mut phase = phase_with_missing_pack();
+    let rng_before = phase.rng.state();
+
+    phase.begin_first_battle();
+
+    assert!(
+        !phase.is_first_battle_active(),
+        "setup failed, so no battle"
+    );
+    assert!(phase.lead.is_some(), "the lead was restored");
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "the rescue stays armed"
+    );
+    assert_eq!(
+        phase.rng.state(),
+        rng_before,
+        "a rejected setup must not consume RNG"
+    );
+
+    phase.battle_text = BattleText::Skipped;
+    phase.begin_first_battle();
+    let retried = started_opponent(&phase);
+
+    let mut clean = phase_with_missing_pack();
+    clean.battle_text = BattleText::Skipped;
+    clean.begin_first_battle();
+    assert_eq!(
+        retried,
+        started_opponent(&clean),
+        "the repaired retry matches a clean start"
     );
 }

@@ -380,13 +380,17 @@ pub(super) fn restore_directory_owner_access(level: &std::os::fd::OwnedFd) -> io
 /// the held level is an `O_PATH` descriptor and `fchmod(2)` refuses it:
 /// `fchmodat(level, ".")` acts on the held inode, and needs only the search
 /// bit the umasks above leave. With that bit gone too, the descriptor's
-/// `/proc/self/fd` link names the same inode.
+/// `/proc/self/fd` link names the same inode. Rollback also grants a held
+/// level's owner the bits to list it through this.
 ///
 /// Without procfs a level without owner search answers `EACCES`: rustix 1.1
 /// does not expose `fchmodat2(AT_EMPTY_PATH)`, which would reach the inode
 /// directly. What the caller does then is in the `created_dirs` module docs.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn set_held_directory_mode(level: &std::os::fd::OwnedFd, mode: rustix::fs::Mode) -> io::Result<()> {
+pub(super) fn set_held_directory_mode(
+    level: &std::os::fd::OwnedFd,
+    mode: rustix::fs::Mode,
+) -> io::Result<()> {
     use std::os::fd::AsRawFd as _;
 
     match rustix::fs::chmodat(level, ".", mode, rustix::fs::AtFlags::empty()) {
@@ -437,7 +441,10 @@ pub(super) mod procfs_unavailable {
 /// [`set_held_directory_mode`] on FreeBSD, where `fchmodat(2)` takes the
 /// held `O_PATH` descriptor itself with an empty path.
 #[cfg(target_os = "freebsd")]
-fn set_held_directory_mode(level: &std::os::fd::OwnedFd, mode: rustix::fs::Mode) -> io::Result<()> {
+pub(super) fn set_held_directory_mode(
+    level: &std::os::fd::OwnedFd,
+    mode: rustix::fs::Mode,
+) -> io::Result<()> {
     Ok(rustix::fs::chmodat(
         level,
         "",
@@ -452,7 +459,10 @@ fn set_held_directory_mode(level: &std::os::fd::OwnedFd, mode: rustix::fs::Mode)
     unix,
     not(any(target_os = "linux", target_os = "android", target_os = "freebsd"))
 ))]
-fn set_held_directory_mode(level: &std::os::fd::OwnedFd, mode: rustix::fs::Mode) -> io::Result<()> {
+pub(super) fn set_held_directory_mode(
+    level: &std::os::fd::OwnedFd,
+    mode: rustix::fs::Mode,
+) -> io::Result<()> {
     Ok(rustix::fs::fchmod(level, mode)?)
 }
 
