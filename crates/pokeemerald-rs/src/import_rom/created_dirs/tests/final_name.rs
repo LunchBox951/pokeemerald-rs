@@ -3,10 +3,59 @@
 //! where the filesystem refuses it. Nothing is claimed, but the entry is
 //! synced and the owner's access the umask took is restored.
 
-use super::acquisition::create_as;
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 use super::acquisition::private_entries;
+use super::acquisition::{create_as, walk_through_a_read_only_parent};
 use super::*;
+
+/// Makes the walk on this thread take the final-name path: through the
+/// `EINVAL` seam where the platform has a no-replace rename, and as it does
+/// anyway everywhere else.
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[must_use]
+fn at_final_name() -> super::acquire::tests_seam::Refusing {
+    super::acquire::tests_seam::refuse_noreplace(rustix::io::Errno::INVAL)
+}
+
+/// What [`at_final_name`] holds where there is no seam to install.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+struct AlreadyAtFinalName;
+
+/// [`at_final_name`] where every level is made at its final name already.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+#[must_use]
+fn at_final_name() -> AlreadyAtFinalName {
+    AlreadyAtFinalName
+}
+
+// Only where every level is made at its final name: where the platform has a
+// no-replace rename, the private claim refuses such a level before the rename
+// the seam refuses is reached (`acquisition::a_level_it_cannot_vouch_for_*`).
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+#[test]
+fn a_level_of_another_user_made_at_its_final_name_is_walked_through() {
+    // Nothing made at a final name is vouched for, so a level the walk is
+    // told belongs to another user is neither refused nor recorded: both
+    // levels are made and walked through, and nothing is claimed.
+    let dir = TempDir::new("final-name-other-owner");
+    let target = dir.join("a").join("b");
+    let owner = rustix::process::geteuid().as_raw();
+    let mut after_mkdir = 0;
+
+    let creation = create_as(&target, owner.wrapping_add(1), &mut || after_mkdir += 1)
+        .map_err(|(_, source)| source)
+        .expect("both levels are made and walked through");
+
+    assert!(target.is_dir());
+    assert!(creation.created.is_empty(), "a level was recorded");
+    assert!(after_mkdir >= 2, "the walk stopped before the second level");
+}
+
+#[test]
+fn an_existing_level_under_a_read_only_parent_is_walked_through_at_final_name() {
+    let _fallback = at_final_name();
+    walk_through_a_read_only_parent("final-name-existing-under-read-only", &[]);
+}
 
 #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
 #[test]
@@ -201,4 +250,84 @@ fn a_level_made_at_its_final_name_keeps_owner_access() {
         let mode = fs::metadata(level).unwrap().permissions().mode() & 0o7777;
         assert_eq!(mode, 0o700, "{level:?} lost its owner's access");
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_symlink_put_at_a_level_made_at_its_final_name_is_not_followed() {
+    // `mkdirat` cannot make a symlink, so one at the name of a level just
+    // made there was swapped in since. Following it would create the next
+    // level, and in the end the pack, inside a directory someone else chose.
+    let dir = TempDir::new("fallback-symlink");
+    let _refusing = super::acquire::tests_seam::refuse_noreplace(rustix::io::Errno::INVAL);
+    let first = dir.join("a");
+    let target = first.join("b");
+    let moved = dir.join("a-original");
+    let elsewhere = dir.join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    let owner = rustix::process::geteuid().as_raw();
+    let mut swapped = false;
+    let result = create_as(&target, owner, &mut || {
+        if !swapped && first.is_dir() && !first.is_symlink() {
+            swapped = true;
+            fs::rename(&first, &moved).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &first).unwrap();
+        }
+    });
+    assert!(
+        swapped,
+        "the fallback never made the level at its final name"
+    );
+    assert!(
+        !elsewhere.join("b").exists(),
+        "a level was made through the symlink"
+    );
+    assert!(result.is_err(), "a symlink at a level just made was walked");
+}
+
+/// The entries of this process's open descriptors whose target lies under
+/// `dir` and names a private `.import-` directory.
+#[cfg(target_os = "linux")]
+fn private_descriptors_under(dir: &std::path::Path) -> Vec<String> {
+    fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| fs::read_link(entry.ok()?.path()).ok())
+        .map(|target| target.to_string_lossy().into_owned())
+        .filter(|target| target.starts_with(&*dir.to_string_lossy()) && target.contains(".import-"))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_private_directory_is_released_before_a_level_is_made_at_its_final_name() {
+    // Where the no-replace rename is refused, the private directory is
+    // discarded and the level made at its final name. Its descriptor is of
+    // no further use, and holding it costs the parent sync after the final
+    // `mkdirat` a slot it may need when no pin is left to shed.
+    let dir = TempDir::new("fallback-held-released");
+    let _refusing = super::acquire::tests_seam::refuse_noreplace(rustix::io::Errno::INVAL);
+    let target = dir.join("a");
+    let owner = rustix::process::geteuid().as_raw();
+    let mut held_at_sync = Vec::new();
+    super::create_directories_pinned_after_mkdir(
+        &target,
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut || None,
+        &mut || None,
+        &mut |parent| {
+            held_at_sync.extend(private_descriptors_under(&dir.path));
+            dest::reopen_for_sync(parent)
+        },
+        owner,
+        &mut || {},
+    )
+    .map_err(|(_, source)| source)
+    .expect("the level is created");
+    assert!(target.is_dir());
+    assert_eq!(
+        held_at_sync,
+        Vec::<String>::new(),
+        "the discarded private directory was still held at the parent sync"
+    );
 }

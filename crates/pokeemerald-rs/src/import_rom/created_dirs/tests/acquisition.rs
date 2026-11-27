@@ -79,6 +79,10 @@ fn a_replacement_put_at_a_levels_name_after_mkdir_is_not_claimed() {
     assert_eq!(private_entries(&first), Vec::<String>::new());
 }
 
+// A level made at its final name is never vouched for, only walked through:
+// `final_name::a_level_of_another_user_made_at_its_final_name_is_walked_through`
+// on Unix targets without a no-replace rename.
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 #[test]
 fn a_level_it_cannot_vouch_for_is_refused_and_left_untouched() {
     // Swapping in a directory of another user needs root, so the walk is
@@ -161,17 +165,25 @@ fn a_level_is_made_under_a_private_name_until_it_is_claimed() {
     assert_eq!(private_entries(&first), Vec::<String>::new());
 }
 
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 #[test]
 fn an_existing_level_under_a_read_only_parent_is_walked_through() {
+    // Only the levels that were missing are recorded, each claimed under a
+    // private name; `final_name` checks the same walk where none is claimed.
+    walk_through_a_read_only_parent("existing-under-read-only", &["new", "c"]);
+}
+
+/// Walking through a level that is already there asks nothing of its
+/// parent: `dev` opened it, and a claim that first made a private entry in
+/// that parent failed with `EACCES` under a parent this user cannot write.
+/// Only the new level below it needs a writable directory. The walk lists
+/// `read-only/existing` as missing because `new/..` does not exist yet when
+/// the list is made, so it reaches both by name. `recorded` is what the run
+/// must record.
+pub(super) fn walk_through_a_read_only_parent(label: &str, recorded: &[&str]) {
     use std::os::unix::fs::PermissionsExt as _;
 
-    // Walking through a level that is already there asks nothing of its
-    // parent: `dev` opened it, and a claim that first made a private entry
-    // in that parent failed with `EACCES` under a parent this user cannot
-    // write. Only the new level below it needs a writable directory. The
-    // walk lists `read-only/existing` as missing because `new/..` does not
-    // exist yet when the list is made, so it reaches both by name.
-    let dir = TempDir::new("existing-under-read-only");
+    let dir = TempDir::new(label);
     let parent = dir.join("read-only");
     let existing = parent.join("existing");
     let target = dir
@@ -191,10 +203,7 @@ fn an_existing_level_under_a_read_only_parent_is_walked_through() {
     fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("the parent reopens");
 
     if writable {
-        eprintln!(
-            "an_existing_level_under_a_read_only_parent_is_walked_through: \
-             skipped -- running privileged, 0o555 did not close the parent off"
-        );
+        eprintln!("{label}: skipped -- running privileged, 0o555 did not close the parent off");
         return;
     }
     let created = created
@@ -206,8 +215,8 @@ fn an_existing_level_under_a_read_only_parent_is_walked_through() {
             .iter()
             .map(|level| level.name.clone())
             .collect::<Vec<_>>(),
-        ["new", "c"],
-        "only the levels that were missing are recorded"
+        recorded,
+        "only the levels that were missing and claimed are recorded"
     );
     assert!(existing.join("c").is_dir());
 }
@@ -248,11 +257,10 @@ fn a_private_directory_that_is_still_the_verified_one_is_removed() {
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 #[test]
 fn a_replacement_put_at_the_private_name_after_it_was_verified_is_not_removed() {
-    // Removing the private directory used to be a check of its identity and
-    // then an unlink of the same name, two steps a writer of the parent
-    // could come between to have its own directory deleted. The seam is
-    // that gap: the verified directory is moved away and another put at the
-    // name, which must come out of the cleanup where it was.
+    // Before cleanup looks at the private name, the verified directory is
+    // moved away and another put at the name, which must come out of the
+    // cleanup where it was. The gap between the check and the unlink is
+    // `a_replacement_put_at_the_private_name_once_it_was_checked_is_not_removed`.
     let dir = TempDir::new("discard-replaced");
     let (parent, name, held) = private_directory_in(&dir.path);
     let moved = dir.join("moved");
@@ -279,6 +287,49 @@ fn a_replacement_put_at_the_private_name_after_it_was_verified_is_not_removed() 
     assert_eq!(
         entry_names(&dir.path),
         [".import-0123456789abcdef", "moved"]
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_replacement_put_at_the_private_name_once_it_was_checked_is_not_removed() {
+    // The gap the cleanup closes: between finding the directory to be the
+    // verified one and unlinking it, a writer of the parent moves it away
+    // from the private name, if it is still there, and puts its own there.
+    // Cleanup unlinks only the entry it checked, under the name nobody else
+    // knows, so the replacement at the private name is left standing; a
+    // check of the private name followed by an unlink of it would delete
+    // the replacement.
+    let dir = TempDir::new("discard-replaced-after-check");
+    let (parent, name, held) = private_directory_in(&dir.path);
+    let moved = dir.join("moved");
+    let replacement = dir.path.join(&name);
+    let mut swapped = 0;
+
+    let aside = std::ffi::OsString::from(".import-fedcba9876543210");
+    let outcome = super::acquire::discard_private_with(
+        &parent,
+        &name,
+        &aside,
+        &held,
+        &mut || {},
+        &mut || {
+            swapped += 1;
+            if replacement.exists() {
+                fs::rename(&replacement, &moved).unwrap();
+            }
+            fs::create_dir(&replacement).unwrap();
+        },
+    );
+
+    assert_eq!(swapped, 1, "the replacement was put in place once");
+    assert!(
+        replacement.is_dir(),
+        "the replacement put at the private name after the check was removed"
+    );
+    assert!(
+        matches!(outcome, super::acquire::Discard::Removed),
+        "the verified directory was not removed"
     );
 }
 
@@ -437,4 +488,28 @@ fn a_claimed_level_stays_open_until_its_reopen_is_checked() {
     let (created, _) = result.expect_err("the replacement is not taken for the level");
     assert!(created.is_empty(), "the replacement is not recorded");
     assert!(dir.join("a").is_dir(), "the replacement is left standing");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_private_directory_warning_keeps_a_control_character_in_a_name_on_one_line() {
+    // The level's name comes from the destination path, which may hold a
+    // newline or a terminal escape; the warning must stay one line and show
+    // it escaped, as the rollback warnings do.
+    let name = std::ffi::OsStr::new("line\nbreak\u{1b}[2J");
+    let outcomes = [
+        super::acquire::Discard::Kept {
+            at: ".import-0123456789abcdef".into(),
+            error: std::io::Error::other("busy"),
+        },
+        super::acquire::Discard::Foreign {
+            at: ".import-0123456789abcdef".into(),
+        },
+    ];
+    for outcome in &outcomes {
+        let warning = super::acquire::left_standing_warning(outcome, name).expect("a warning");
+        assert!(!warning.contains('\n'), "{warning:?}");
+        assert!(!warning.contains('\u{1b}'), "{warning:?}");
+        assert!(warning.contains("line\\nbreak"), "{warning:?}");
+    }
 }

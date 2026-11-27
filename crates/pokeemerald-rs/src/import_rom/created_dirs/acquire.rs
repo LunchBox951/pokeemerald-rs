@@ -58,7 +58,19 @@ use super::{
     same_directory_identity, sync_and_shed_outermost_pinned_level, CreatedDirectory,
 };
 
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+mod discard;
 mod final_name;
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+pub(super) use discard::discard_private;
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+use discard::report_left_standing;
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+pub(super) use discard::{discard_private_with, left_standing_warning, Discard};
 
 #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
 pub(super) use final_name::claim_level;
@@ -97,10 +109,12 @@ pub(super) enum ClaimError {
     /// A directory was made at `name` itself, where nothing can tie what
     /// stands there now to this run's `mkdirat`: a same-user writer of the
     /// parent may have put its own there since. It is walked through as an
-    /// existing level, never recorded, so rollback leaves it standing; the
-    /// error is for when `name` is no longer a directory. Its parent has been
-    /// synced and its owner's access restored, as for a claimed level.
-    Unowned(io::Error),
+    /// existing level, never recorded, so rollback leaves it standing. The
+    /// descriptor is the directory found at `name`, opened without following
+    /// a symlink, which the walk descends through; a name that no longer
+    /// holds a directory is [`Self::Failed`]. Its parent has been synced and
+    /// its owner's access restored, as for a claimed level.
+    Unowned(std::os::fd::OwnedFd),
     /// Anything else, including everything that went wrong once a directory
     /// was made: the caller must not take the name for an existing level.
     Failed(io::Error),
@@ -194,7 +208,9 @@ pub(super) fn claim_level(
                 // This filesystem cannot refuse to replace (an NFS mount, say):
                 // make the level at its final name, as where no such rename
                 // exists, rather than refuse to import at all, but do not
-                // claim it.
+                // claim it. The private directory is of no further use, and
+                // its descriptor would cost the parent sync there a slot.
+                drop(held);
                 return Err(final_name::claim_at_final_name(
                     created,
                     pin_from,
@@ -278,132 +294,6 @@ fn no_replace_unsupported(errno: rustix::io::Errno) -> bool {
         errno,
         rustix::io::Errno::INVAL | rustix::io::Errno::NOTSUP | rustix::io::Errno::NOSYS
     )
-}
-
-/// What [`discard_private`] left behind.
-#[cfg(all(
-    unix,
-    any(target_os = "linux", target_os = "android", target_vendor = "apple")
-))]
-pub(super) enum Discard {
-    /// The directory this run made is gone.
-    Removed,
-    /// This run's directory could not be removed and stands at `at`, a name
-    /// in the parent: `error` says why. It was empty when made and may not be
-    /// now, so it is not to be called empty or safe to delete.
-    Kept {
-        at: std::ffi::OsString,
-        error: io::Error,
-    },
-    /// What stands at `at` was not found to be the directory this run made
-    /// (someone replaced it), so it was not touched beyond being put back.
-    Foreign { at: std::ffi::OsString },
-}
-
-/// Removes the directory this run made as `private` in `parent`, which
-/// `held` is open on, without ever unlinking a name that was only checked a
-/// moment ago: the entry is first renamed (no-replace) to a fresh
-/// unguessable name, and only what is found there to be `held` is removed.
-/// Anything else was put at `private` by someone else after it was vouched
-/// for; it is renamed back if `private` is still free, else left where it
-/// is. `aside` is that fresh name, chosen by the caller so no descriptor is
-/// needed here. A directory that is not removed is reported with the name it
-/// actually stands at (`private` or `aside`, whichever the last rename left
-/// it under) and, where this run's own directory could not be removed, the
-/// error: unlinking it can fail because an entry appeared in it after it was
-/// moved aside. `before_move` is the test seam that runs just before the
-/// entry is moved aside.
-#[cfg(all(
-    unix,
-    any(target_os = "linux", target_os = "android", target_vendor = "apple")
-))]
-pub(super) fn discard_private(
-    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
-    private: &OsStr,
-    aside: &OsStr,
-    held: &std::os::fd::OwnedFd,
-    before_move: &mut dyn FnMut(),
-) -> Discard {
-    before_move();
-    match rename_no_replace(parent, private, parent, aside) {
-        Ok(()) => {}
-        Err(errno) if no_replace_unsupported(errno) => {
-            // No rename that refuses to replace here, so the name is checked
-            // and then unlinked, which a same-user writer can come between;
-            // all it can cost is an empty directory of its own.
-            let unchanged =
-                rustix::fs::statat(&**parent, private, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-                    .ok()
-                    .zip(rustix::fs::fstat(held).ok())
-                    .is_some_and(|(found, ours)| same_directory_identity(&found, &ours));
-            if !unchanged {
-                return Discard::Foreign {
-                    at: private.to_owned(),
-                };
-            }
-            return match rustix::fs::unlinkat(&**parent, private, rustix::fs::AtFlags::REMOVEDIR) {
-                Ok(()) => Discard::Removed,
-                Err(errno) => Discard::Kept {
-                    at: private.to_owned(),
-                    error: errno.into(),
-                },
-            };
-        }
-        // Nothing was moved: it still stands at `private`.
-        Err(errno) => {
-            return Discard::Kept {
-                at: private.to_owned(),
-                error: errno.into(),
-            }
-        }
-    }
-    let ours = match (
-        rustix::fs::fstat(held),
-        rustix::fs::statat(&**parent, aside, rustix::fs::AtFlags::SYMLINK_NOFOLLOW),
-    ) {
-        (Ok(ours), Ok(found)) => same_directory_identity(&found, &ours),
-        _ => false,
-    };
-    if ours {
-        match rustix::fs::unlinkat(&**parent, aside, rustix::fs::AtFlags::REMOVEDIR) {
-            Ok(()) => Discard::Removed,
-            // It stands at `aside`, not at `private`.
-            Err(errno) => Discard::Kept {
-                at: aside.to_owned(),
-                error: errno.into(),
-            },
-        }
-    } else {
-        let at = match rename_no_replace(parent, aside, parent, private) {
-            Ok(()) => private,
-            Err(_) => aside,
-        };
-        Discard::Foreign { at: at.to_owned() }
-    }
-}
-
-/// Says on stderr where a private directory that [`discard_private`] did not
-/// remove now stands, which is the pathname the user can act on, relative to
-/// the level being made (`name`).
-#[cfg(all(
-    unix,
-    any(target_os = "linux", target_os = "android", target_vendor = "apple")
-))]
-fn report_left_standing(outcome: &Discard, name: &OsStr) {
-    let name = std::path::Path::new(name).display();
-    match outcome {
-        Discard::Removed => {}
-        Discard::Kept { at, error } => eprintln!(
-            "warning: could not remove the directory {} made while creating {name}: \
-             {error}; it may no longer be empty, so check it before deleting",
-            std::path::Path::new(at).display()
-        ),
-        Discard::Foreign { at } => eprintln!(
-            "warning: {} was made while creating {name} but was replaced and was left \
-             untouched; it is not this import's to delete",
-            std::path::Path::new(at).display()
-        ),
-    }
 }
 
 /// A fresh private name in a directory others can write, shedding a pin

@@ -46,7 +46,19 @@ fn only_the_levels_the_run_created_come_back_as_its_own() {
     fs::create_dir(&one).expect("the outer level is created");
 
     let created = create_directories(&two).expect("the missing level is created");
-    assert_eq!(created_paths(&created), std::slice::from_ref(&two));
+    // Where no no-replace rename can claim a level, it is made at its final
+    // name and never recorded (`acquire`), so the run owns nothing there.
+    let claimed: &[PathBuf] = if cfg!(any(
+        not(unix),
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple"
+    )) {
+        std::slice::from_ref(&two)
+    } else {
+        &[]
+    };
+    assert_eq!(created_paths(&created), claimed);
     assert!(two.is_dir());
 
     let again = create_directories(&two).expect("an existing destination is not a failure");
