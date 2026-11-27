@@ -252,7 +252,7 @@ fn approaching_from(
         templates[0].local_id,
         None,
         walk_tiles,
-        "Whoa!",
+        "Route103_EventScript_Rhett",
         stand_in_battle(),
         TrainerId(703),
         PartyReserves::default(),
@@ -353,5 +353,83 @@ fn an_intermediate_walked_tile_settles_its_elevation_before_the_next() {
             trainer(&objects).previous_elevation()
         ),
         (0, 5)
+    );
+}
+
+/// A table of invented streams: every script's own, except `script`, whose
+/// stream is `stream` instead.
+fn table_with<'a>(
+    script: &str,
+    stream: &'a [u8],
+    others: &'a [Vec<u8>],
+) -> assets::SightTrainerIntroSpeechTable<'a> {
+    assets::SightTrainerIntroSpeechTable::from_entries(
+        assets::SIGHT_TRAINER_INTRO_SCRIPTS
+            .iter()
+            .copied()
+            .zip(others)
+            .map(|(known, other)| {
+                (
+                    known,
+                    if known == script {
+                        stream
+                    } else {
+                        other.as_slice()
+                    },
+                )
+            }),
+    )
+    .expect("the invented streams form a valid table")
+}
+
+/// The intro decodes into exactly the tokens its raw stream holds -- glyphs,
+/// the line break, the `\l` scroll prompt and the closing `End` -- with
+/// nothing appended or stripped, and each script reads its own stream.
+#[test]
+fn an_intro_decodes_its_scripts_own_stream_with_its_controls_intact() {
+    let own: Vec<Token> = vec![
+        Token::Char('A'),
+        Token::Newline,
+        Token::Char('b'),
+        Token::PromptScroll,
+        Token::Char('C'),
+        Token::End,
+    ];
+    let own_stream = engine::text::encode(&own).expect("the invented tokens encode");
+    let others: Vec<Vec<u8>> = assets::SIGHT_TRAINER_INTRO_SCRIPTS
+        .iter()
+        .map(|script| {
+            engine::text::encode(&fixture::invented_tokens(script)).expect("invented text encodes")
+        })
+        .collect();
+    let table = table_with("Route103_EventScript_Liv", &own_stream, &others);
+
+    assert_eq!(
+        SightApproach::intro_tokens_from(&table, "Route103_EventScript_Liv").expect("Liv's entry"),
+        own
+    );
+    assert_eq!(
+        SightApproach::intro_tokens_from(&table, "Route103_EventScript_Amy").expect("Amy's entry"),
+        fixture::invented_tokens("Route103_EventScript_Amy"),
+        "the entry is the script's own, not its neighbour's"
+    );
+}
+
+/// A script outside the table names no speech: an error, never a guess.
+#[test]
+fn an_intro_for_a_script_outside_the_table_is_an_error() {
+    let streams: Vec<Vec<u8>> = assets::SIGHT_TRAINER_INTRO_SCRIPTS
+        .iter()
+        .map(|script| {
+            engine::text::encode(&fixture::invented_tokens(script)).expect("invented text encodes")
+        })
+        .collect();
+    let table = table_with("Route103_EventScript_Liv", &streams[4], &streams);
+
+    let error = SightApproach::intro_tokens_from(&table, "Route103_EventScript_Nobody")
+        .expect_err("no such script");
+    assert!(
+        matches!(error, IntroSpeechError::UnknownScript(_)),
+        "{error}"
     );
 }

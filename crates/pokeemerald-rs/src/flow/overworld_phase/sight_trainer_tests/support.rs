@@ -204,6 +204,9 @@ pub(super) const LOCK_HANDOFF_AT_REST: usize = 1;
 /// The same handoff counted after the frame an in-flight step drains on.
 pub(super) const LOCK_HANDOFF_AFTER_DRAIN: usize = 2;
 
+/// The script of Rhett's object event, the key of his intro speech in the pack.
+pub(super) const RHETT_SCRIPT: &str = "Route103_EventScript_Rhett";
+
 /// Rhett's own real object event out of the extracted `MAP_ROUTE103` data.
 pub(super) fn rhetts_object_event() -> &'static assets::ObjectEvent {
     assets::MapEventsTable::new()
@@ -211,7 +214,7 @@ pub(super) fn rhetts_object_event() -> &'static assets::ObjectEvent {
         .expect("MAP_ROUTE103 is bundled map data")
         .object_events
         .iter()
-        .find(|event| event.script == Some(assets::ScriptRef::new("Route103_EventScript_Rhett")))
+        .find(|event| event.script == Some(assets::ScriptRef::new(RHETT_SCRIPT)))
         .expect("Route 103 declares Rhett's own object event")
 }
 
@@ -231,6 +234,18 @@ pub(super) fn seed_approach_for(
     carried_from: Option<MapId>,
     walk_tiles: u8,
 ) {
+    seed_approach_with_script(phase, RHETT_SCRIPT, local_id, carried_from, walk_tiles);
+}
+
+/// [`seed_approach_for`] whose intro speech is the pack's entry for `script`,
+/// so a test can open another sight trainer's speech on Rhett's own geometry.
+pub(super) fn seed_approach_with_script(
+    phase: &mut OverworldPhase,
+    script: &'static str,
+    local_id: u8,
+    carried_from: Option<MapId>,
+    walk_tiles: u8,
+) {
     phase.rng = engine::rng::Rng::new(7);
     let battle = crate::flow::npc_trainer_battle::start_npc_trainer_battle(
         overwhelming_lead(),
@@ -243,7 +258,7 @@ pub(super) fn seed_approach_for(
         local_id,
         carried_from,
         walk_tiles,
-        "Whoa!\nHow'd you get into a space this small?",
+        script,
         battle,
         assets::trainers::TrainerId(TRAINER_RHETT),
         PartyReserves::default(),
