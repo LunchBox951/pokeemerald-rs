@@ -43,6 +43,15 @@ pub enum TransportFailure {
     ConnectFailed,
 }
 
+/// A start count and the intent that went with it; see [`Shared::intent`].
+#[derive(Clone, Copy)]
+pub(super) struct Intent {
+    /// [`Shared::starts`].
+    pub(super) starts: u64,
+    /// [`Shared::running`].
+    pub(super) running: bool,
+}
+
 /// State shared by the game-loop facade, the worker, and the callbacks.
 /// Everything here is an atomic except `state`, which only the worker and the
 /// facade lock, never a callback.
@@ -55,6 +64,10 @@ pub(in crate::audio) struct Shared {
     /// How many times playback has been started, so the worker sees a
     /// `start` even when a `stop` overwrote it before the next step.
     pub(super) starts: AtomicU64,
+    /// Brackets the publication of a start: odd while [`Self::starts`] and
+    /// [`Self::running`] are being updated for it, so [`Self::intent`] never
+    /// pairs one with the other's stale value.
+    start_seq: AtomicU64,
     pub(in crate::audio) shutdown: AtomicBool,
     pub(in crate::audio) stream_errors: Arc<AtomicU64>,
     pub(in crate::audio) playback_clock: Arc<PlaybackClock>,
@@ -77,6 +90,7 @@ impl Shared {
             running: AtomicBool::new(false),
             stopped_at: AtomicU64::new(0),
             starts: AtomicU64::new(0),
+            start_seq: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
             stream_errors: Arc::new(AtomicU64::new(0)),
             playback_clock: Arc::new(PlaybackClock::new()),
@@ -92,10 +106,16 @@ impl Shared {
     /// where it landed in `producer`'s queue, so a re-attach that discards
     /// history keeps what is queued after it. A start of a stopped transport
     /// is counted, so one the worker never saw running is still history.
+    ///
+    /// Only the facade calls this, and it takes `&mut self` to start or stop,
+    /// so publications are serial. See [`Self::intent`] for what a start's
+    /// publication guarantees a reader.
     pub(in crate::audio) fn set_running(&self, running: bool, producer: &Producer) {
         let was_running = self.running.load(Ordering::Acquire);
         if running && !was_running {
-            self.starts.fetch_add(1, Ordering::Relaxed);
+            self.begin_start();
+            self.finish_start();
+            return;
         }
         if !running && was_running {
             let mark = producer.pushed();
@@ -105,8 +125,52 @@ impl Shared {
             // stopped queue that discard must keep.
             producer.keep_pushed_from_at_first_read(mark);
         }
-        // Release: a worker that reads this stop also reads its mark.
-        self.running.store(running, Ordering::Release);
+        // Stored after the mark, and read with acquire by the worker, so a
+        // worker that reads this stop also reads its mark.
+        self.running.store(running, Ordering::SeqCst);
+    }
+
+    /// The first half of publishing a start of a stopped transport: open the
+    /// bracket and count the start. [`Self::finish_start`] must follow;
+    /// split only so tests can pause between the two.
+    pub(super) fn begin_start(&self) {
+        self.start_seq.fetch_add(1, Ordering::SeqCst);
+        self.starts.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Complete the start [`Self::begin_start`] opened, making it visible to
+    /// [`Self::intent`].
+    pub(super) fn finish_start(&self) {
+        self.running.store(true, Ordering::SeqCst);
+        self.start_seq.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A start count and the playback intent read together, or `None` while a
+    /// start is being published.
+    ///
+    /// A start is published as `starts += 1` then `running = true`, so a
+    /// reader that loaded the two separately could see the new count with the
+    /// stopped intent (acknowledging a start that has not finished) or the
+    /// started intent with the old count (applying a start it then counts as
+    /// missed). This is a seqlock on [`Self::start_seq`], which the writer
+    /// holds odd across both stores. Every operation on `start_seq`,
+    /// `starts` and `running` on this path is `SeqCst`, so they have one
+    /// total order consistent with the writer's program order. The reader
+    /// accepts only when `start_seq` is the same even value before and after
+    /// its two loads: no bracket opened or closed between them, so in that
+    /// order both stores of any start lie wholly before the loads or wholly
+    /// after them, and the pair is a state that existed. A stop after the
+    /// start stores `stopped_at` before `running = false`, so a reader that
+    /// sees the stop sees its mark. Readers never wait for an unfinished
+    /// start: they get `None`, acknowledge nothing, and ask again.
+    pub(super) fn intent(&self) -> Option<Intent> {
+        let before = self.start_seq.load(Ordering::SeqCst);
+        if before % 2 == 1 {
+            return None;
+        }
+        let starts = self.starts.load(Ordering::SeqCst);
+        let running = self.running.load(Ordering::SeqCst);
+        (self.start_seq.load(Ordering::SeqCst) == before).then_some(Intent { starts, running })
     }
 
     /// Queue a transition for the application, discarding the oldest pending
