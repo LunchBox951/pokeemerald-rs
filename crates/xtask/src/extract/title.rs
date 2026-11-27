@@ -45,28 +45,21 @@ fn require_title_sources(dir: &Path) -> Result<(), ExtractError> {
     Ok(())
 }
 
-/// Side, in tiles, of every title background tilemap
-/// (`BG_DIM_TILES`, `crates/pokeemerald-rs/src/title.rs:20`).
+/// Tilemap side in tiles (`title.rs:20`).
 const BG_DIM_TILES: usize = 32;
-/// Pixels per tile side (`BitDepth::TILE_DIM`, `crates/rendering/src/bg.rs:40`).
+/// Pixels per tile side (`rendering/src/bg.rs:40`).
 const TILE_DIM: u32 = 8;
-/// The highest palette index a 4bpp tile nibble holds
-/// (`BPP4_MAX_INDEX`, `crates/pokeemerald-rs/src/title/asset_tilesets.rs:43`).
+/// Highest index a 4bpp nibble holds (`title/asset_tilesets.rs:43`).
 const BPP4_MAX_INDEX: u8 = 0x0F;
-/// Colours in one palette bank (`Palette::BANK_LEN`,
-/// `crates/rendering/src/palette.rs:105`).
+/// Colours the scene reads from a bank-sized palette (`rendering/src/palette.rs:105`).
 const PALETTE_BANK_COLORS: usize = 16;
-/// `emerald_version.png` is exactly this size (`VERSION_SHEET_W/H`,
-/// `crates/pokeemerald-rs/src/title.rs:32-33`).
+/// Exact `emerald_version.png` size (`title.rs:32-33`).
 const VERSION_SHEET: (u32, u32) = (128, 32);
-/// `press_start.png` is exactly this size (`PRESS_START_SHEET_W/H`,
-/// `crates/pokeemerald-rs/src/title.rs:35-36`).
+/// Exact `press_start.png` size (`title.rs:35-36`).
 const PRESS_START_SHEET: (u32, u32) = (160, 24);
-/// Height of the two 160-wide frame rows `press_start_tileset` crops first
-/// (`2 * PRESS_START_FRAME_H`, `crates/pokeemerald-rs/src/title.rs:38`).
+/// Rows of `press_start.png` cropped to 4bpp across the full width (`title/asset_tilesets.rs:186-195`).
 const PRESS_START_FRAME_ROWS_H: u32 = 16;
 
-/// Refuse a source the title scene cannot load.
 fn contract_violation(path: &Path, detail: &str) -> ExtractError {
     ExtractError::ReadFailed(
         path.to_path_buf(),
@@ -74,27 +67,7 @@ fn contract_violation(path: &Path, detail: &str) -> ExtractError {
     )
 }
 
-/// Refuse a decoded title image the title scene would reject at load time.
-///
-/// Each rule mirrors what `TitleScene::from_pack`
-/// (`crates/pokeemerald-rs/src/title.rs:230-260`) enforces, so a source that
-/// passes here loads, and one that fails here would not:
-///
-/// - `rayquaza` and `clouds` are tiled as 4bpp (`title.rs:231-240`): both
-///   sides must be a whole number of 8-pixel tiles (`asset_tilesets.rs:30-36`)
-///   and every index must fit one nibble (`asset_tilesets.rs:56-60`).
-/// - `pokemon_logo` is tiled as 8bpp (`title.rs:241-245`): both sides must be
-///   a whole number of 8-pixel tiles (`asset_tilesets.rs:30-36`).
-/// - `emerald_version` must be exactly 128x32 (`title.rs:32-33`,
-///   `asset_tilesets.rs:122-146`; the banner halves are cropped from it at
-///   `asset_tilesets.rs:155-173`).
-/// - `press_start` must be exactly 160x24 (`title.rs:35-36`,
-///   `asset_tilesets.rs:122-153`), and every index in the 4bpp-cropped region
-///   (the top 160x16 and the 8x8 block below it, `asset_tilesets.rs:182-205`)
-///   must fit one nibble (`asset_tilesets.rs:56-60`).
-///
-/// `logo_shine` is packed but not read by `from_pack`, so it has no shape
-/// rule here.
+/// Refuse an image `TitleScene::from_pack` would reject (`title.rs:230-260`).
 fn validate_title_image(
     path: &Path,
     stem: &str,
@@ -152,13 +125,7 @@ fn validate_title_image(
     }
 }
 
-/// The byte length the title scene requires of `stem`'s tilemap.
-///
-/// `rayquaza` and `clouds` are regular maps of 32x32 two-byte screen entries
-/// (`regular_tilemap_from_raw`, `crates/pokeemerald-rs/src/title/tile_decode.rs:41-49`,
-/// `BG_DIM_TILES` at `title.rs:20`); `pokemon_logo` is an affine map of 32x32
-/// one-byte tile indices (`affine_tilemap_from_raw`, `tile_decode.rs:57-59`,
-/// `AffineTilemap::new` at `crates/rendering/src/bg_affine.rs:48-58`).
+/// Bytes the scene requires of `stem`'s map (`title/tile_decode.rs:41-59`).
 fn expected_tilemap_len(stem: &str) -> usize {
     let entries = BG_DIM_TILES * BG_DIM_TILES;
     if stem == "pokemon_logo" {
@@ -168,15 +135,7 @@ fn expected_tilemap_len(stem: &str) -> usize {
     }
 }
 
-/// Refuse a palette the title scene would silently leave part-blank.
-///
-/// `title_palette_from_refs` and `sprite_palette_from_refs`
-/// (`crates/pokeemerald-rs/src/title/tile_decode.rs:7-29`,
-/// `asset_tilesets.rs:210-236`) copy up to a bank of colours (16) from
-/// `rayquaza_and_clouds` and from the `press_start` PNG's embedded palette and
-/// leave the rest transparent black, so a shorter palette loads but renders
-/// wrong. `pokemon_logo`'s 224 colours (`LOGO_PALETTE_COLORS`, `title.rs:21`)
-/// are enforced by its build cut (`TITLE_SCREEN_PALETTE_CUTS`).
+/// Refuse a palette shorter than the bank the scene copies (`title/asset_tilesets.rs:225-233`).
 fn require_bank_of_colors(path: &Path, colors: usize) -> Result<(), ExtractError> {
     if colors < PALETTE_BANK_COLORS {
         return Err(contract_violation(
@@ -348,9 +307,7 @@ mod tests {
         }
     }
 
-    /// Write a synthetic `graphics/title_screen` holding exactly the fixed
-    /// inventory, shaped like the upstream assets the title scene loads, and
-    /// return the upstream root and the title directory.
+    /// A synthetic checkout of the fixed inventory, shaped like upstream's assets.
     fn synthetic_title_checkout(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         let upstream = std::env::temp_dir().join(format!(
             "pokeemerald-rs-extract-{name}-{}",
@@ -569,8 +526,7 @@ mod tests {
         );
     }
 
-    /// The pack a valid checkout extracts to loads through the title scene
-    /// itself, so the fixture is the consumer's contract and not a lookalike.
+    /// The extracted fixture loads through the scene itself.
     #[cfg(feature = "scenes")]
     #[test]
     fn the_extracted_fixture_loads_through_the_title_scene() {
