@@ -40,6 +40,31 @@ impl TempDir {
     pub(crate) fn join(&self, name: impl AsRef<Path>) -> PathBuf {
         self.scratch.join(name)
     }
+
+    /// Records every top-level entry whose name starts with `prefix`, for
+    /// names the importer generates (`.undo-`, `new.restored-`) that the test
+    /// never derives through [`TempDir::join`]. Anything else unrecorded
+    /// still keeps the directory in place.
+    pub(crate) fn adopt_starting_with(&self, prefix: &str) {
+        for entry in fs::read_dir(&self.path).expect("the scratch directory") {
+            let entry = entry.expect("a scratch directory entry");
+            if entry.file_name().to_string_lossy().starts_with(prefix) {
+                self.scratch.adopt(&entry.path());
+            }
+        }
+    }
+
+    /// Drops the fixture and asserts it removed its directory, so a test
+    /// that leaves an unrecorded entry behind fails instead of leaking.
+    pub(crate) fn assert_cleans_up(self) {
+        let path = self.path.clone();
+        drop(self);
+        assert!(
+            path.symlink_metadata().is_err(),
+            "the scratch directory was left behind: {}",
+            path.display()
+        );
+    }
 }
 
 /// Every file directly inside `dir`, sorted, as plain names.

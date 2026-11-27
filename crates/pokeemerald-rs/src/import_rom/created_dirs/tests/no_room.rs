@@ -372,6 +372,8 @@ fn a_full_filesystem_names_where_a_level_stays_when_nothing_takes_it_back() {
     );
     let aside = the_aside_name(&dir.path);
     assert_eq!(fs::read(aside.join("data")).unwrap(), b"theirs");
+    dir.adopt_starting_with(".undo-");
+    dir.assert_cleans_up();
 }
 
 #[cfg(unix)]
@@ -407,9 +409,9 @@ fn a_full_filesystem_names_a_swapped_in_directory_that_nothing_takes_back() {
                 fs::rename(&aside, &away).unwrap();
                 fs::create_dir(&aside).unwrap();
                 fs::write(aside.join("mine"), b"x").unwrap();
-                fs::create_dir(base.join("new")).unwrap();
+                fs::create_dir(dir.join("new")).unwrap();
                 for n in 0..16 {
-                    fs::create_dir(base.join(format!("new.restored-{n}"))).unwrap();
+                    fs::create_dir(dir.join(format!("new.restored-{n}"))).unwrap();
                 }
             }
         },
@@ -417,6 +419,8 @@ fn a_full_filesystem_names_a_swapped_in_directory_that_nothing_takes_back() {
     let aside = the_aside_name(&dir.path);
     assert_eq!(fs::read(aside.join("mine")).unwrap(), b"x");
     assert!(away.is_dir());
+    dir.adopt_starting_with(".undo-");
+    dir.assert_cleans_up();
 }
 
 #[cfg(target_os = "linux")]

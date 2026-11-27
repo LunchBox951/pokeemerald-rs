@@ -112,6 +112,18 @@ impl ScratchDir {
         }
         self.path.join(name)
     }
+
+    /// Records `path`, an entry inside the directory that the code under
+    /// test created under a name the test only discovers afterwards (a
+    /// random `.undo-<hex>`, a `.restored-<n>`), so drop removes it as if it
+    /// had come from [`ScratchDir::join`]. Entries nobody records still keep
+    /// the directory in place. Panics on a path outside the directory.
+    pub(crate) fn adopt(&self, path: &Path) {
+        let inside = path
+            .strip_prefix(&self.path)
+            .expect("a path inside the scratch directory");
+        let _ = self.join(inside);
+    }
 }
 
 #[cfg(unix)]
