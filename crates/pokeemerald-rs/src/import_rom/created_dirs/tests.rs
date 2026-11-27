@@ -12,6 +12,8 @@ mod creation;
 #[cfg(unix)]
 mod durability;
 #[cfg(unix)]
+mod no_room;
+#[cfg(unix)]
 mod permissions;
 #[cfg(unix)]
 mod quarantine;
