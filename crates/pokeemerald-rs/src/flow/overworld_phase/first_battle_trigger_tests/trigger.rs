@@ -307,7 +307,7 @@ fn after_the_battle_ends_the_trigger_tile_cannot_refire() {
         "setup: the conclusion's warp must have landed in the lab"
     );
 
-    let mut phase = route_101_trigger_phase(PlayerState::new(
+    let mut phase = route_101_trigger_phase_with_lead(PlayerState::new(
         (tx - 1, ty),
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,
@@ -334,6 +334,32 @@ fn after_the_battle_ends_the_trigger_tile_cannot_refire() {
         rng_before,
         "ordinary ground (this synthetic room's own default) draws nothing either way"
     );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(concluded_state),
+        "a refused refire must leave VAR_ROUTE101_STATE at its terminal value"
+    );
+}
+
+/// Control for the refire regression: the same lead-holding fixture starts the battle at the ready state.
+#[test]
+fn the_lead_holding_fixture_starts_the_battle_while_the_trigger_is_ready() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase_with_lead(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    let rng_before = phase.rng.state();
+    walk_one_tile_east(&mut phase);
+
+    assert!(phase.is_first_battle_active());
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(2),
+        "a fired trigger consumes the rescue"
+    );
+    assert_ne!(phase.rng.state(), rng_before, "the started battle draws");
 }
 
 /// The trigger draws from the phase's shared RNG exactly as a direct
