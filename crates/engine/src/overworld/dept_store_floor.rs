@@ -11,14 +11,16 @@ const FLOOR_MAP_NUMS_BY_ROW: [i8; 5] = [20, 19, 18, 17, 16];
 const FALLBACK_ROW: u16 = 0;
 
 /// The multichoice row to highlight for the saved dynamic warp.
+#[must_use]
 pub fn default_floor_choice(dynamic_warp: &WarpData) -> u16 {
     if dynamic_warp.map_group != DEPT_STORE_MAP_GROUP {
         return FALLBACK_ROW;
     }
     FLOOR_MAP_NUMS_BY_ROW
         .iter()
-        .position(|&map_num| map_num == dynamic_warp.map_num)
-        .map_or(FALLBACK_ROW, |row| row as u16)
+        .zip(0..)
+        .find_map(|(&map_num, row)| (map_num == dynamic_warp.map_num).then_some(row))
+        .unwrap_or(FALLBACK_ROW)
 }
 
 #[cfg(test)]
