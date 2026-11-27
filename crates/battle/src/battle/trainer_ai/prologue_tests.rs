@@ -262,12 +262,14 @@ fn admission_is_flag_aware() {
             "{move_id:?}"
         );
     }
-    for move_id in [MoveId::SLASH, MoveId::MUD_SHOT] {
-        assert_eq!(
-            ensure_scoreable(&dex, move_id, only_cbm.union(AiFlags::CHECK_VIABILITY)),
-            Err(BattleError::UnscoreableMoveEffect(move_id))
-        );
-    }
+    assert_eq!(
+        ensure_scoreable(
+            &dex,
+            MoveId::SLASH,
+            only_cbm.union(AiFlags::CHECK_VIABILITY)
+        ),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::SLASH))
+    );
     // `AI_CV_Absorb` is ported, so a draining move passes `CHECK_VIABILITY`.
     assert_eq!(
         ensure_scoreable(

@@ -465,6 +465,24 @@ pub struct TrainerDefeatSpeechPlan {
     pub speeches: Vec<TrainerDefeatSpeechRootPlan>,
 }
 
+/// One sight-trainer intro speech's root, owned.
+#[derive(Debug, Clone)]
+pub struct SightTrainerIntroSpeechRootPlan {
+    /// The object-event script, as `assets::SIGHT_TRAINER_INTRO_SCRIPTS` spells it.
+    pub symbol: &'static str,
+    /// The GBA bus address of the speech's token stream.
+    pub addr: u32,
+    /// The GBA bus address of the `trainerbattle` command that names the speech.
+    pub script: u32,
+}
+
+/// The sight-trainer intro-speech roots, owned.
+#[derive(Debug, Clone)]
+pub struct SightTrainerIntroSpeechPlan {
+    /// Every speech, in `assets::SIGHT_TRAINER_INTRO_SCRIPTS` order.
+    pub speeches: Vec<SightTrainerIntroSpeechRootPlan>,
+}
+
 /// The trainer class-name table's root, owned.
 #[derive(Debug, Clone)]
 pub struct TrainerClassNamePlan {
@@ -708,6 +726,8 @@ pub struct ProfilePlan {
     pub field_messages: FieldMessagePlan,
     /// The trainer defeat-speech table.
     pub trainer_defeat_speeches: TrainerDefeatSpeechPlan,
+    /// The sight-trainer intro-speech table.
+    pub sight_trainer_intro_speeches: SightTrainerIntroSpeechPlan,
     /// The trainer class display-name table.
     pub trainer_class_names: TrainerClassNamePlan,
     /// The battle-animation program catalog.
