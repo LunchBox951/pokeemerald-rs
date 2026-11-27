@@ -372,7 +372,12 @@ fn stat_labels_are_admitted_only_where_the_other_scripts_are_ported() {
             Err(BattleError::UnscoreableMoveEffect(move_id))
         };
         assert_eq!(setup, expected_setup, "{move_id:?} setup");
+        let has_two_stage_drop_handler = matches!(
+            dex.move_data(move_id).unwrap().effect,
+            MoveEffect::ATTACK_DOWN_2 | MoveEffect::DEFENSE_DOWN_2
+        );
         let expected_viability = if has_dedicated_stat_drop_handler
+            || has_two_stage_drop_handler
             || matches!(move_id, MoveId::DEFENSE_CURL | MoveId::AGILITY)
         {
             Ok(())
