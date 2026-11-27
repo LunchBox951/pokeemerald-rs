@@ -1,6 +1,7 @@
 //! On-foot movement, map and object queries, collision, warps, wild encounters, trainer sight, and background-event targets.
 
 pub mod background_event;
+pub mod backup_map;
 pub mod collision;
 pub mod direction;
 pub mod interaction;
@@ -17,6 +18,10 @@ pub mod wild_encounter;
 
 pub use background_event::{
     resolve_background_event, BackgroundEventTarget, HiddenItemContext, SecretBaseContext,
+};
+pub use backup_map::{
+    connection_coordinates, last_connection_cell, within_backup_band, BACKUP_MAP_MAX_PAST_EAST,
+    BACKUP_MAP_MAX_PAST_SOUTH, BACKUP_MAP_MIN, MAP_OFFSET,
 };
 pub use collision::{
     directionally_impassable, elevation_mismatch, elevations_compatible, Collision,

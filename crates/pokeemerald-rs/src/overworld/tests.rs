@@ -2070,7 +2070,7 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     // (`super::viewport`'s module docs), so it samples world rows `-4..=6` (the last is the resting-scroll row).
     // Screen rows 0..=3 (world rows `-4..=-1`) lie north of Littleroot's
     // y == 0 edge, in the connection's territory, and all are inside
-    // `viewport::within_backup_map_band`'s `y >= -7` cover. `RESTING_SCROLL_Y`'s
+    // `within_backup_band`'s `y >= -7` cover. `RESTING_SCROLL_Y`'s
     // 8px scroll shifts them to screen pixel rows `0..56`, not `0..64`:
     // `(56 + 8) / 16 == 4` is the first screen row that samples world row 0,
     // Littleroot's own interior.

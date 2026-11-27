@@ -32454,7 +32454,7 @@
           "status": "stubbed"
         },
         "UpdateTallGrassFieldEffect": {
-          "reason": "field_effect_helpers.c:316-355. TallGrassEffects::advance runs the callback ahead of the animation step as AnimateSprites does (sprite.c:308-320): remove when the tile is no longer MB_TALL_GRASS, or once the owner's current and previous tiles both left it (each effect against its own Owner's tiles) or the owner cannot be found, as TryGetObjectEventIdByLocalIdAndMap fails for a removed object (:332-337) and the animation had already ended; the first-command subpriority bias; on-screen culling as UpdateObjectEventSpriteInvisibility. A connection crossing (:325-330) carries the live effects of the player and of every object the crossing keeps into the entered scene (OverworldScene::carry_tall_grass_from): the tile is translated by the crossing's departed-to-entered offset, and animation, moved-away, elevation and depth state are kept, so the effect ends by the callback's own three conditions rather than at the scene swap. Each effect's tile is read through the entered map's backup band, as MapGridGetMetatileBehaviorAt reads gBackupMapLayout (OverworldScene::advance_tall_grass, MapRuntime::metatile_behavior_in_band): a carried object's effect on a connected-layout band tile lasts by the entered map's tileset decoding of the neighbour's metatile id. The departed tile's behaviour, read from the departed scene as the effect crosses and kept with it, is only the fallback for a band cell no connection covers, and an effect whose translated tile lies outside the entered map's backup band (viewport::within_backup_map_band) is dropped. An object-owned effect is keyed by its owner's LiveObjectEvent::id and is dropped with an owner the crossing did not keep; the owner's ground-effect pass crosses with it, so the entered scene runs no second spawn-time pass. Not modelled: the camera saved-view cells upstream also copies into the entered map's backup grid (fieldmap.c:473,617).",
+          "reason": "field_effect_helpers.c:316-355. TallGrassEffects::advance runs the callback ahead of the animation step as AnimateSprites does (sprite.c:308-320): remove when the tile is no longer MB_TALL_GRASS, or once the owner's current and previous tiles both left it (each effect against its own Owner's tiles) or the owner cannot be found, as TryGetObjectEventIdByLocalIdAndMap fails for a removed object (:332-337) and the animation had already ended; the first-command subpriority bias; on-screen culling as UpdateObjectEventSpriteInvisibility. A connection crossing (:325-330) carries the live effects of the player and of every object the crossing keeps into the entered scene (OverworldScene::carry_tall_grass_from): the tile is translated by the crossing's departed-to-entered offset, and animation, moved-away, elevation and depth state are kept, so the effect ends by the callback's own three conditions rather than at the scene swap. Each effect's tile is read through the entered map's backup band, as MapGridGetMetatileBehaviorAt reads gBackupMapLayout (OverworldScene::advance_tall_grass, MapRuntime::metatile_behavior_in_band): a carried object's effect on a connected-layout band tile lasts by the entered map's tileset decoding of the neighbour's metatile id. The departed tile's behaviour, read from the departed scene as the effect crosses and kept with it, is only the fallback for a band cell no connection covers, and an effect whose translated tile lies outside the entered map's backup band (engine::overworld::within_backup_band) is dropped. An object-owned effect is keyed by its owner's LiveObjectEvent::id and is dropped with an owner the crossing did not keep; the owner's ground-effect pass crosses with it, so the entered scene runs no second spawn-time pass. Not modelled: the camera saved-view cells upstream also copies into the entered map's backup grid (fieldmap.c:473,617).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/grass.rs",
           "spec": "S-5",
           "status": "stubbed"
@@ -32761,32 +32761,32 @@
     "src/fieldmap.c": {
       "artifacts": {
         "FillConnection": {
-          "reason": "The shared rectangular-copy helper collapses into connected_cell_at's own LayoutGrid::cell_at lookup once its four callers' own coordinate math is inlined per-direction; this port resolves one cell on demand rather than copying a whole strip into a backing buffer, but only within the exact extents that buffer covers (viewport::within_backup_map_band).",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "reason": "The shared rectangular-copy helper collapses into connection_coordinates plus the caller's LayoutGrid::cell_at lookup once the four callers' coordinate math is one match; this port resolves one cell on demand rather than copying a whole strip into a backing buffer, within the exact extents that buffer covers (within_backup_band).",
+          "rust_target": "crates/engine/src/overworld/backup_map.rs",
           "spec": "I-4",
           "status": "rewritten"
         },
         "FillEastConnection": {
-          "reason": "East-edge offset math (target_x = x - width, target_y = y - offset) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own east cover -- upstream's MAP_OFFSET + 1 copy width (a fixed-buffer sizing artifact of MAP_OFFSET_W's odd total, include/fieldmap.h:19) reproduced as layout-local x <= width + 7 (issue #253).",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "reason": "East-edge offset math (target_x = x - width, target_y = y - offset) in connection_coordinates, bounded to gBackupMapLayout's own east cover -- upstream's MAP_OFFSET + 1 copy width (a fixed-buffer sizing artifact of MAP_OFFSET_W's odd total, include/fieldmap.h:19) reproduced as layout-local x <= width + 7.",
+          "rust_target": "crates/engine/src/overworld/backup_map.rs",
           "spec": "I-4",
           "status": "rewritten"
         },
         "FillNorthConnection": {
-          "reason": "North-edge offset math (target_x = x - offset, target_y = connected_height + y) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own MAP_OFFSET rows north of the layout (layout-local y >= -7), same shape as FillSouthConnection's own ledger entry.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "reason": "North-edge offset math (target_x = x - offset, target_y = connected_height + y) in connection_coordinates, bounded to gBackupMapLayout's own MAP_OFFSET rows north of the layout (layout-local y >= -7), same shape as FillSouthConnection's own ledger entry.",
+          "rust_target": "crates/engine/src/overworld/backup_map.rs",
           "spec": "I-4",
           "status": "rewritten"
         },
         "FillSouthConnection": {
-          "reason": "South-edge offset math (target_x = x - offset, target_y = y - height) re-implemented in connected_cell_at, resolved on demand instead of preloaded, and bounded to the same rows gBackupMapLayout covers -- layout-local y <= height + 6, MAP_OFFSET_H's even total (issue #253).",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "reason": "South-edge offset math (target_x = x - offset, target_y = y - height) in connection_coordinates, resolved on demand instead of preloaded, and bounded to the same rows gBackupMapLayout covers -- layout-local y <= height + 6, MAP_OFFSET_H's even total.",
+          "rust_target": "crates/engine/src/overworld/backup_map.rs",
           "spec": "I-4",
           "status": "rewritten"
         },
         "FillWestConnection": {
-          "reason": "West-edge offset math (target_x = connected_width + x, target_y = y - offset) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own MAP_OFFSET columns west of the layout (layout-local x >= -7); past that the border block renders, exactly as upstream.",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "reason": "West-edge offset math (target_x = connected_width + x, target_y = y - offset) in connection_coordinates, bounded to gBackupMapLayout's own MAP_OFFSET columns west of the layout (layout-local x >= -7); past that the border block renders, exactly as upstream.",
+          "rust_target": "crates/engine/src/overworld/backup_map.rs",
           "spec": "I-4",
           "status": "rewritten"
         },
@@ -32809,8 +32809,8 @@
           "status": "rewritten"
         },
         "InitBackupMapLayoutConnections": {
-          "reason": "Per-connection dispatch to the four Fill*Connection resolvers re-implemented as connected_cell_at's single match over ConnectionView::direction, called from cell_at on every out-of-bounds viewport sample instead of once per map load into a backing buffer; declaration-order overwrite and the buffer's own coverage band are both preserved (issue #253).",
-          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "reason": "Per-connection dispatch to the four Fill*Connection resolvers re-implemented as connection_coordinates' single match, with last_connection_cell keeping the declaration-order overwrite; resolved on demand for each viewport sample and object-event terrain query instead of once per map load into a backing buffer, and bounded by within_backup_band.",
+          "rust_target": "crates/engine/src/overworld/backup_map.rs",
           "spec": "I-4",
           "status": "rewritten"
         },
