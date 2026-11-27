@@ -253,14 +253,25 @@ impl OverworldPhase {
                 }
             }
             BagTrip::Browsing(screen) => Some(self.browse(screen, buttons, repeated)),
-            BagTrip::Closing(screen) => Some(BagTrip::BagOut {
-                screen,
-                fade: black_fade_out(),
-            }),
-            BagTrip::BagOut { screen, mut fade } => {
+            // The closed bag keeps animating under its fade out, as
+            // `CB2_BagMenuRun` still runs `AnimateSprites` and the arrows'
+            // tasks until `Task_CloseBagMenu` frees them
+            // (`src/item_menu.c:643-649,1074-1099`); it hears no input.
+            BagTrip::Closing(mut screen) => {
+                screen.tick_repeated(ButtonState::default(), Buttons::NONE);
+                Some(BagTrip::BagOut {
+                    screen,
+                    fade: black_fade_out(),
+                })
+            }
+            BagTrip::BagOut {
+                mut screen,
+                mut fade,
+            } => {
                 if fade.is_done() {
                     Some(self.reload_field())
                 } else {
+                    screen.tick_repeated(ButtonState::default(), Buttons::NONE);
                     fade.update();
                     Some(BagTrip::BagOut { screen, fade })
                 }

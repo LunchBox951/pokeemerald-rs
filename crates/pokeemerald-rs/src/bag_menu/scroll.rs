@@ -66,6 +66,12 @@ impl ArrowClock {
         }
     }
 
+    /// The samples taken so far, for tests that watch the pair animate.
+    #[cfg(test)]
+    pub(super) const fn samples(self) -> Option<u8> {
+        self.samples
+    }
+
     fn advance(&mut self) {
         self.samples = Some(self.samples.map_or(0, |taken| taken.wrapping_add(1)));
     }

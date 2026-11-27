@@ -309,6 +309,18 @@ impl BagScreen {
         outcome
     }
 
+    /// The animations' clocks: the bag picture's angle and the list's and
+    /// pocket-switch arrow pairs' samples, for tests that watch the screen
+    /// animate.
+    #[cfg(test)]
+    pub(crate) fn animation_clocks(&self) -> (u8, Option<u8>, Option<u8>) {
+        (
+            self.shake.angle(),
+            self.arrows.samples(),
+            self.switch_arrows.samples(),
+        )
+    }
+
     fn handle_buttons(&mut self, buttons: ButtonState, repeated: Buttons) -> BagScreenTick {
         if let Some(result) = self.done {
             return BagScreenTick::Closed(result);

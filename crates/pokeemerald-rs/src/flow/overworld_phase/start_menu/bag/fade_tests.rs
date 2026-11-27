@@ -25,7 +25,7 @@ use rendering::{NormalPaletteFade, PaletteFadeTarget, PaletteStage};
 use super::test_support::{
     fade_in_after, fade_out_after, faded, is_black, packed, pixel, Session, FADE_CALLS,
 };
-use super::OverworldPhase;
+use super::{BagTrip, OverworldPhase};
 use crate::bag_menu::host_fixture;
 use crate::start_menu::StartMenuItem;
 
@@ -616,4 +616,57 @@ fn a_held_l_under_l_equals_a_counts_the_choosing_frame() {
     assert!(s.phase().bag_trip_active(), "A on BAG starts the trip");
     let moved = frames_the_list_moved(&mut s, held, |_| Buttons::NONE, 60);
     assert_eq!(moved, [49, 54, 59]);
+}
+
+/// The closed bag's clocks, while the trip still holds the screen.
+fn closing_clocks(s: &Session) -> Option<(u8, Option<u8>, Option<u8>)> {
+    match s.phase().field_bag.trip.as_ref()? {
+        BagTrip::Closing(screen) | BagTrip::BagOut { screen, .. } => {
+            Some(screen.animation_clocks())
+        }
+        _ => None,
+    }
+}
+
+/// `CB2_BagMenuRun` runs the tasks and `AnimateSprites` on every frame of
+/// the bag's fade out, and only `Task_CloseBagMenu` removes the arrows once
+/// it has finished (`src/item_menu.c:643-649,1074-1099,1250-1259`). B right
+/// after a cursor move leaves the bag picture mid-shake and the
+/// pocket-switch arrows up; both keep moving until the screen is dropped.
+#[test]
+fn the_closed_bag_keeps_animating_through_its_fade_out() {
+    let mut s = bag_session("bag-animates-fade-out");
+    s.choose_bag();
+    s.wait_for_the_bag();
+    s.frame(Buttons::DOWN);
+    s.frame(Buttons::NONE);
+    s.frame(Buttons::B);
+    let mut clocks = vec![closing_clocks(&s).expect("B closed the bag")];
+    while let Some(now) = {
+        s.frame(Buttons::NONE);
+        closing_clocks(&s)
+    } {
+        clocks.push(now);
+    }
+    assert!(
+        clocks.len() > 10,
+        "the fade out runs for {} frames",
+        clocks.len()
+    );
+
+    let switch: Vec<_> = clocks.iter().map(|(_, _, switch)| *switch).collect();
+    assert!(
+        switch.iter().all(Option::is_some),
+        "the switch arrows stay up"
+    );
+    assert!(
+        switch.windows(2).all(|pair| pair[0] != pair[1]),
+        "the switch arrows move on every frame: {switch:?}"
+    );
+    let angles: Vec<_> = clocks.iter().map(|(angle, _, _)| *angle).collect();
+    assert_ne!(
+        angles[0], 0,
+        "the bag picture is mid-shake when B closes it"
+    );
+    assert_eq!(*angles.last().unwrap(), 0, "the shake ends under the fade");
 }
