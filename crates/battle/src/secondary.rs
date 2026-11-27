@@ -17,7 +17,9 @@
 //! `:2528-2544`), [`EFFECT_SPEED_DOWN_HIT`] (the `MOVE_EFFECT_SPD_MINUS_1`
 //! case, `:2666-2683`), [`EFFECT_ACCURACY_DOWN_HIT`] (its
 //! `MOVE_EFFECT_ACC_MINUS_1` sibling) and [`EFFECT_THAW_HIT`] (the
-//! `STATUS1_BURN` case, `:2341-2379`) are the five ported trampolines.
+//! `STATUS1_BURN` case, `:2341-2379`), [`EFFECT_ATTACK_DOWN_HIT`] (its
+//! `MOVE_EFFECT_ATK_MINUS_1` sibling) and the two flinch wrappers are the
+//! ported trampolines.
 
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
@@ -26,11 +28,14 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::leech_seed::is_leech_seed_effect;
 use crate::pokemon::BattlePokemon;
+use crate::stat_change::ChangedStat;
 
 /// Move effect shared by Poison Sting, Smog, Sludge, and Sludge Bomb.
 pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect::POISON_HIT;
 /// Move effect shared by Constrict, Bubble, Bubble Beam, Icy Wind and Mud Shot.
 pub const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect::SPEED_DOWN_HIT;
+/// Move effect of Aurora Beam.
+pub const EFFECT_ATTACK_DOWN_HIT: MoveEffect = MoveEffect::ATTACK_DOWN_HIT;
 /// Move effect shared by Mud-Slap and Octazooka.
 pub const EFFECT_ACCURACY_DOWN_HIT: MoveEffect = MoveEffect::ACCURACY_DOWN_HIT;
 /// Move effect shared by Confusion and Psybeam.
@@ -101,7 +106,7 @@ pub const SECONDARY_TRAMPOLINES: [Trampoline; 31] = [
     chance_on_target(MoveEffect::PAY_DAY, "MOVE_EFFECT_PAYDAY"),
     chance_on_target(MoveEffect::TRI_ATTACK, "MOVE_EFFECT_TRI_ATTACK"),
     chance_on_target(MoveEffect::TRAP, "MOVE_EFFECT_WRAP"),
-    chance_on_target(MoveEffect::ATTACK_DOWN_HIT, "MOVE_EFFECT_ATK_MINUS_1"),
+    chance_on_target(EFFECT_ATTACK_DOWN_HIT, "MOVE_EFFECT_ATK_MINUS_1"),
     chance_on_target(MoveEffect::DEFENSE_DOWN_HIT, "MOVE_EFFECT_DEF_MINUS_1"),
     chance_on_target(EFFECT_SPEED_DOWN_HIT, "MOVE_EFFECT_SPD_MINUS_1"),
     chance_on_target(
@@ -158,7 +163,49 @@ pub fn is_confuse_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_CONFUSE_HIT
 }
 
-/// Returns whether `effect` is [`EFFECT_SPEED_DOWN_HIT`], the third
+/// One [`SECONDARY_TRAMPOLINES`] entry whose secondary lowers one stage of a
+/// single target stat (`MOVE_EFFECT_*_MINUS_1`,
+/// `battle_script_commands.c:2665-2684`).
+///
+/// A further stat is one more row here, one more [`SecondaryApplication`]
+/// variant, and the variant's name in `Battle::apply_hit_secondary_effect`'s
+/// stat-drop arm.
+struct StatDropHit {
+    effect: MoveEffect,
+    stat: ChangedStat,
+    application: SecondaryApplication,
+}
+
+const STAT_DROP_HITS: [StatDropHit; 3] = [
+    StatDropHit {
+        effect: EFFECT_ATTACK_DOWN_HIT,
+        stat: ChangedStat::Attack,
+        application: SecondaryApplication::AttackDown,
+    },
+    StatDropHit {
+        effect: EFFECT_SPEED_DOWN_HIT,
+        stat: ChangedStat::Speed,
+        application: SecondaryApplication::SpeedDown,
+    },
+    StatDropHit {
+        effect: EFFECT_ACCURACY_DOWN_HIT,
+        stat: ChangedStat::Accuracy,
+        application: SecondaryApplication::AccuracyDown,
+    },
+];
+
+fn stat_drop_hit(effect: MoveEffect) -> Option<&'static StatDropHit> {
+    STAT_DROP_HITS.iter().find(|row| row.effect == effect)
+}
+
+/// Returns whether `effect` is [`EFFECT_ATTACK_DOWN_HIT`], a
+/// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
+#[must_use]
+pub fn is_attack_down_hit_effect(effect: MoveEffect) -> bool {
+    effect == EFFECT_ATTACK_DOWN_HIT
+}
+
+/// Returns whether `effect` is [`EFFECT_SPEED_DOWN_HIT`], a
 /// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
 #[must_use]
 pub fn is_speed_down_hit_effect(effect: MoveEffect) -> bool {
@@ -194,7 +241,7 @@ fn flinch_can_land(defender: &BattlePokemon) -> bool {
     )
 }
 
-/// Returns whether `effect` is [`EFFECT_ACCURACY_DOWN_HIT`], the fourth
+/// Returns whether `effect` is [`EFFECT_ACCURACY_DOWN_HIT`], a
 /// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
 #[must_use]
 pub fn is_accuracy_down_hit_effect(effect: MoveEffect) -> bool {
@@ -239,26 +286,29 @@ fn status_may_clear(defender: &BattlePokemon) -> bool {
     status.is_healthy() || status.is_asleep() || status.is_frozen()
 }
 
-/// `MOVE_EFFECT_SPD_MINUS_1`'s silent guards on a secondary landing: Clear
-/// Body and White Smoke refuse any stat drop that is not `certain`, and Shield
-/// Dust refuses it when `ChangeStatBuffs` runs with `flags == 0`, which is how
+/// A `MOVE_EFFECT_*_MINUS_1` secondary's silent guards on a landing: Clear Body
+/// and White Smoke refuse any stat drop that is not `certain`, and Shield Dust
+/// refuses it when `ChangeStatBuffs` runs with `flags == 0`, which is how
 /// `SetMoveEffect` calls it (`battle_script_commands.c:6987-7007,7035-7037`).
-/// Each leaves the defender unchanged with no message, unlike the
-/// `STAT_CHANGE_ALLOW_PTR` path a stat-lowering move takes.
+/// Keen Eye additionally refuses an Accuracy drop and Hyper Cutter an Attack
+/// drop, each only for its own stat (`:7009-7033`). Every guard leaves the
+/// defender unchanged with no message, unlike the `STAT_CHANGE_ALLOW_PTR` path
+/// a stat-lowering move takes.
 #[must_use]
-fn speed_drop_can_land(defender: &BattlePokemon) -> bool {
-    !matches!(
-        defender.ability(),
-        AbilityId::CLEAR_BODY | AbilityId::WHITE_SMOKE | AbilityId::SHIELD_DUST
-    )
-}
-
-/// `MOVE_EFFECT_ACC_MINUS_1`'s silent guards on a secondary landing: the same
-/// three as [`speed_drop_can_land`], plus Keen Eye, which refuses an Accuracy
-/// drop that is not `certain` (`battle_script_commands.c:6987-7020,7035-7037`).
-#[must_use]
-fn accuracy_drop_can_land(defender: &BattlePokemon) -> bool {
-    speed_drop_can_land(defender) && defender.ability() != AbilityId::KEEN_EYE
+fn stat_drop_can_land(stat: ChangedStat, defender: &BattlePokemon) -> bool {
+    let ability = defender.ability();
+    // `None` is "no own-stat guard"; `AbilityId::NONE` is a real value a
+    // defender can hold (`ABILITY_NONE`) and must never match it.
+    let own_stat_guard = match stat {
+        ChangedStat::Accuracy => Some(AbilityId::KEEN_EYE),
+        ChangedStat::Attack => Some(AbilityId::HYPER_CUTTER),
+        _ => None,
+    };
+    own_stat_guard != Some(ability)
+        && !matches!(
+            ability,
+            AbilityId::CLEAR_BODY | AbilityId::WHITE_SMOKE | AbilityId::SHIELD_DUST
+        )
 }
 
 /// `SetMoveEffect`'s silent `STATUS1_POISON` guards
@@ -478,7 +528,9 @@ pub fn ensure_admissible(
     if is_thaw_hit_effect(mv.effect) {
         return ensure_thaw_hit_admissible(mv.secondary_effect_chance, attacker, defender);
     }
-    let status_could_ever_land = if is_confuse_hit_effect(mv.effect) {
+    let status_could_ever_land = if let Some(row) = stat_drop_hit(mv.effect) {
+        stat_drop_can_land(row.stat, defender)
+    } else if is_confuse_hit_effect(mv.effect) {
         confuse_hit_could_ever_land(defender)
     } else if is_flinch_hit_effect(mv.effect) {
         // The defender's current ability is read, so a Trace copy of Shield
@@ -487,8 +539,7 @@ pub fn ensure_admissible(
         // are execution-time facts deliberately not read.
         flinch_can_land(defender)
     } else {
-        is_speed_down_hit_effect(mv.effect) && speed_drop_can_land(defender)
-            || is_accuracy_down_hit_effect(mv.effect) && accuracy_drop_can_land(defender)
+        false
     };
     if status_could_ever_land
         && mv.secondary_effect_chance < GUARANTEED_EFFECT_CHANCE
@@ -580,6 +631,24 @@ pub enum SecondaryApplication {
     /// and Shield Dust never reach this point
     /// (`battle_script_commands.c:6987-7037`).
     AccuracyDown,
+    /// The caller must lower the defender's Attack stage by one, subject to
+    /// the same post-damage faint check and silent stage floor as
+    /// [`SecondaryApplication::SpeedDown`]. Hyper Cutter, Clear Body, White
+    /// Smoke and Shield Dust never reach this point
+    /// (`battle_script_commands.c:6987-7037`).
+    AttackDown,
+}
+
+impl SecondaryApplication {
+    /// The stat a stage-drop application lowers by one, or `None` for every
+    /// other application.
+    #[must_use]
+    pub fn dropped_stat(self) -> Option<ChangedStat> {
+        STAT_DROP_HITS
+            .iter()
+            .find(|row| row.application == self)
+            .map(|row| row.stat)
+    }
 }
 
 /// Spends the post-damage effect-chance draw for `move_id`.
@@ -593,7 +662,8 @@ pub enum SecondaryApplication {
 /// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
 /// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
 /// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`],
-/// [`EFFECT_SPEED_DOWN_HIT`], [`EFFECT_ACCURACY_DOWN_HIT`], [`EFFECT_THAW_HIT`],
+/// [`EFFECT_SPEED_DOWN_HIT`], [`EFFECT_ACCURACY_DOWN_HIT`],
+/// [`EFFECT_ATTACK_DOWN_HIT`], [`EFFECT_THAW_HIT`],
 /// [`MoveEffect::FLINCH_HIT`] or [`MoveEffect::FLINCH_MINIMIZE_HIT`], or
 /// Struggle's certain recoil effect, would apply,
 /// or [`BattleError::UnsupportedMoveType`] for an [`EFFECT_POISON_HIT`] move
@@ -643,9 +713,9 @@ pub fn spend_effect_chance_draw(
         });
     }
 
-    if is_speed_down_hit_effect(mv.effect) {
-        return Ok(if speed_drop_can_land(defender) {
-            SecondaryApplication::SpeedDown
+    if let Some(row) = stat_drop_hit(mv.effect) {
+        return Ok(if stat_drop_can_land(row.stat, defender) {
+            row.application
         } else {
             SecondaryApplication::None
         });
@@ -654,14 +724,6 @@ pub fn spend_effect_chance_draw(
     if is_flinch_hit_effect(mv.effect) {
         return Ok(if flinch_can_land(defender) {
             SecondaryApplication::Flinch
-        } else {
-            SecondaryApplication::None
-        });
-    }
-
-    if is_accuracy_down_hit_effect(mv.effect) {
-        return Ok(if accuracy_drop_can_land(defender) {
-            SecondaryApplication::AccuracyDown
         } else {
             SecondaryApplication::None
         });
@@ -726,3 +788,7 @@ mod thaw_hit_tests;
 #[cfg(test)]
 #[path = "secondary/accuracy_down_tests.rs"]
 mod accuracy_down_tests;
+
+#[cfg(test)]
+#[path = "secondary/attack_down_tests.rs"]
+mod attack_down_tests;
