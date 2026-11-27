@@ -48,6 +48,7 @@ mod party_menu;
 mod plan;
 mod poke_ball;
 mod search;
+mod sight_trainer_intro_speeches;
 mod sprites;
 mod starter_chooser;
 mod text_window;
@@ -184,6 +185,7 @@ fn locate_profile(
         battle_messages: battle_messages::locate(ctx, lines)?,
         field_messages: field_messages::locate(ctx, lines)?,
         trainer_defeat_speeches: trainer_defeat_speeches::locate(ctx, lines)?,
+        sight_trainer_intro_speeches: sight_trainer_intro_speeches::locate(ctx, lines)?,
         trainer_class_names: trainer_class_names::locate(ctx, lines)?,
         battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,

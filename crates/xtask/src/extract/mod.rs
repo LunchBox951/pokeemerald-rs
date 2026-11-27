@@ -97,6 +97,7 @@
 //!   `pc-wallpaper/<style>/palette/{frame,background}`
 //! - `field-message/table`
 //! - `trainer-defeat-speech/table`
+//! - `sight-trainer-intro-speech/table`
 //! - `trainer-class-name/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
 //! - `party-menu/{image,palette,raw}/<name>`
@@ -144,6 +145,7 @@ mod pokedex;
 mod pokedex_graphics;
 mod publish;
 pub(crate) mod scope;
+mod sight_trainer_intro_speech;
 mod sprites;
 mod starter_chooser;
 mod text_source;
@@ -243,6 +245,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     field_message::extract_field_message(&upstream, &mut writer)?;
     trainer_defeat_speech::extract_trainer_defeat_speech(&upstream, &mut writer)?;
+    sight_trainer_intro_speech::extract_sight_trainer_intro_speech(&upstream, &mut writer)?;
     trainer_class_names::extract_trainer_class_names(&upstream, &mut writer)?;
     let catalog = battle_anim::extract_battle_anim(&upstream, &mut writer)?;
     battle_effect::extract_battle_effects(&upstream, &catalog, &mut writer)?;

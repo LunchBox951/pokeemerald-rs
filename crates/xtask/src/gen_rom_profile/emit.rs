@@ -9,7 +9,7 @@ use super::plan::{
     BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan, BattlerPlan, BlobPlan,
     CryPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, MapLayoutPlan, NamingScreenPlan,
     OpeningScenePlan, PalettePlan, PartyMenuPlan, ProfilePlan, ReportLine, Resolution,
-    StarterChooserPlan, TileAnimPlan, TilesetPlan,
+    SightTrainerIntroSpeechPlan, StarterChooserPlan, TileAnimPlan, TilesetPlan,
 };
 use super::plan::{
     TrainerBattlerPlan, TrainerClassNamePlan, TrainerDefeatSpeechPlan, TrainerFrontPlan,
@@ -74,6 +74,7 @@ fn header(sha1: &str, lines: &[ReportLine]) -> String {
 //! machine derived and checked it; change the generator and regenerate.
 
 use crate::reader::GbaPtr;
+use crate::roots::SightTrainerIntroSpeechRoot;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
@@ -141,6 +142,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     battle_message_roots(&mut out, &plan.battle_messages);
     field_message_roots(&mut out, &plan.field_messages);
     trainer_defeat_speech_roots(&mut out, &plan.trainer_defeat_speeches);
+    sight_trainer_intro_speech_roots(&mut out, &plan.sight_trainer_intro_speeches);
     trainer_class_name_roots(&mut out, &plan.trainer_class_names);
     battle_anim_roots(&mut out, &plan.battle_anims);
 
@@ -516,6 +518,20 @@ fn trainer_defeat_speech_roots(out: &mut String, speeches: &TrainerDefeatSpeechP
             "        TrainerDefeatSpeechRoot {{ symbol: {:?}, addr: {}, script: {script} }},",
             speech.symbol,
             gba_ptr_expression(speech.addr)
+        );
+    }
+    let _ = writeln!(out, "    ],");
+}
+
+fn sight_trainer_intro_speech_roots(out: &mut String, speeches: &SightTrainerIntroSpeechPlan) {
+    let _ = writeln!(out, "    sight_trainer_intro_speeches: &[");
+    for speech in &speeches.speeches {
+        let _ = writeln!(
+            out,
+            "        SightTrainerIntroSpeechRoot {{ symbol: {:?}, addr: {}, script: {} }},",
+            speech.symbol,
+            gba_ptr_expression(speech.addr),
+            gba_ptr_expression(speech.script)
         );
     }
     let _ = writeln!(out, "    ],");
@@ -969,9 +985,10 @@ mod bag_field_tests {
     use crate::gen_rom_profile::plan::{
         AudioPlan, BagPlan, BattleAnimationPlan, BattleInterfacePlan, BattleMessagePlan,
         BattlerPlan, BlobPlan, EvolutionScenePlan, FieldMessagePlan, ImagePlan, InterfacePlan,
-        NamingScreenPlan, OpeningScenePlan, PalettePlan, PartyMenuPlan, ProfilePlan, SpritePlan,
-        StarterChooserPlan, TextWindowPlan, TitleScreenPlan, TrainerBattlerPlan,
-        TrainerClassNamePlan, TrainerDefeatSpeechPlan, TrainerFrontPlan,
+        NamingScreenPlan, OpeningScenePlan, PalettePlan, PartyMenuPlan, ProfilePlan,
+        SightTrainerIntroSpeechPlan, SpritePlan, StarterChooserPlan, TextWindowPlan,
+        TitleScreenPlan, TrainerBattlerPlan, TrainerClassNamePlan, TrainerDefeatSpeechPlan,
+        TrainerFrontPlan,
     };
     use rom_import::Encoding;
 
@@ -1397,6 +1414,25 @@ mod bag_field_tests {
         assert!(!module.contains("OpeningSceneRoots::NONE"), "{module}");
     }
 
+    fn assert_bag_roots(module: &str) {
+        assert!(module.contains("    bag: BagRoots {"), "{module}");
+        assert!(
+            module.contains("ImageRoot { id: \"bag/image/hm\""),
+            "{module}"
+        );
+        assert!(
+            module.contains(
+                "PaletteRoot { id: \"bag/item-icon/palette/potion\", addr: GbaPtr::at(0x0813_0000), color_count: 16, encoding: Encoding::Lz77 }"
+            ),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"bag/raw/menu\", addr: GbaPtr::at(0x0814_0000), encoding: Encoding::Lz77, len: 2048 }"),
+            "{module}"
+        );
+        assert!(!module.contains("BagRoots::NONE"), "{module}");
+    }
+
     #[test]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
@@ -1438,6 +1474,7 @@ mod bag_field_tests {
             },
             field_messages: FieldMessagePlan { messages: vec![] },
             trainer_defeat_speeches: TrainerDefeatSpeechPlan { speeches: vec![] },
+            sight_trainer_intro_speeches: SightTrainerIntroSpeechPlan { speeches: vec![] },
             trainer_class_names: TrainerClassNamePlan { addr: base },
             battle_anims: BattleAnimationPlan {
                 tables: [base; 4],
@@ -1483,22 +1520,7 @@ mod bag_field_tests {
         assert_down_arrow_root(&module);
         assert_naming_roots(&module);
         assert_party_menu_roots(&module);
-        assert!(module.contains("    bag: BagRoots {"), "{module}");
-        assert!(
-            module.contains("ImageRoot { id: \"bag/image/hm\""),
-            "{module}"
-        );
-        assert!(
-            module.contains(
-                "PaletteRoot { id: \"bag/item-icon/palette/potion\", addr: GbaPtr::at(0x0813_0000), color_count: 16, encoding: Encoding::Lz77 }"
-            ),
-            "{module}"
-        );
-        assert!(
-            module.contains("BlobRoot { id: \"bag/raw/menu\", addr: GbaPtr::at(0x0814_0000), encoding: Encoding::Lz77, len: 2048 }"),
-            "{module}"
-        );
-        assert!(!module.contains("BagRoots::NONE"), "{module}");
+        assert_bag_roots(&module);
     }
 
     #[test]

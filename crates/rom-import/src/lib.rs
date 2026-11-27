@@ -65,7 +65,8 @@
 //!   `assets::Song` events, plus the species cries (`audio/cry/table` and the
 //!   DPCM-compressed `audio/sample/direct-sound/cry/*` samples, decoded to
 //!   PCM), and the Route 103 trainers' defeat speeches
-//!   (`trainer-defeat-speech/table`) and the trainer class display names
+//!   (`trainer-defeat-speech/table`), the nine sight trainers' intro speeches
+//!   (`sight-trainer-intro-speech/table`) and the trainer class display names
 //!   (`trainer-class-name/table`, one fixed-width array). A domain that has a ROM struct behind
 //!   its roots corroborates it field by field, so a wrong profile is a
 //!   typed error rather than a plausible-looking asset. [`import`] and
@@ -123,6 +124,12 @@ pub use domains::battle_messages::{
     decode_battle_message_payload, PACK_ID as BATTLE_MESSAGE_PACK_ID,
 };
 pub use domains::field_messages::{decode_field_message_payload, PACK_ID as FIELD_MESSAGE_PACK_ID};
+pub use domains::sight_trainer_intro_speeches::{
+    decode_sight_trainer_intro_speech_payload, witness_head as sight_trainer_intro_witness_head,
+    COMMAND_LEN as SIGHT_TRAINER_INTRO_COMMAND_LEN,
+    INTRO_POINTER_OFFSET as SIGHT_TRAINER_INTRO_POINTER_OFFSET,
+    PACK_ID as SIGHT_TRAINER_INTRO_SPEECH_PACK_ID,
+};
 pub use domains::song::decode_song_payload;
 pub use domains::sprites::palette_table as sprite_palette_table;
 pub use domains::trainer_class_names::{
@@ -144,6 +151,7 @@ pub use profile::{
 };
 pub use reader::{GbaPtr, RomReader, ROM_BASE, ROM_WINDOW_END};
 pub use rom::{GbaHeader, Rom, ROM_SIZE};
+pub use roots::SightTrainerIntroSpeechRoot;
 pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleInterfaceRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, CryRoots,
