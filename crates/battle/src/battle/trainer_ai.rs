@@ -83,6 +83,10 @@ const VITAL_THROW_USER_HP_CEILING: u32 = 60;
 const VITAL_THROW_USER_HP_FLOOR: u32 = 40;
 const VITAL_THROW_GATE_THRESHOLD: u16 = 180;
 const VITAL_THROW_PENALTY_THRESHOLD: u16 = 50;
+/// `AI_CV_SpeedDown` (`data/battle_ai_scripts.s:1142`-`:1151`): a target that
+/// is not faster scores -3; a faster one rolls `if_random_less_than 70` for +2.
+const SPEED_DROP_NOT_FASTER_PENALTY: i8 = -3;
+const SPEED_DROP_FASTER_BONUS_THRESHOLD: u16 = 70;
 const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
 const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
 const DEFENSE_DROP_USER_HP_THRESHOLD: u32 = 70;
@@ -165,9 +169,8 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [MoveEffect; 18] = [
 ];
 
 /// Rows whose `AI_CheckViability` branch is not ported
-/// (`data/battle_ai_scripts.s:686,706`).
-const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 2] =
-    [MoveEffect::HIGH_CRITICAL, MoveEffect::SPEED_DOWN_HIT];
+/// (`data/battle_ai_scripts.s:686`).
+const UNPORTED_VIABILITY_EFFECTS: [MoveEffect; 1] = [MoveEffect::HIGH_CRITICAL];
 
 /// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
 /// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
@@ -1103,6 +1106,9 @@ fn score_viability(
         ScoreableEffect::UnchangedAfterPrologue(MoveEffect::ABSORB) => {
             score_drain_viability(dex, scores, slot, move_id, user, target, rng)?;
         }
+        ScoreableEffect::UnchangedAfterPrologue(MoveEffect::SPEED_DOWN_HIT) => {
+            score_speed_down_hit_viability(scores, slot, move_id, user, target, rng);
+        }
         ScoreableEffect::UnchangedAfterPrologue(MoveEffect::VITAL_THROW) => {
             score_vital_throw_viability(scores, slot, user, target, rng);
         }
@@ -1236,6 +1242,31 @@ fn score_vital_throw_viability(
     }
     if random_roll_is_at_least(rng, VITAL_THROW_PENALTY_THRESHOLD) {
         scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+    }
+}
+
+/// `AI_CV_SpeedDownFromChance` (`data/battle_ai_scripts.s:1136`-`:1140`): only
+/// Icy Wind, Rock Tomb and Mud Shot reach `AI_CV_SpeedDown`
+/// (`:1142`-`:1151`); any other move with the effect ends at once, with no
+/// draw and no score change.
+fn score_speed_down_hit_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) {
+    if !matches!(
+        move_id,
+        MoveId::ICY_WIND | MoveId::ROCK_TOMB | MoveId::MUD_SHOT
+    ) {
+        return;
+    }
+    if !target_is_faster(user, target, rng) {
+        scores.adjust(slot, SPEED_DROP_NOT_FASTER_PENALTY);
+    } else if random_roll_is_at_least(rng, SPEED_DROP_FASTER_BONUS_THRESHOLD) {
+        scores.adjust(slot, ENCOURAGE);
     }
 }
 
@@ -2621,6 +2652,8 @@ mod paralyze_viability_tests;
 mod prologue_tests;
 #[cfg(test)]
 mod quick_attack_tests;
+#[cfg(test)]
+mod speed_drop_viability_tests;
 #[cfg(test)]
 mod speed_raise_viability_tests;
 #[cfg(test)]

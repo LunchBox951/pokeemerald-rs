@@ -1,8 +1,8 @@
 //! The party menu: `party-menu/image/*`, `party-menu/palette/*`,
 //! `party-menu/raw/*`.
 //!
-//! The background sheet, palette and screen and the Poké Ball sheet and
-//! palette are LZ77 streams (`src/graphics.c:1111-1117`); the held-item sheet
+//! The background sheet, palette and screen, the Poké Ball sheet and palette,
+//! and the small Poké Ball sheet are LZ77 streams (`src/graphics.c:1111-1117`); the held-item sheet
 //! and palette, the five `u8` slot maps and the two button maps are raw
 //! (`src/data/party_menu.h`). The background sheet is stored as its first 62
 //! tiles (`-num_tiles 62`), which the profile declares as the 8x496 strip the

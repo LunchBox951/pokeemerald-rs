@@ -239,6 +239,9 @@ pub use pack::{
     StarterPreviewHandle, StarterSpecies, TextPrinterDownArrow, TilesetHandle,
     TrainerBattlerHandle, TrainerPicHandle, WallClockHandle,
 };
+pub use pack::{
+    SightTrainerIntroSpeechTable, SIGHT_TRAINER_INTRO_COUNT, SIGHT_TRAINER_INTRO_SCRIPTS,
+};
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,
     NATIONAL_DEX_COUNT, NATIONAL_DEX_LAST, NATIONAL_DEX_OLD_UNOWN_COUNT,
