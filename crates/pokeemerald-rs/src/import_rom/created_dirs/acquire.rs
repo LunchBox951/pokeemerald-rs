@@ -55,7 +55,7 @@ use std::io;
 use super::take_back;
 use super::{
     dest, is_out_of_descriptors, is_out_of_descriptors_io, same_directory_identity,
-    sync_and_shed_outermost_pinned_level, CreatedDirectory,
+    sync_and_shed_outermost_pinned_level, sync_new_entry, CreatedDirectory,
 };
 
 /// `mkdirat`s `name` in `parent`, shedding a pin and retrying while
@@ -93,7 +93,8 @@ pub(super) enum ClaimError {
     /// stands there now to this run's `mkdirat`: a same-user writer of the
     /// parent may have put its own there since. It is walked through as an
     /// existing level, never recorded, so rollback leaves it standing; the
-    /// error is for when `name` is no longer a directory.
+    /// error is for when `name` is no longer a directory. Its parent has been
+    /// synced and its owner's access restored, as for a claimed level.
     Unowned(io::Error),
     /// Anything else, including everything that went wrong once a directory
     /// was made: the caller must not take the name for an existing level.
@@ -194,6 +195,7 @@ pub(super) fn claim_level(
                     pin_from,
                     parent,
                     name,
+                    owner,
                     after_mkdir,
                     sync_reopen,
                 ));
@@ -432,7 +434,7 @@ pub(super) fn claim_level(
     pin_from: &mut usize,
     parent: &std::rc::Rc<std::os::fd::OwnedFd>,
     name: &OsStr,
-    _owner: u32,
+    owner: u32,
     after_mkdir: &mut dyn FnMut(),
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> Result<Claimed, ClaimError> {
@@ -441,6 +443,7 @@ pub(super) fn claim_level(
         pin_from,
         parent,
         name,
+        owner,
         after_mkdir,
         sync_reopen,
     ))
@@ -452,12 +455,19 @@ pub(super) fn claim_level(
 /// anything looks there, and no check made afterwards can tell the two
 /// apart. The level is therefore [`ClaimError::Unowned`]: walked through like
 /// one that already existed, never recorded, never removed on rollback.
+///
+/// The entry and the mode are still this run's `mkdirat`'s, so two things a
+/// claimed level gets from the walk are done here: `parent` is synced, since
+/// no later pass syncs an unrecorded level's entry, and the owner's access
+/// the umask took is restored, since the next level is made in it. A failed
+/// restore is [`ClaimError::Failed`].
 #[cfg(unix)]
 fn claim_at_final_name(
     created: &mut [CreatedDirectory],
     pin_from: &mut usize,
     parent: &std::rc::Rc<std::os::fd::OwnedFd>,
     name: &OsStr,
+    owner: u32,
     after_mkdir: &mut dyn FnMut(),
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> ClaimError {
@@ -465,9 +475,46 @@ fn claim_at_final_name(
         return ClaimError::from_errno(errno);
     }
     after_mkdir();
+    // Best effort, like a claimed level's sync.
+    sync_new_entry(created, pin_from, parent, sync_reopen);
+    if let Err(source) =
+        restore_unclaimed_owner_access(created, pin_from, parent, name, owner, sync_reopen)
+    {
+        return ClaimError::Failed(source);
+    }
     ClaimError::Unowned(io::Error::other(
         "directory level made at its final name is no longer a directory",
     ))
+}
+
+/// Gives the owner of the directory `name` in `parent`, just made there and
+/// not claimed, the access the umask took. What stands at `name` may be a
+/// same-user replacement, so only a directory `owner` owns, opened without
+/// following a symlink, is changed, and it gains only its own owner's bits.
+/// A name that cannot be opened as such is left to the walk, which refuses
+/// what is not a directory.
+#[cfg(unix)]
+fn restore_unclaimed_owner_access(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    name: &OsStr,
+    owner: u32,
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
+) -> io::Result<()> {
+    let level = loop {
+        match dest::open_created_directory_at(parent, name) {
+            Err(source)
+                if is_out_of_descriptors_io(&source)
+                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
+            Err(_) => return Ok(()),
+            Ok(level) => break level,
+        }
+    };
+    if made_by(&rustix::fs::fstat(&level)?, owner) {
+        dest::restore_directory_owner_access(&level)?;
+    }
+    Ok(())
 }
 
 /// The identity of the directory `name` in `parent`, read through a

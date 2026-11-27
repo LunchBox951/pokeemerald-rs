@@ -541,3 +541,95 @@ fn a_replacement_put_at_a_levels_name_after_the_fallback_mkdir_is_not_claimed() 
     );
     assert!(first.is_dir(), "rollback removed the replacement");
 }
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_level_made_at_its_final_name_has_its_entry_synced() {
+    // A level made at its final name is not recorded, so no later pass syncs
+    // its entry: its parent must be synced when it is made, or a crash after
+    // a successful import can lose the new directory chain.
+    let dir = TempDir::new("fallback-sync");
+    let _refusing = super::acquire::tests_seam::refuse_noreplace(rustix::io::Errno::INVAL);
+    let first = dir.join("a");
+    let target = first.join("b");
+    let owner = rustix::process::geteuid().as_raw();
+    let mut synced = Vec::new();
+    let creation = super::create_directories_pinned_after_mkdir(
+        &target,
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut || None,
+        &mut || None,
+        &mut |parent| {
+            let real = dest::reopen_for_sync(parent)?;
+            synced.push(rustix::fs::fstat(&real)?.st_ino);
+            Ok(real)
+        },
+        owner,
+        &mut || {},
+    )
+    .map_err(|(_, source)| source)
+    .expect("both levels are created");
+    assert!(creation.created.is_empty(), "nothing is claimed");
+    assert!(target.is_dir());
+    for parent in [&dir.path, &first] {
+        let ino = rustix::fs::stat(parent).unwrap().st_ino;
+        assert!(
+            synced.contains(&ino),
+            "{parent:?}, which a level was made in, was never synced"
+        );
+    }
+}
+
+/// Set in the child [`a_level_made_at_its_final_name_keeps_owner_access`]
+/// re-runs itself as, so only that child changes its own umask.
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+const FALLBACK_UMASK_CHILD: &str = "POKEEMERALD_IMPORT_FALLBACK_UMASK_CHILD";
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_level_made_at_its_final_name_keeps_owner_access() {
+    // Under umask 0277 `mkdirat(0777)` leaves 0500, which the next level
+    // cannot be made in. A level made at its final name is not claimed, but
+    // it is still this run's `mkdirat`, so the owner's access is restored
+    // before the walk descends, as for a claimed level. The umask is
+    // process-wide, so the body runs alone in a child.
+    use std::os::unix::fs::PermissionsExt as _;
+
+    const TEST: &str = "import_rom::created_dirs::tests::acquisition::a_level_made_at_its_final_name_keeps_owner_access";
+    if std::env::var_os(FALLBACK_UMASK_CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([TEST, "--exact", "--nocapture"])
+            .env(FALLBACK_UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("1 passed"),
+            "child status {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let dir = TempDir::new("fallback-umask");
+    let _refusing = super::acquire::tests_seam::refuse_noreplace(rustix::io::Errno::INVAL);
+    let first = dir.join("a");
+    let target = first.join("b");
+    let owner = rustix::process::geteuid().as_raw();
+    let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o277));
+    let result = create_as(&target, owner, &mut || {});
+    rustix::process::umask(previous);
+    let creation = result
+        .map_err(|(_, source)| source)
+        .expect("the nested levels are created under umask 0277");
+    assert!(creation.created.is_empty(), "nothing is claimed");
+    assert!(
+        super::acquire::tests_seam::refusals() >= 2,
+        "the fallback did not run"
+    );
+    for level in [&first, &target] {
+        let mode = fs::metadata(level).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o700, "{level:?} lost its owner's access");
+    }
+}
