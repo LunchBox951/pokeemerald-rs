@@ -29874,6 +29874,20 @@
       "status": "pending"
     },
     "src/berry_blender.c": {
+      "artifacts": {
+        "sBerryMasterBerries": {
+          "reason": "src/berry_blender.c:894-900 sBerryMasterBerries, transcribed as the five Blend Master berries (Spelon, Pamtre, Watmel, Durin, Belue) behind berry_master_berry, which returns ItemId values (index plus FIRST_BERRY_INDEX, as the reader at :1578 does) and refuses an index not below 5. Pinned in upstream order against raw ITEM_* values by unit tests and an ignored upstream re-parse. Data only: the Blend Master set selection and the lower-set replacement arithmetic are NOT modelled.",
+          "rust_target": "crates/assets/src/blender_npc_berries.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sOpponentBerrySets": {
+          "reason": "src/berry_blender.c:873-890 sOpponentBerrySets, transcribed as the ten three-berry opponent sets (the five used when the player chose Cheri, Chesto, Pecha, Rawst or Aspear, then the five picked by the player's berry modulo five) behind opponent_berry_set/opponent_berry, which return ItemId values and refuse a set not below 10 or a slot not below 3. Upstream's zero-based berry index becomes an item through berry_index_item (index plus FIRST_BERRY_INDEX, the reader's conversion at :1578, reusing berries::FIRST_BERRY_ITEM). Pinned set by set against raw ITEM_* values by unit tests and an ignored upstream re-parse. Data only: the set choice from the player's berry, the Enigma Berry override, the Blend Master replacement arithmetic and the blending are NOT modelled.",
+          "rust_target": "crates/assets/src/blender_npc_berries.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
