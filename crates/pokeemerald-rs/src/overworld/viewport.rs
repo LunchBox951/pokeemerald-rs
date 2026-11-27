@@ -9,7 +9,10 @@ use assets::{
     BorderGrid, Direction as ConnectionDirection, ImageRef, LayoutGrid, MetatileAttributeTable,
     MetatileCell, MetatileLayerType, PaletteRef,
 };
-use engine::overworld::{Direction, PlayerState, NUM_METATILES_IN_PRIMARY};
+use engine::overworld::{
+    connection_coordinates, last_connection_cell, within_backup_band, Direction, PlayerState,
+    MAP_OFFSET, NUM_METATILES_IN_PRIMARY,
+};
 use rendering::{Bgr555, BitDepth, Palette, ScreenEntry, Tilemap};
 
 use super::{
@@ -115,24 +118,6 @@ pub(super) fn combined_world_palette(
     Palette::new(colors)
 }
 
-const MAP_OFFSET: i32 = 7;
-const MAP_OFFSET_W: i32 = MAP_OFFSET * 2 + 1;
-const MAP_OFFSET_H: i32 = MAP_OFFSET * 2;
-const BACKUP_MAP_MIN: i32 = -MAP_OFFSET;
-const BACKUP_MAP_MAX_PAST_EAST: i32 = MAP_OFFSET_W - 1 - MAP_OFFSET;
-const BACKUP_MAP_MAX_PAST_SOUTH: i32 = MAP_OFFSET_H - 1 - MAP_OFFSET;
-
-/// Tests the asymmetric area backed by upstream's `gBackupMapLayout`.
-///
-/// Its odd width reaches one cell farther east than its even height reaches
-/// south (`InitMapLayoutData`, `pokeemerald/src/fieldmap.c`).
-pub(super) fn within_backup_map_band(width: u16, height: u16, x: i64, y: i64) -> bool {
-    (i64::from(BACKUP_MAP_MIN)..=i64::from(width) + i64::from(BACKUP_MAP_MAX_PAST_EAST))
-        .contains(&x)
-        && (i64::from(BACKUP_MAP_MIN)..=i64::from(height) + i64::from(BACKUP_MAP_MAX_PAST_SOUTH))
-            .contains(&y)
-}
-
 /// A connected layout positioned relative to the active layout.
 pub(super) struct ConnectionView<'a> {
     pub(super) direction: ConnectionDirection,
@@ -153,34 +138,22 @@ fn connected_cell_at(
     y: impl Into<i64>,
 ) -> Option<MetatileCell> {
     let (x, y) = (x.into(), y.into());
-    if !within_backup_map_band(width, height, x, y) {
+    if !within_backup_band(width, height, x, y) {
         return None;
     }
 
-    connections
-        .iter()
-        .filter_map(|connection| {
-            let offset = i64::from(connection.offset);
-            let (target_x, target_y) = match connection.direction {
-                ConnectionDirection::South if y >= i64::from(height) => {
-                    (x - offset, y - i64::from(height))
-                }
-                ConnectionDirection::North if y < 0 => {
-                    (x - offset, i64::from(connection.grid.height()) + y)
-                }
-                ConnectionDirection::West if x < 0 => {
-                    (i64::from(connection.grid.width()) + x, y - offset)
-                }
-                ConnectionDirection::East if x >= i64::from(width) => {
-                    (x - i64::from(width), y - offset)
-                }
-                _ => return None,
-            };
-            let target_x = u16::try_from(target_x).ok()?;
-            let target_y = u16::try_from(target_y).ok()?;
-            connection.grid.cell_at(target_x, target_y)
-        })
-        .next_back()
+    last_connection_cell(connections, |connection| {
+        let (target_x, target_y) = connection_coordinates(
+            connection.direction,
+            connection.offset,
+            (width, height),
+            (connection.grid.width(), connection.grid.height()),
+            (x, y),
+        )?;
+        connection
+            .grid
+            .cell_at(u16::try_from(target_x).ok()?, u16::try_from(target_y).ok()?)
+    })
 }
 
 /// Reduces a widened backup-map coordinate to its border repeat phase.
@@ -429,7 +402,10 @@ mod tests {
         RegionMapSectionId, Weather,
     };
     use engine::event_data::EventData;
-    use engine::overworld::{Direction as EngineDirection, WALK_FRAMES_PER_TILE};
+    use engine::overworld::{
+        Direction as EngineDirection, BACKUP_MAP_MAX_PAST_EAST, BACKUP_MAP_MAX_PAST_SOUTH,
+        BACKUP_MAP_MIN, WALK_FRAMES_PER_TILE,
+    };
     use rendering::Tileset;
 
     const NO_FLAGS: EventData = EventData::new();
@@ -1709,6 +1685,200 @@ mod tests {
             viewport.bottom.height_tiles(),
             padded_rows,
             "southward padding survives the scripted face turn"
+        );
+    }
+
+    struct NeighbourMaps(Vec<(MapId, assets::MapLayout, Vec<u8>)>);
+
+    impl engine::overworld::ConnectedMapData for NeighbourMaps {
+        fn dimensions(&self, map: MapId) -> Option<(u16, u16)> {
+            let (_, layout, _) = self.0.iter().find(|(id, _, _)| *id == map)?;
+            Some((layout.width, layout.height))
+        }
+
+        fn metatile_cell(&self, map: MapId, x: i32, y: i32) -> Option<MetatileCell> {
+            let (_, layout, bytes) = self.0.iter().find(|(id, _, _)| *id == map)?;
+            layout
+                .grid(bytes)
+                .ok()?
+                .cell_at(u16::try_from(x).ok()?, u16::try_from(y).ok()?)
+        }
+
+        fn metatile_behavior(&self, _map: MapId, _x: i32, _y: i32) -> Option<u8> {
+            None
+        }
+    }
+
+    /// Each neighbour cell carries `base + y * width + x`, so a result names its source cell.
+    fn based_grid_bytes(width: u16, height: u16, base: u16) -> Vec<u8> {
+        grid_bytes_from_metatile_ids(
+            (0..height).flat_map(|y| (0..width).map(move |x| base + y * width + x)),
+        )
+    }
+
+    const BAND_ACTIVE: u16 = 4;
+
+    /// Hands `check` a 4x4 map's terrain query and the viewport's views of the same neighbours.
+    fn with_band_fixture(
+        connections: &'static [MapConnection],
+        targets: &[(&'static str, u16, u16, u16)],
+        check: impl FnOnce(&engine::overworld::MapRuntime<'_>, &NeighbourMaps, &[ConnectionView<'_>]),
+    ) {
+        let neighbours = NeighbourMaps(
+            targets
+                .iter()
+                .map(|&(id, w, h, base)| {
+                    (MapId(id), test_layout(w, h), based_grid_bytes(w, h, base))
+                })
+                .collect(),
+        );
+        let views: Vec<ConnectionView<'_>> = connections
+            .iter()
+            .zip(&neighbours.0)
+            .map(|(connection, (_, layout, bytes))| ConnectionView {
+                direction: connection.direction,
+                offset: connection.offset,
+                grid: layout.grid(bytes).unwrap(),
+            })
+            .collect();
+
+        let active_bytes = uniform_grid_bytes(BAND_ACTIVE, BAND_ACTIVE, INTERIOR_METATILE_ID);
+        let active_layout = test_layout(BAND_ACTIVE, BAND_ACTIVE);
+        let header = MapHeader {
+            id: MapId("MAP_TEST"),
+            group: 0,
+            num: 0,
+            name: "MapTest",
+            layout: assets::LayoutId("MAP_TEST"),
+            music: assets::MusicId(0),
+            region_map_section: RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: Weather::None,
+            map_type: MapType::Route,
+            allow_bike: true,
+            allow_escape: true,
+            allow_run: true,
+            show_name: false,
+            battle_scene: BattleScene::Normal,
+            map_scripts: None,
+            connections,
+        };
+        let events = MapEvents {
+            id: MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: &[],
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        };
+        let terrain = engine::overworld::MapRuntime::new(
+            MapId("MAP_TEST"),
+            &header,
+            &events,
+            active_layout.grid(&active_bytes).unwrap(),
+            assets::MetatileAttributeTable::new(&[]),
+            assets::MetatileAttributeTable::new(&[]),
+        );
+        check(&terrain, &neighbours, &views);
+    }
+
+    #[test]
+    fn viewport_and_terrain_resolve_the_same_band_cell_for_every_direction() {
+        static CONNECTIONS: [MapConnection; 5] = [
+            MapConnection {
+                direction: ConnectionDirection::North,
+                offset: -3,
+                target: MapId("MAP_N"),
+            },
+            MapConnection {
+                direction: ConnectionDirection::South,
+                offset: -2,
+                target: MapId("MAP_S1"),
+            },
+            MapConnection {
+                direction: ConnectionDirection::South,
+                offset: 1,
+                target: MapId("MAP_S2"),
+            },
+            MapConnection {
+                direction: ConnectionDirection::West,
+                offset: 2,
+                target: MapId("MAP_W"),
+            },
+            MapConnection {
+                direction: ConnectionDirection::East,
+                offset: -4,
+                target: MapId("MAP_E"),
+            },
+        ];
+        let targets = [
+            ("MAP_N", 9, 5, 100),
+            ("MAP_S1", 10, 9, 200),
+            ("MAP_S2", 3, 4, 400),
+            ("MAP_W", 6, 3, 500),
+            ("MAP_E", 5, 12, 600),
+        ];
+
+        with_band_fixture(&CONNECTIONS, &targets, |terrain, neighbours, views| {
+            let active = i32::from(BAND_ACTIVE);
+            let mut resolved = 0;
+            for y in -12..active + 12 {
+                for x in -12..active + 12 {
+                    if (0..active).contains(&x) && (0..active).contains(&y) {
+                        continue;
+                    }
+                    let displayed = connected_cell_at(views, BAND_ACTIVE, BAND_ACTIVE, x, y);
+                    let queried = terrain.metatile_cell_in_band(x, y, neighbours);
+                    assert_eq!(displayed, queried, "({x}, {y}) diverges");
+                    resolved += usize::from(displayed.is_some());
+                }
+            }
+            assert!(resolved > 50, "only {resolved} connected cells resolved");
+
+            // Hand-derived ids, so a rule both consumers share still fails here.
+            for ((x, y), expected) in [
+                ((0, -1), 139),
+                ((-1, 4), 517),
+                ((4, 0), 620),
+                ((-1, -1), 138),
+                ((1, 4), 400),
+                ((3, 4), 402),
+            ] {
+                assert_eq!(
+                    terrain
+                        .metatile_cell_in_band(x, y, neighbours)
+                        .map(|cell| cell.metatile_id),
+                    Some(expected),
+                    "({x}, {y})"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_corner_cell_is_read_by_the_viewport_but_rejected_by_terrain_without_its_edge() {
+        static NORTH_ONLY: [MapConnection; 1] = [MapConnection {
+            direction: ConnectionDirection::North,
+            offset: -3,
+            target: MapId("MAP_N"),
+        }];
+
+        with_band_fixture(
+            &NORTH_ONLY,
+            &[("MAP_N", 9, 5, 100)],
+            |terrain, neighbours, views| {
+                assert_eq!(
+                    connected_cell_at(views, BAND_ACTIVE, BAND_ACTIVE, -1, -1)
+                        .map(|cell| cell.metatile_id),
+                    Some(138),
+                    "rendering falls through to the north connection"
+                );
+                assert_eq!(
+                    terrain.metatile_cell_in_band(-1, -1, neighbours),
+                    None,
+                    "terrain files the corner under the west edge, which has no connection"
+                );
+            },
         );
     }
 }

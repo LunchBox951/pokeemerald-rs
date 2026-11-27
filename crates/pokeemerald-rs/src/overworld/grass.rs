@@ -31,7 +31,7 @@
 //! the entered map's coordinates with its animation and moved-away state kept
 //! (`field_effect_helpers.c:325-330`): [`OverworldScene::carry_tall_grass_from`].
 //! The tile must lie inside the entered map's backup band
-//! (`viewport::within_backup_map_band`) or the effect is dropped. An object's
+//! ([`engine::overworld::within_backup_band`]) or the effect is dropped. An object's
 //! passes and its effects' lifetime read that band
 //! ([`engine::overworld::MapRuntime::metatile_behavior_in_band`]), as the backup
 //! layout holds the neighbour's metatile ids under this map's tileset; the
@@ -57,7 +57,7 @@ use assets::{ImageRef, PackError};
 use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::is_tall_grass;
 use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
-use engine::overworld::{ConnectedMapData, PlayerState, TilePos};
+use engine::overworld::{within_backup_band, ConnectedMapData, PlayerState, TilePos};
 use rendering::{BitDepth, OamEntry, ObjShape};
 
 use super::obj_vram::SheetSprite;
@@ -652,12 +652,7 @@ impl OverworldScene {
             })
             .filter_map(|effect| {
                 let tile = (effect.tile.0 + shift.0, effect.tile.1 + shift.1);
-                if !viewport::within_backup_map_band(
-                    width,
-                    height,
-                    i64::from(tile.0),
-                    i64::from(tile.1),
-                ) {
+                if !within_backup_band(width, height, i64::from(tile.0), i64::from(tile.1)) {
                     return None;
                 }
                 let behavior = runtime

@@ -9,6 +9,7 @@ use assets::{
     MetatileCell, ObjectEvent, WarpEvent,
 };
 
+use super::backup_map::{connection_coordinates, last_connection_cell, within_backup_band};
 use super::direction::Direction;
 use super::object_event::{LiveObjectEvent, ObjectEventCollection};
 
@@ -87,10 +88,6 @@ impl ConnectedMapData for NoConnectedMaps {
         None
     }
 }
-
-/// Tiles the backup layout keeps beyond the active map's west, north and south edges
-/// (`MAP_OFFSET`, `fieldmap.h:18`).
-const BACKUP_BAND: i64 = 7;
 
 /// Borrowed decoded data and events for one map.
 #[derive(Debug, Clone, Copy)]
@@ -243,21 +240,16 @@ impl<'a> MapRuntime<'a> {
     }
 
     fn connected_cell(&self, x: i64, y: i64, maps: &dyn ConnectedMapData) -> Option<MetatileCell> {
-        let (width, height) = (i64::from(self.grid.width()), i64::from(self.grid.height()));
-        // The backup layout is `MAP_OFFSET_W` wide and `MAP_OFFSET_H` tall: one column more
-        // reaches east than rows reach south.
-        let reach_east = BACKUP_BAND + 1;
-        if !(-BACKUP_BAND..width + reach_east).contains(&x)
-            || !(-BACKUP_BAND..height + BACKUP_BAND).contains(&y)
-        {
+        let (width, height) = (self.grid.width(), self.grid.height());
+        if !within_backup_band(width, height, x, y) {
             return None;
         }
         // The edge `GetMapBorderIdAt` files the tile under, east first.
-        let edge = if x >= width {
+        let edge = if x >= i64::from(width) {
             ConnectionDirection::East
         } else if x < 0 {
             ConnectionDirection::West
-        } else if y >= height {
+        } else if y >= i64::from(height) {
             ConnectionDirection::South
         } else {
             ConnectionDirection::North
@@ -270,28 +262,21 @@ impl<'a> MapRuntime<'a> {
         {
             return None;
         }
-        self.header
-            .connections
-            .iter()
-            .filter_map(|connection| {
-                let (target_width, target_height) = maps.dimensions(connection.target)?;
-                let offset = i64::from(connection.offset);
-                let (target_x, target_y) = match connection.direction {
-                    ConnectionDirection::South if y >= height => (x - offset, y - height),
-                    ConnectionDirection::North if y < 0 => {
-                        (x - offset, i64::from(target_height) + y)
-                    }
-                    ConnectionDirection::West if x < 0 => (i64::from(target_width) + x, y - offset),
-                    ConnectionDirection::East if x >= width => (x - width, y - offset),
-                    _ => return None,
-                };
-                maps.metatile_cell(
-                    connection.target,
-                    i32::try_from(target_x).ok()?,
-                    i32::try_from(target_y).ok()?,
-                )
-            })
-            .next_back()
+        last_connection_cell(self.header.connections, |connection| {
+            let target = maps.dimensions(connection.target)?;
+            let (target_x, target_y) = connection_coordinates(
+                connection.direction,
+                connection.offset,
+                (width, height),
+                target,
+                (x, y),
+            )?;
+            maps.metatile_cell(
+                connection.target,
+                i32::try_from(target_x).ok()?,
+                i32::try_from(target_y).ok()?,
+            )
+        })
     }
 
     /// Returns object events at `(x, y, elevation)`, identifying each by its current tile alone;
