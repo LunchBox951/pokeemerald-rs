@@ -216,6 +216,39 @@ impl ObjectEventCollection {
         first
     }
 
+    /// Gives every active entry a new sprite, as a return to the field does after
+    /// `ResetSpriteData` (`SpawnObjectEventsOnReturnToField`,
+    /// `event_object_movement.c:1715-1797`). `CreateSprite` hands back a zeroed sprite
+    /// (`sprite.c:159-169,502-508`), so the movement type starts over at step 0 with no delay
+    /// pending, and `ResetObjectEventFldEffData` drops the action the object was in the middle
+    /// of (`:1799-1809`). The object itself is kept: its tiles, the destination of an
+    /// interrupted walk included, its facing, range and `directionSequenceIndex`. Sprites are
+    /// created in `gObjectEvents` order, so the sprite slots follow the object slots.
+    pub fn recreate_sprites_on_return_to_field(&mut self) {
+        let mut by_object_slot: Vec<(usize, usize)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| Some((entry.lifecycle.object_slot()?, index)))
+            .collect();
+        by_object_slot.sort_unstable();
+        for (new_sprite_slot, (_, index)) in by_object_slot.into_iter().enumerate() {
+            let entry = &mut self.entries[index];
+            entry.state.clear_step();
+            if let Lifecycle::Active {
+                sprite_slot,
+                type_func_id,
+                delay,
+                ..
+            } = &mut entry.lifecycle
+            {
+                *sprite_slot = new_sprite_slot;
+                *type_func_id = 0;
+                *delay = 0;
+            }
+        }
+    }
+
     /// Retires the entry whose template declares `local_id`, the `RemoveObjectEvent` half of
     /// `RemoveObjectEventByLocalIdAndMap` (`active = FALSE`,
     /// `event_object_movement.c:1383-1397`): position queries stop returning it until a later
@@ -476,3 +509,7 @@ impl LiveObjectEvent {
 #[cfg(test)]
 #[path = "object_event_scheduler_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "object_event_return_to_field_tests.rs"]
+mod return_to_field_tests;

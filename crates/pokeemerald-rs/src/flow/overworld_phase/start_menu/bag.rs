@@ -338,12 +338,14 @@ impl OverworldPhase {
     /// `src/field_screen_effect.c:95-99,433-444`).
     ///
     /// The reload destroys the field's sprites in `ReturnToFieldLocal` state
-    /// 0 and zeroes the tileset animation counters in state 1
-    /// (`src/overworld.c:1965-1977,2131-2134`). Nothing counts or draws
-    /// either until `CB2_Overworld` runs again on the frame after the fade
-    /// in begins (`:1465-1475,1638-1645`), so both are restarted here.
+    /// 0, gives every object event a new one, and zeroes the tileset
+    /// animation counters in state 1 (`src/overworld.c:1965-1977,2131-2134,
+    /// 2180-2185`). Nothing counts, draws or runs any of them until
+    /// `CB2_Overworld` runs again on the frame after the fade in begins
+    /// (`:1465-1475,1638-1645`), so all are restarted here.
     fn reload_field(&mut self) -> BagTrip {
         self.reinit_field_tileset_animations();
+        self.object_events.recreate_sprites_on_return_to_field();
         let menu_items = self
             .start_menu
             .as_ref()

@@ -6,7 +6,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.147.0] - 2026-11-27
 
-- BAG is now the first choice on the field start menu. Choosing it fades the field to black, opens the Bag with your saved items, and closing it fades back to the field with the start menu reopened on BAG, as in the original game. Items you rearranged or tossed stay that way, and the Bag remembers where you were when you reopen it. Using and registering items from the field Bag are still being prepared.
+- BAG is now the first choice on the field start menu. Choosing it fades the field to black, opens the Bag with your saved items, and closing it fades back to the field with the start menu reopened on BAG, as in the original game. The Bag tidies its pockets when you open it, and it remembers where you were when you reopen it. Items you rearranged or tossed stay that way while you play, and are kept in your save file once you SAVE. Using and registering items from the field Bag are still being prepared.
+- Aurora Beam can now lower the target's Attack. Hyper Cutter, Clear Body, White Smoke and Shield Dust block the drop, as in the original game.
 
 ## [0.0.146.0] - 2026-11-26
 
