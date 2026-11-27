@@ -626,7 +626,10 @@ pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Resul
 /// one history entry the read can reach: the drain ends in `RecordAbilityBattle`
 /// for the copied ability (`src/battle_util.c:3194`-`:3195`, `ABILITYEFFECT_TRACE`
 /// is below `ABILITYEFFECT_CHECK_OTHER_SIDE`), so a single-ability Trace
-/// holder reads as the ability it copied.
+/// holder reads as the ability it copied. Otherwise a single-ability species
+/// reads as its first slot's ability, not the battler's own: a restored
+/// battler whose saved slot is empty holds `ABILITY_NONE`, but upstream's guess
+/// returns `abilities[0]` for it (`src/battle_ai_script_commands.c:1383-1390`).
 ///
 /// # Errors
 ///
@@ -634,7 +637,12 @@ pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Resul
 /// whose selected ability is not a trapping one.
 fn ai_get_ability(target: &BattlePokemon) -> Result<AbilityId, BattleError> {
     ensure_target_ability_unambiguous(target)?;
-    Ok(target.ability())
+    let ability = target.ability();
+    if ability == AbilityId::NONE {
+        let [first, _] = target.ability_slots();
+        return Ok(first);
+    }
+    Ok(ability)
 }
 
 /// The nine moves `AI_CheckBadMove` compares against Soundproof

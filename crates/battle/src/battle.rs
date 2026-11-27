@@ -446,7 +446,7 @@ impl Battle {
             enemy_reward_settled: false,
             player_obedience: None,
         };
-        battle.settle_battle_start_trace();
+        battle.settle_battle_start_trace()?;
         Ok(battle)
     }
 
@@ -603,7 +603,7 @@ impl Battle {
             enemy_reward_settled: false,
             player_obedience: None,
         };
-        battle.settle_battle_start_trace();
+        battle.settle_battle_start_trace()?;
         Ok(battle)
     }
 
@@ -771,7 +771,7 @@ impl Battle {
             });
         } else {
             self.settle_fainted_enemy(&mut events)?;
-            self.resolve_trace_queue(&mut events);
+            self.resolve_trace_queue(&mut events)?;
             // Upstream's yes/no box sits inside `HandleFaintedMonActions`,
             // which every path to the residual pass crosses first
             // (`src/battle_util.c:1912`-`:1923`).
@@ -1542,7 +1542,7 @@ impl Battle {
     /// entry abilities (`src/battle_util.c:1912`-`:1963`).
     fn handle_fainted_mons(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
         self.send_out_replacements(events)?;
-        self.resolve_trace_queue(events);
+        self.resolve_trace_queue(events)?;
         Ok(())
     }
 
@@ -2326,7 +2326,7 @@ impl Battle {
             EnemyAction::Switch(slot) => {
                 self.acted_this_turn[1] = true;
                 self.switch_enemy_to(slot, events)?;
-                self.resolve_trace_queue(events);
+                self.resolve_trace_queue(events)?;
                 Ok(())
             }
             EnemyAction::Flee => {
