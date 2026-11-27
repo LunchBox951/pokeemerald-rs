@@ -29740,6 +29740,26 @@
       "status": "pending"
     },
     "src/battle_tent.c": {
+      "artifacts": {
+        "sFallarborTentRewards": {
+          "reason": "src/battle_tent.c:86 sFallarborTentRewards, transcribed as the Fallarbor tent's reward pool of ItemId values behind tent_rewards/tent_reward, which refuse an index not below the pool length. Pinned by literal item ids and length in unit tests, and re-parsed from the reference checkout by an ignored test. Data only: the random draw, the stored prize, challenge state and award delivery are NOT modelled.",
+          "rust_target": "crates/assets/src/battle_tent_rewards.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sSlateportTentRewards": {
+          "reason": "src/battle_tent.c:102 sSlateportTentRewards, transcribed as the Slateport tent's reward pool of ItemId values behind tent_rewards/tent_reward, which refuse an index not below the pool length. Pinned by literal item ids and length in unit tests, and re-parsed from the reference checkout by an ignored test. Data only: the random draw, the stored prize, challenge state and award delivery are NOT modelled.",
+          "rust_target": "crates/assets/src/battle_tent_rewards.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sVerdanturfTentRewards": {
+          "reason": "src/battle_tent.c:73 sVerdanturfTentRewards, transcribed as the Verdanturf tent's reward pool of ItemId values behind tent_rewards/tent_reward, which refuse an index not below the pool length. Pinned by literal item ids and length in unit tests, and re-parsed from the reference checkout by an ignored test. Data only: the random draw, the stored prize, challenge state and award delivery are NOT modelled.",
+          "rust_target": "crates/assets/src/battle_tent_rewards.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
