@@ -32732,8 +32732,32 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "ShouldDoRivalRayquazaCall": {
+          "reason": "field_specials.c:453-476. EventData::should_do_rival_rayquaza_call(MapType): while FLAG_DEFEATED_MAGMA_SPACE_CENTER (0x75, flags.h:137) is set and the map type is town, city, route or ocean route, pre-increments the u16 VAR_RIVAL_RAYQUAZA_CALL_STEP_COUNTER (0x40F6, vars.h:266) with wraparound and returns whether it has reached 250; otherwise nothing changes and it returns false. No RNG. Pending, not modelled: the walking caller, call scheduling and priority, dispatching the call script, clearing the flag, and PokeNav UI.",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ShouldDoRoxanneCall": {
+          "reason": "field_specials.c:428-451. EventData::should_do_roxanne_call(MapType): while FLAG_ENABLE_ROXANNE_FIRST_CALL (0x80, flags.h:150) is set and the map type is town, city, route or ocean route, pre-increments the u16 VAR_ROXANNE_CALL_STEP_COUNTER (0x40F4, vars.h:264) with wraparound and returns whether it has reached 250; otherwise nothing changes and it returns false. No RNG. Pending, not modelled: the walking caller, call scheduling and priority, dispatching the call script, clearing the flag, and PokeNav UI.",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ShouldDoScottBattleFrontierCall": {
+          "reason": "field_specials.c:403-426. EventData::should_do_scott_battle_frontier_call(MapType): while FLAG_SCOTT_CALL_BATTLE_FRONTIER (0x72, flags.h:134) is set and the map type is town, city, route or ocean route, pre-increments the u16 VAR_SCOTT_BF_CALL_STEP_COUNTER (0x40F5, vars.h:265) with wraparound and returns whether it has reached 10; otherwise nothing changes and it returns false. No RNG. Pending, not modelled: the walking caller, call scheduling and priority, dispatching the call script, clearing the flag, and PokeNav UI.",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ShouldDoScottFortreeCall": {
+          "reason": "field_specials.c:378-401. EventData::should_do_scott_fortree_call(MapType): while FLAG_SCOTT_CALL_FORTREE_GYM (0x8A, flags.h:160) is set and the map type is town, city, route or ocean route, pre-increments the u16 VAR_SCOTT_FORTREE_CALL_STEP_COUNTER (0x40F3, vars.h:263) with wraparound and returns whether it has reached 10; otherwise nothing changes and it returns false. No RNG. Pending, not modelled: the walking caller, call scheduling and priority, dispatching the call script, clearing the flag, and PokeNav UI.",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "ShouldDoWallyCall": {
-          "reason": "field_specials.c:353-376. EventData::should_do_wally_call(MapType): while FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL (0x88, flags.h:158) is set and the map type is town, city, route or ocean route, pre-increments the u16 VAR_WALLY_CALL_STEP_COUNTER (0x40F2, vars.h:262) with wraparound and returns whether it has reached 250; otherwise nothing changes and it returns false. No RNG. Pending, not modelled: the walking caller (field_control_avatar.c:570-574), dispatching MauvilleCity_EventScript_RegisterWallyCall, clearing the flag, and PokeNav UI; ShouldDoScottFortreeCall and the other call predicates are separate.",
+          "reason": "field_specials.c:353-376. EventData::should_do_wally_call(MapType): while FLAG_ENABLE_FIRST_WALLY_POKENAV_CALL (0x88, flags.h:158) is set and the map type is town, city, route or ocean route, pre-increments the u16 VAR_WALLY_CALL_STEP_COUNTER (0x40F2, vars.h:262) with wraparound and returns whether it has reached 250; otherwise nothing changes and it returns false. No RNG. Pending, not modelled: the walking caller (field_control_avatar.c:570-574), dispatching MauvilleCity_EventScript_RegisterWallyCall, clearing the flag, and PokeNav UI; the other call predicates are separate sub-artifacts.",
           "rust_target": "crates/engine/src/event_data.rs",
           "spec": "S-5",
           "status": "rewritten"
