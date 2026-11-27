@@ -69,8 +69,8 @@ use super::stream::{build_stream, OutputDevice, OutputStream, StreamHealth};
 
 mod shared;
 mod worker;
-pub(in crate::audio) use shared::Shared;
 use shared::Intent;
+pub(in crate::audio) use shared::Shared;
 pub use shared::{TransportFailure, TransportState};
 pub(super) use worker::{CpalHost, Worker};
 
