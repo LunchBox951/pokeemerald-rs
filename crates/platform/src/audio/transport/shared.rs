@@ -43,6 +43,15 @@ pub enum TransportFailure {
     ConnectFailed,
 }
 
+/// A start count and the intent that went with it; see [`Shared::intent`].
+#[derive(Clone, Copy)]
+pub(super) struct Intent {
+    /// [`Shared::starts`].
+    pub(super) starts: u64,
+    /// [`Shared::running`].
+    pub(super) running: bool,
+}
+
 /// State shared by the game-loop facade, the worker, and the callbacks.
 /// Everything here is an atomic except `state`, which only the worker and the
 /// facade lock, never a callback.
@@ -55,6 +64,8 @@ pub(in crate::audio) struct Shared {
     /// How many times playback has been started, so the worker sees a
     /// `start` even when a `stop` overwrote it before the next step.
     pub(super) starts: AtomicU64,
+    /// Odd while a start is being published; read through [`Self::intent`].
+    start_seq: AtomicU64,
     pub(in crate::audio) shutdown: AtomicBool,
     pub(in crate::audio) stream_errors: Arc<AtomicU64>,
     pub(in crate::audio) playback_clock: Arc<PlaybackClock>,
@@ -77,6 +88,7 @@ impl Shared {
             running: AtomicBool::new(false),
             stopped_at: AtomicU64::new(0),
             starts: AtomicU64::new(0),
+            start_seq: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
             stream_errors: Arc::new(AtomicU64::new(0)),
             playback_clock: Arc::new(PlaybackClock::new()),
@@ -92,10 +104,14 @@ impl Shared {
     /// where it landed in `producer`'s queue, so a re-attach that discards
     /// history keeps what is queued after it. A start of a stopped transport
     /// is counted, so one the worker never saw running is still history.
+    ///
+    /// Only the facade calls this, through `&mut self`, so starts are serial.
     pub(in crate::audio) fn set_running(&self, running: bool, producer: &Producer) {
         let was_running = self.running.load(Ordering::Acquire);
         if running && !was_running {
-            self.starts.fetch_add(1, Ordering::Relaxed);
+            self.begin_start();
+            self.finish_start();
+            return;
         }
         if !running && was_running {
             let mark = producer.pushed();
@@ -105,8 +121,32 @@ impl Shared {
             // stopped queue that discard must keep.
             producer.keep_pushed_from_at_first_read(mark);
         }
-        // Release: a worker that reads this stop also reads its mark.
-        self.running.store(running, Ordering::Release);
+        // A worker that reads this stop also reads its mark.
+        self.running.store(running, Ordering::SeqCst);
+    }
+
+    /// Count a start without publishing it; [`Self::finish_start`] must follow.
+    pub(super) fn begin_start(&self) {
+        self.start_seq.fetch_add(1, Ordering::SeqCst);
+        self.starts.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Publish the start [`Self::begin_start`] counted.
+    pub(super) fn finish_start(&self) {
+        self.running.store(true, Ordering::SeqCst);
+        self.start_seq.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A start count and the intent it was published with, or `None` while a
+    /// start is half published, so a reader retries and never acknowledges it.
+    pub(super) fn intent(&self) -> Option<Intent> {
+        let before = self.start_seq.load(Ordering::SeqCst);
+        if before % 2 == 1 {
+            return None;
+        }
+        let starts = self.starts.load(Ordering::SeqCst);
+        let running = self.running.load(Ordering::SeqCst);
+        (self.start_seq.load(Ordering::SeqCst) == before).then_some(Intent { starts, running })
     }
 
     /// Queue a transition for the application, discarding the oldest pending
