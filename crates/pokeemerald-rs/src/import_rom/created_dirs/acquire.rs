@@ -54,9 +54,14 @@ use std::io;
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 use super::take_back;
 use super::{
-    dest, is_out_of_descriptors, is_out_of_descriptors_io, same_directory_identity,
-    sync_and_shed_outermost_pinned_level, sync_new_entry, CreatedDirectory,
+    dest, is_access_denied, is_out_of_descriptors, is_out_of_descriptors_io, owner_access,
+    same_directory_identity, sync_and_shed_outermost_pinned_level, CreatedDirectory,
 };
+
+mod final_name;
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+pub(super) use final_name::claim_level;
 
 /// `mkdirat`s `name` in `parent`, shedding a pin and retrying while
 /// descriptors run out.
@@ -190,7 +195,7 @@ pub(super) fn claim_level(
                 // make the level at its final name, as where no such rename
                 // exists, rather than refuse to import at all, but do not
                 // claim it.
-                return Err(claim_at_final_name(
+                return Err(final_name::claim_at_final_name(
                     created,
                     pin_from,
                     parent,
@@ -423,100 +428,6 @@ fn fresh_private_name(
     Ok(std::ffi::OsString::from(format!(".import-{hex}")))
 }
 
-/// [`claim_level`] where there is no no-replace rename: the directory is made
-/// at `name` itself and never claimed.
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))
-))]
-pub(super) fn claim_level(
-    created: &mut [CreatedDirectory],
-    pin_from: &mut usize,
-    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
-    name: &OsStr,
-    owner: u32,
-    after_mkdir: &mut dyn FnMut(),
-    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
-) -> Result<Claimed, ClaimError> {
-    Err(claim_at_final_name(
-        created,
-        pin_from,
-        parent,
-        name,
-        owner,
-        after_mkdir,
-        sync_reopen,
-    ))
-}
-
-/// Makes the level `name` in `parent` at that name, and answers why it is
-/// not claimed. `mkdirat` returns no descriptor, so a same-user writer of
-/// `parent` can move the new directory away and put its own at `name` before
-/// anything looks there, and no check made afterwards can tell the two
-/// apart. The level is therefore [`ClaimError::Unowned`]: walked through like
-/// one that already existed, never recorded, never removed on rollback.
-///
-/// The entry and the mode are still this run's `mkdirat`'s, so two things a
-/// claimed level gets from the walk are done here: `parent` is synced, since
-/// no later pass syncs an unrecorded level's entry, and the owner's access
-/// the umask took is restored, since the next level is made in it. A failed
-/// restore is [`ClaimError::Failed`].
-#[cfg(unix)]
-fn claim_at_final_name(
-    created: &mut [CreatedDirectory],
-    pin_from: &mut usize,
-    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
-    name: &OsStr,
-    owner: u32,
-    after_mkdir: &mut dyn FnMut(),
-    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
-) -> ClaimError {
-    if let Err(errno) = mkdir_level(created, pin_from, parent, name, sync_reopen) {
-        return ClaimError::from_errno(errno);
-    }
-    after_mkdir();
-    // Best effort, like a claimed level's sync.
-    sync_new_entry(created, pin_from, parent, sync_reopen);
-    if let Err(source) =
-        restore_unclaimed_owner_access(created, pin_from, parent, name, owner, sync_reopen)
-    {
-        return ClaimError::Failed(source);
-    }
-    ClaimError::Unowned(io::Error::other(
-        "directory level made at its final name is no longer a directory",
-    ))
-}
-
-/// Gives the owner of the directory `name` in `parent`, just made there and
-/// not claimed, the access the umask took. What stands at `name` may be a
-/// same-user replacement, so only a directory `owner` owns, opened without
-/// following a symlink, is changed, and it gains only its own owner's bits.
-/// A name that cannot be opened as such is left to the walk, which refuses
-/// what is not a directory.
-#[cfg(unix)]
-fn restore_unclaimed_owner_access(
-    created: &mut [CreatedDirectory],
-    pin_from: &mut usize,
-    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
-    name: &OsStr,
-    owner: u32,
-    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
-) -> io::Result<()> {
-    let level = loop {
-        match dest::open_created_directory_at(parent, name) {
-            Err(source)
-                if is_out_of_descriptors_io(&source)
-                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
-            Err(_) => return Ok(()),
-            Ok(level) => break level,
-        }
-    };
-    if made_by(&rustix::fs::fstat(&level)?, owner) {
-        dest::restore_directory_owner_access(&level)?;
-    }
-    Ok(())
-}
-
 /// The identity of the directory `name` in `parent`, read through a
 /// descriptor opened by that name, which is handed back so the entry can be
 /// recognised again by [`discard_private`].
@@ -533,7 +444,17 @@ fn identity_of(
     sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> io::Result<(rustix::fs::Stat, std::os::fd::OwnedFd)> {
     let held = loop {
-        match dest::open_created_directory_at(parent, name) {
+        let attempt = match dest::open_created_directory_at(parent, name) {
+            // The umask took the bit the open needs (owner search, on Apple):
+            // the owner's access is restored through the parent, as for a
+            // claimed level's reopen, and the open tried once more.
+            Err(source) if is_access_denied(&source) => {
+                restore_private_by_name(created, pin_from, parent, name, owner, sync_reopen)
+                    .and_then(|()| dest::open_created_directory_at(parent, name))
+            }
+            other => other,
+        };
+        match attempt {
             Err(source)
                 if is_out_of_descriptors_io(&source)
                     && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
@@ -542,6 +463,58 @@ fn identity_of(
     };
     let identity = vouch_owned_by(rustix::fs::fstat(&held)?, owner)?;
     Ok((identity, held))
+}
+
+/// [`restore_through_parent`] for the private directory `name` in `parent`
+/// whose open the umask refused, when it is a directory `owner` owns, found
+/// without following a symlink. Its identity is then read again through the
+/// descriptor [`identity_of`] opens.
+#[cfg(all(
+    unix,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+fn restore_private_by_name(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    name: &OsStr,
+    owner: u32,
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
+) -> io::Result<()> {
+    let found = vouch_owned_by(
+        rustix::fs::statat(&**parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?,
+        owner,
+    )?;
+    restore_through_parent(created, pin_from, parent, name, &found, None, sync_reopen)
+}
+
+/// [`owner_access::restore_by_name`] on the level `name` in `parent`, which
+/// must still be `identity`, and `pin` when one is held on it: the owner's
+/// access restored through a real descriptor opened from the parent. A full
+/// descriptor table sheds a pin and tries again; a level the route cannot
+/// reach is an [`owner_access::unrestorable`] error.
+#[cfg(unix)]
+fn restore_through_parent(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+    identity: &rustix::fs::Stat,
+    pin: Option<&std::os::fd::OwnedFd>,
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
+) -> io::Result<()> {
+    loop {
+        match owner_access::restore_by_name(parent, name, identity, pin) {
+            Ok(()) => return Ok(()),
+            Err(owner_access::Refused::OutOfDescriptors(source)) => {
+                if !sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) {
+                    return Err(source);
+                }
+            }
+            Err(owner_access::Refused::Replaced(replaced)) => return Err(replaced),
+            Err(owner_access::Refused::Failed) => return Err(owner_access::unrestorable()),
+        }
+    }
 }
 
 /// `identity` if it is a directory of `owner`'s, else the refusal.
@@ -598,6 +571,23 @@ pub(super) fn reopen_created_level(
         let attempt = match before_reopen() {
             Some(err) => Err(err),
             None => dest::open_created_directory_at(parent, name),
+        };
+        // The umask may have taken the bit the pin needs (owner search on
+        // Apple, owner read on other Unix systems). The mode is restored
+        // through a real descriptor from the parent, identity-checked, and
+        // the pin tried once more; a mode with no owner read is refused.
+        let attempt = match attempt {
+            Err(source) if is_access_denied(&source) => {
+                match owner_access::restore_by_name(parent, name, identity, None) {
+                    Ok(()) => dest::open_created_directory_at(parent, name),
+                    Err(owner_access::Refused::Replaced(replaced)) => {
+                        return ReopenedLevel::Unverified(replaced);
+                    }
+                    Err(owner_access::Refused::OutOfDescriptors(source)) => Err(source),
+                    Err(owner_access::Refused::Failed) => Err(owner_access::unrestorable()),
+                }
+            }
+            other => other,
         };
         match attempt {
             Err(source) if is_out_of_descriptors_io(&source) => {

@@ -14,6 +14,12 @@ mod creation;
 #[cfg(unix)]
 mod durability;
 #[cfg(unix)]
+mod final_name;
+#[cfg(unix)]
+mod no_room;
+#[cfg(unix)]
+mod owner_access_restore;
+#[cfg(unix)]
 mod permissions;
 #[cfg(unix)]
 mod quarantine;

@@ -251,6 +251,7 @@ impl Battle {
         self.apply_color_change(attacker_is_player, move_id, events)?;
         self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_poison_point_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_flame_body_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_effect_spore_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_cute_charm_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_rough_skin_contact(attacker_is_player, move_id, events)
@@ -670,21 +671,12 @@ impl Battle {
                     });
                 }
             }
-            SecondaryApplication::SpeedDown => {
-                self.apply_secondary_stat_drop(
-                    attacker_is_player,
-                    move_id,
-                    ChangedStat::Speed,
-                    events,
-                );
-            }
-            SecondaryApplication::AccuracyDown => {
-                self.apply_secondary_stat_drop(
-                    attacker_is_player,
-                    move_id,
-                    ChangedStat::Accuracy,
-                    events,
-                );
+            SecondaryApplication::AttackDown
+            | SecondaryApplication::SpeedDown
+            | SecondaryApplication::AccuracyDown => {
+                if let Some(stat) = secondary_effect.dropped_stat() {
+                    self.apply_secondary_stat_drop(attacker_is_player, move_id, stat, events);
+                }
             }
             SecondaryApplication::Burn => {
                 self.apply_secondary_burn(attacker_is_player, move_id, events);
@@ -694,14 +686,14 @@ impl Battle {
         poisoned_synchronize_holder
     }
 
-    /// `MOVE_EFFECT_SPD_MINUS_1` and `MOVE_EFFECT_ACC_MINUS_1` as secondary
-    /// effects: one `stat` stage off a target that survived the hit.
+    /// `MOVE_EFFECT_ATK_MINUS_1`, `MOVE_EFFECT_SPD_MINUS_1` and
+    /// `MOVE_EFFECT_ACC_MINUS_1` as secondary effects: one `stat` stage off a target that survived the hit.
     /// `SetMoveEffect` leads with an `hp == 0` guard
     /// (`battle_script_commands.c:2261`-`:2264`), and a target already at the
     /// minimum stage is left alone with no message because `ChangeStatBuffs`
     /// runs with `flags == 0` (`:7056`-`:7059`, `:7094`-`:7095`). Clear Body,
-    /// White Smoke and Shield Dust, and Keen Eye for Accuracy, never reach this
-    /// point ([`crate::secondary::spend_effect_chance_draw`]).
+    /// White Smoke and Shield Dust, Keen Eye for Accuracy and Hyper Cutter for
+    /// Attack, never reach this point ([`crate::secondary::spend_effect_chance_draw`]).
     fn apply_secondary_stat_drop(
         &mut self,
         attacker_is_player: bool,
@@ -1290,8 +1282,8 @@ mod pipeline_agreement_tests {
         (&[187], MovePipeline::Yawn),
         (
             &[
-                0, 2, 12, 14, 15, 17, 21, 22, 31, 43, 55, 56, 61, 63, 64, 70, 73, 74, 76, 78, 96,
-                103, 110, 125, 131, 141, 150, 163,
+                0, 2, 12, 14, 15, 17, 21, 22, 31, 43, 55, 56, 61, 63, 64, 68, 70, 73, 74, 76, 78,
+                96, 101, 103, 110, 125, 131, 141, 150, 163,
             ],
             MovePipeline::OrdinaryHit,
         ),

@@ -264,8 +264,8 @@ pub struct TextWindowRoots {
     pub window_palettes: GbaPtr,
 }
 
-/// Interface art: the text printer's down-arrow sheet and the palettes the
-/// no-save menus need.
+/// Interface art: the text printer's light and dark down-arrow sheets and the
+/// palettes the no-save menus need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InterfaceRoots {
     /// Every `interface/image/*` sheet.
@@ -421,6 +421,42 @@ pub struct FieldMessageRoot {
     pub symbol: &'static str,
     /// Where the message's `EOS`-terminated token stream starts.
     pub addr: GbaPtr,
+}
+
+/// One trainer defeat speech and the context it is.
+///
+/// The ROM string is `EOS`-terminated, so no length is recorded: the reader
+/// finds its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerDefeatSpeechRoot {
+    /// The upstream label, which must be the matching entry of
+    /// `assets::TrainerDefeatSpeechContext::ALL`. Recorded so a profile whose
+    /// roots drifted out of inventory order is refused rather than mislabelled.
+    pub symbol: &'static str,
+    /// Where the speech's `EOS`-terminated token stream starts.
+    pub addr: GbaPtr,
+    /// Where the `trainerbattle` command naming the speech sits, for a speech
+    /// whose bytes recur elsewhere in the image so the text alone does not
+    /// identify it. `None` for the rest.
+    pub script: Option<GbaPtr>,
+}
+
+/// One sight-trainer intro speech and the script it belongs to.
+///
+/// The ROM string is `EOS`-terminated, so no length is recorded: the reader
+/// finds its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SightTrainerIntroSpeechRoot {
+    /// The object-event script, which must be the matching entry of
+    /// `assets::SIGHT_TRAINER_INTRO_SCRIPTS`. Recorded so a profile whose roots
+    /// drifted out of inventory order is refused rather than mislabelled.
+    pub symbol: &'static str,
+    /// Where the speech's `EOS`-terminated token stream starts.
+    pub addr: GbaPtr,
+    /// Where the script's `trainerbattle` command sits. Amy and Liv share a
+    /// trainer and a rematch can repeat a speech, so only this command ties
+    /// the text to its script.
+    pub script: GbaPtr,
 }
 
 /// One battle-animation program: a label and where its commands start.
@@ -594,12 +630,14 @@ pub struct NamingScreenRoots {
 
 /// The party menu's graphics (`graphics/party_menu`).
 ///
-/// The fixed 14 `party-menu/` pack records the checkout extractor emits: the
-/// background, Poké Ball, and held-item sheets (`image`), their palettes, and
-/// eight maps (`raw`): the background screen, five slot panels, and two
-/// buttons. The background sheet, palette and screen and the Poké Ball sheet
-/// and palette are LZ77 streams (`src/graphics.c:1111-1117`); the slot maps,
-/// buttons, and held-item sheet and palette are raw (`src/data/party_menu.h`).
+/// The fixed 15 `party-menu/` pack records the checkout extractor emits: the
+/// background, Poké Ball, held-item, and small Poké Ball sheets (`image`),
+/// their palettes except the small sheet's, which draws with the Poké Ball's,
+/// and eight maps (`raw`): the background screen, five slot panels, and two
+/// buttons. The background sheet, palette and screen and the two Poké Ball
+/// sheets and the Poké Ball palette are LZ77 streams (`src/graphics.c:1111-1117`);
+/// the slot maps, buttons, and held-item sheet and palette are raw
+/// (`src/data/party_menu.h`).
 /// The background sheet is stored as its first 62 tiles, which the pack
 /// publishes as an 8x496 strip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -737,6 +775,14 @@ pub struct Roots {
     pub battle_messages: BattleMessageRoots,
     /// The field-message token table.
     pub field_messages: &'static [FieldMessageRoot],
+    /// The trainer defeat-speech table.
+    pub trainer_defeat_speeches: &'static [TrainerDefeatSpeechRoot],
+    /// The sight-trainer intro-speech table.
+    pub sight_trainer_intro_speeches: &'static [SightTrainerIntroSpeechRoot],
+    /// Where `gTrainerClassNames` starts: 66 fixed-width rows of 13 bytes, each
+    /// a charmap name, `EOS`, and zero padding. `None` when the profile
+    /// records no class-name table.
+    pub trainer_class_names: Option<GbaPtr>,
     /// The battle-animation program catalog.
     pub battle_anims: BattleAnimationRoots,
     /// The ordinary-bag images, palettes, and tilemap.
@@ -806,6 +852,9 @@ impl Roots {
         },
         battle_messages: BattleMessageRoots::NONE,
         field_messages: &[],
+        trainer_defeat_speeches: &[],
+        sight_trainer_intro_speeches: &[],
+        trainer_class_names: None,
         battle_anims: BattleAnimationRoots::NONE,
         bag: BagRoots::NONE,
         starter_chooser: StarterChooserRoots::NONE,

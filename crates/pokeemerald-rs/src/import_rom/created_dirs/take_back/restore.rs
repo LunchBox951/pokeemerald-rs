@@ -470,7 +470,7 @@ const NAME_MAX: usize = 255;
 /// cut short (at a character boundary if it is valid UTF-8) so the result
 /// fits [`NAME_MAX`]; a full-length name would otherwise get `ENAMETOOLONG`
 /// for every candidate.
-fn restored_name(name: &OsStr, n: u32) -> std::ffi::OsString {
+pub(super) fn restored_name(name: &OsStr, n: u32) -> std::ffi::OsString {
     use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 
     let suffix = format!(".restored-{n}");

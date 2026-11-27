@@ -9,7 +9,8 @@ use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, evolution_scene,
     field_messages, fonts, interface, inventory, layouts, locate_profile, naming_screen,
-    opening_scene, party_menu, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
+    opening_scene, party_menu, poke_ball, sight_trainer_intro_speeches, sprites, starter_chooser,
+    text_window, tilesets, title, trainer_class_names, trainer_defeat_speeches,
 };
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_battle_bar_id, healthbox_element_ids,
@@ -49,6 +50,9 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain([
             rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
             rom_import::FIELD_MESSAGE_PACK_ID.to_owned(),
+            rom_import::TRAINER_DEFEAT_SPEECH_PACK_ID.to_owned(),
+            rom_import::SIGHT_TRAINER_INTRO_SPEECH_PACK_ID.to_owned(),
+            rom_import::TRAINER_CLASS_NAME_PACK_ID.to_owned(),
             rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
         ])
         .chain(synthetic_bag_ids())
@@ -117,6 +121,12 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             battle_messages::locate(ctx, &mut report).map(|_| ())
         } else if domain == "field_messages" {
             field_messages::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "trainer_defeat_speeches" {
+            trainer_defeat_speeches::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "sight_trainer_intro_speeches" {
+            sight_trainer_intro_speeches::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "trainer_class_names" {
+            trainer_class_names::locate(ctx, &mut report).map(|_| ())
         } else {
             title::locate(ctx, &mut report).map(|_| ())
         }
@@ -315,6 +325,39 @@ fn a_pack_missing_the_battle_message_table_is_refused() {
 fn a_pack_missing_the_field_message_table_is_refused() {
     let id = rom_import::FIELD_MESSAGE_PACK_ID;
     assert_refused("no-field-message-table", without(id), id, "field_messages");
+}
+
+#[test]
+fn a_pack_missing_the_trainer_defeat_speech_table_is_refused() {
+    let id = rom_import::TRAINER_DEFEAT_SPEECH_PACK_ID;
+    assert_refused(
+        "no-trainer-defeat-speech-table",
+        without(id),
+        id,
+        "trainer_defeat_speeches",
+    );
+}
+
+#[test]
+fn a_pack_missing_the_sight_trainer_intro_speech_table_is_refused() {
+    let id = rom_import::SIGHT_TRAINER_INTRO_SPEECH_PACK_ID;
+    assert_refused(
+        "no-sight-trainer-intro-speech-table",
+        without(id),
+        id,
+        "sight_trainer_intro_speeches",
+    );
+}
+
+#[test]
+fn a_pack_missing_the_trainer_class_name_table_is_refused() {
+    let id = rom_import::TRAINER_CLASS_NAME_PACK_ID;
+    assert_refused(
+        "no-trainer-class-name-table",
+        without(id),
+        id,
+        "trainer_class_names",
+    );
 }
 
 #[test]
@@ -537,11 +580,11 @@ fn a_surplus_naming_screen_entry_is_refused_by_id() {
 }
 
 #[test]
-fn the_party_menu_inventory_is_three_sheets_three_palettes_and_eight_maps() {
+fn the_party_menu_inventory_is_four_sheets_three_palettes_and_eight_maps() {
     let ids = party_menu_ids();
     let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
-    assert_eq!(ids.len(), 14);
-    assert_eq!(count("party-menu/image/"), 3);
+    assert_eq!(ids.len(), 15);
+    assert_eq!(count("party-menu/image/"), 4);
     assert_eq!(count("party-menu/palette/"), 3);
     assert_eq!(count("party-menu/raw/"), 8);
 }
@@ -556,8 +599,9 @@ fn a_pack_missing_a_party_menu_entry_is_refused() {
 
 #[test]
 fn a_surplus_party_menu_entry_is_refused_by_id() {
-    // The small Poké Ball sheet is a later record, not part of this inventory.
-    let surplus = "party-menu/image/pokeball_small";
+    // The small Poké Ball sheet draws with the Poké Ball's palette, so a
+    // palette of its own is outside the inventory.
+    let surplus = "party-menu/palette/pokeball_small";
     let mut entries = complete_inventory();
     entries.push(raw_entry(surplus.to_owned(), vec![0]));
     let rom = RomFixture::new().emerald_header().finish();
@@ -892,10 +936,16 @@ fn an_unrelated_interface_palette_does_not_satisfy_the_main_menu_requirement() {
 }
 
 #[test]
-fn a_pack_missing_the_down_arrow_sheet_is_refused() {
-    let id = "interface/image/down_arrow";
-    assert_eq!(INTERFACE_IMAGE_IDS, [id]);
-    assert_refused("no-down-arrow", without(id), id, "interface");
+fn a_pack_missing_a_down_arrow_sheet_is_refused() {
+    let ids = [
+        "interface/image/down_arrow",
+        "interface/image/down_arrow_alt",
+    ];
+    assert_eq!(INTERFACE_IMAGE_IDS, ids);
+    for id in ids {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(id), id, "interface");
+    }
 }
 
 #[test]

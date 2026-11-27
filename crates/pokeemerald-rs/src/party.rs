@@ -117,9 +117,10 @@
 use std::ops::Range;
 
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
-use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, BOX_NICKNAME_LEN, SUBSTRUCTURE_LEN};
+use engine::save::{
+    BoxPokemon, Pokemon, PokemonSubstructures, BOX_NICKNAME_LEN, MAIL_NONE, SUBSTRUCTURE_LEN,
+};
 
-const MAIL_NONE: u8 = u8::MAX;
 const SPECIES_NONE: u16 = 0;
 
 const GROWTH_SPECIES: Range<usize> = 0..2;
@@ -174,6 +175,17 @@ const ATTACK_PP_OFFSET: usize = MAX_MON_MOVES * MOVE_ID_WIDTH;
     )
 )]
 mod starter;
+
+/// `AdjustFriendship`'s walking event on a saved record, and the
+/// valid-species test shared with the field-poison drain.
+mod friendship;
+pub(crate) use friendship::{adjust_friendship_walking, has_valid_species};
+
+/// The start menu's TAKE entry for a mail holder: `CursorCb_TakeMail`'s transfers.
+mod mail;
+pub(crate) use mail::{
+    holds_valid_mail, take_mail_from_mon, take_mail_from_mon_and_save, TakeMailError,
+};
 
 /// The start menu's TAKE entry: `TryTakeMonItem`'s effect on the lead and the bag.
 mod take_item;
@@ -751,6 +763,8 @@ pub(crate) fn has_unstamped_owner_name(record: &Pokemon, owner_id: u32) -> bool 
 }
 
 #[cfg(test)]
+mod repel_tests;
+#[cfg(test)]
 mod traded_tests;
 
 /// Whether `record` is an egg or Bad Egg: the unencrypted header's
@@ -876,6 +890,49 @@ pub(crate) fn live_lead_cute_charm_wild_gender(
     Some(battle::Gender::of_personality(ratio, lead.personality()).cute_charm_wild_gender())
 }
 
+/// The level `IsWildLevelAllowedByRepel` compares a wild level with
+/// (`pokeemerald/src/wild_encounter.c:874-895`): that of the first slot of `party`, in
+/// order, with nonzero HP and `MON_DATA_IS_EGG` clear. `None` when no slot qualifies.
+///
+/// Every slot of `party` is scanned whatever the saved party count says, as upstream's
+/// loop runs over `PARTY_SIZE`. The egg test is the secure region's IV-word bit that
+/// `MON_DATA_IS_EGG` reads (`pokemon.c:3929-3931`), not the unencrypted header flag, and
+/// a record that fails its checksum counts as an egg (`pokemon.c:3733-3747`). HP and level
+/// are the record's unencrypted tail; nothing else is decoded, so a record whose moves
+/// the battle engine could not load still qualifies.
+///
+/// `lead` overlays the live lead's HP and level on its own slot: the lead is owned
+/// outside the saved party and may have changed since its record was last merged.
+pub(crate) fn first_repel_qualifying_level(
+    party: &[Pokemon],
+    lead: Option<&LoadedLead>,
+) -> Option<u8> {
+    for (slot, saved) in party.iter().enumerate() {
+        let overlaid;
+        let record = match lead.filter(|lead| lead.slot() == slot && !lead.is_lent()) {
+            Some(lead) => {
+                overlaid = {
+                    let mut record = *lead.record();
+                    overlay_battle_stats(&mut record, lead.battler());
+                    record
+                };
+                &overlaid
+            }
+            None => saved,
+        };
+        if record.hp == 0 {
+            continue;
+        }
+        let Ok(substructures) = record.box_data.substructures() else {
+            continue;
+        };
+        if read_u32(&substructures.misc, MISC_IV_WORD) & IS_EGG_BIT == 0 {
+            return Some(record.level);
+        }
+    }
+    None
+}
+
 /// Selects which saved slot is the active battler on continue: the first
 /// non-egg, non-Bad-Egg, non-fainted slot in `party` -- `SetBattlePartyIds`'s
 /// player-side scan (`pokeemerald/src/battle_controllers.c:585-606`,
@@ -998,6 +1055,21 @@ impl LoadedLead {
     /// The backing save record as last merged.
     pub(crate) fn record(&self) -> &Pokemon {
         &self.record
+    }
+
+    /// Installs the result of a mail transfer ([`take_mail_from_mon`],
+    /// [`take_mail_from_mon_and_save`]): the battler with its mail item gone and
+    /// the record's `mail` byte. The merge keeps the record's `mail` byte, so
+    /// this is the only way it changes after load; the caller files the lead
+    /// into the save afterwards.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the battler is lent out through [`Self::take_battler`].
+    pub(crate) fn install_mail_take(&mut self, battler: BattlePokemon, mail: u8) {
+        assert!(self.battler.is_some(), "{LENT_OUT}");
+        self.battler = Some(battler);
+        self.record.mail = mail;
     }
 
     /// Whether [`Self::take_battler`] has lent the battler out and it has not

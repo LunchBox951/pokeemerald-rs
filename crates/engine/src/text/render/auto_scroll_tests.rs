@@ -301,3 +301,128 @@ fn manual_mode_keeps_its_fresh_edge_confirmation() {
     assert_eq!(printer.tick(held_only), TickEvent::AwaitingClear);
     assert_eq!(printer.tick(press_a()), TickEvent::Cleared);
 }
+
+const NEWLINE: u8 = crate::text::CHAR_NEWLINE;
+
+fn glyph_ticks(speed: TextSpeed, auto: bool, bytes: &[u8]) -> Vec<usize> {
+    let pixels = super::tests::blank_sheet_pixels();
+    let sheet = synthetic_sheet(&pixels, FontId::Normal).to_owned_sheet();
+    let printer = Printer::new(decode_tokens(bytes), sheet, speed, (0, 1));
+    let mut printer = if auto {
+        printer.with_auto_scroll()
+    } else {
+        printer
+    };
+    (0..40)
+        .filter(|_| matches!(printer.tick(PrinterInput::none()), TickEvent::Glyph(_)))
+        .collect()
+}
+
+/// `text.c:958-961`: non-recorded auto-scroll reloads `delayCounter` with 3,
+/// not the Slow speed's 7, so the second glyph lands on the fifth tick.
+#[test]
+fn slow_auto_scroll_reveals_glyphs_every_four_frames() {
+    let pixels = super::tests::blank_sheet_pixels();
+    let sheet = synthetic_sheet(&pixels, FontId::Normal).to_owned_sheet();
+    let mut printer = Printer::new(
+        decode_tokens(&[ENCODED_A, ENCODED_A, EOS]),
+        sheet,
+        TextSpeed::Slow,
+        (0, 1),
+    )
+    .with_auto_scroll();
+    let glyph_ticks: Vec<usize> = (0..12)
+        .filter(|_| matches!(printer.tick(PrinterInput::none()), TickEvent::Glyph(_)))
+        .collect();
+    assert_eq!(glyph_ticks, vec![0, 4]);
+}
+
+#[test]
+fn slow_auto_scroll_matches_mid_glyph_cadence() {
+    let stream = [ENCODED_A, ENCODED_A, ENCODED_A, EOS];
+    assert_eq!(glyph_ticks(TextSpeed::Slow, true, &stream), vec![0, 4, 8]);
+    assert_eq!(glyph_ticks(TextSpeed::Mid, true, &stream), vec![0, 4, 8]);
+}
+
+#[test]
+fn slow_manual_printing_keeps_its_seven_frame_reload() {
+    let stream = [ENCODED_A, ENCODED_A, ENCODED_A, EOS];
+    assert_eq!(glyph_ticks(TextSpeed::Slow, false, &stream), vec![0, 8, 16]);
+    assert_eq!(glyph_ticks(TextSpeed::Mid, false, &stream), vec![0, 4, 8]);
+}
+
+#[test]
+fn fast_and_instant_auto_scroll_stay_undelayed() {
+    let stream = [ENCODED_A, ENCODED_A, ENCODED_A, EOS];
+    for speed in [TextSpeed::Fast, TextSpeed::Instant] {
+        assert_eq!(
+            glyph_ticks(speed, true, &stream),
+            vec![0, 1, 2],
+            "{speed:?}"
+        );
+    }
+    let with_newline = [ENCODED_A, NEWLINE, ENCODED_A, EOS];
+    for speed in [TextSpeed::Fast, TextSpeed::Instant] {
+        assert_eq!(
+            glyph_ticks(speed, true, &with_newline),
+            vec![0, 1],
+            "{speed:?}"
+        );
+    }
+}
+
+/// Each repeat token re-enters the handler with the reloaded counter, so it
+/// costs one three-frame period before the next token.
+#[test]
+fn slow_auto_scroll_repeat_tokens_cost_three_frames_each() {
+    let repeat_tokens: [&[u8]; 4] = [
+        &[NEWLINE],
+        &[EXT, crate::text::EXT_CTRL_CODE_COLOR, 2],
+        &[EXT, crate::text::EXT_CTRL_CODE_SHIFT_RIGHT, 4],
+        &[EXT, crate::text::EXT_CTRL_CODE_PALETTE, 1],
+    ];
+    for token in repeat_tokens {
+        let mut one = vec![ENCODED_A];
+        one.extend_from_slice(token);
+        one.extend_from_slice(&[ENCODED_A, EOS]);
+        assert_eq!(
+            glyph_ticks(TextSpeed::Slow, true, &one),
+            vec![0, 7],
+            "{token:?}"
+        );
+        assert_eq!(
+            glyph_ticks(TextSpeed::Slow, false, &one),
+            vec![0, 15],
+            "{token:?}"
+        );
+
+        let mut two = vec![ENCODED_A];
+        two.extend_from_slice(token);
+        two.extend_from_slice(token);
+        two.extend_from_slice(&[ENCODED_A, EOS]);
+        assert_eq!(
+            glyph_ticks(TextSpeed::Slow, true, &two),
+            vec![0, 10],
+            "{token:?}"
+        );
+    }
+}
+
+#[test]
+fn slow_auto_scroll_fill_window_costs_three_frames() {
+    let stream = [
+        ENCODED_A,
+        EXT,
+        crate::text::EXT_CTRL_CODE_FILL_WINDOW,
+        ENCODED_A,
+        EOS,
+    ];
+    assert_eq!(glyph_ticks(TextSpeed::Slow, true, &stream), vec![0, 7]);
+}
+
+#[test]
+fn mid_auto_scroll_repeat_cadence_is_unchanged() {
+    let stream = [ENCODED_A, NEWLINE, ENCODED_A, EOS];
+    assert_eq!(glyph_ticks(TextSpeed::Mid, true, &stream), vec![0, 7]);
+    assert_eq!(glyph_ticks(TextSpeed::Mid, false, &stream), vec![0, 7]);
+}

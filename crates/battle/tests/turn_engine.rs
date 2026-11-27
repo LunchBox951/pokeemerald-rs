@@ -10,6 +10,8 @@ mod absorbing_abilities;
 mod accuracy_down_hit;
 #[path = "turn_engine/announcement.rs"]
 mod announcement;
+#[path = "turn_engine/attack_down_hit.rs"]
+mod attack_down_hit;
 #[path = "turn_engine/attract/mod.rs"]
 mod attract;
 #[path = "turn_engine/bad_poison.rs"]
@@ -30,8 +32,12 @@ mod cute_charm_contact;
 mod effect_spore_contact;
 #[path = "turn_engine/escape.rs"]
 mod escape;
+#[path = "turn_engine/false_swipe.rs"]
+mod false_swipe;
 #[path = "turn_engine/first_battle.rs"]
 mod first_battle;
+#[path = "turn_engine/flame_body_contact.rs"]
+mod flame_body_contact;
 #[path = "turn_engine/flinch.rs"]
 mod flinch;
 #[path = "turn_engine/freeze.rs"]

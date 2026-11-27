@@ -18,7 +18,10 @@
 //! as `<name>.restored-<n>`, if it is not ours or holds something. A name
 //! too long for that suffix is cut short first, so the recovery name fits
 //! the 255-byte component limit. Every step that leaves a level standing
-//! says so on stderr.
+//! says so on stderr. Where the quarantine's `mkdirat` fails for want of
+//! space, quota or inodes, a level is moved (no-replace) to a random name
+//! beside it instead, which makes no directory, and is re-checked and
+//! unlinked there (see [`aside`]).
 //!
 //! This module walks the levels; the steps live in its children:
 //!
@@ -26,6 +29,8 @@
 //! - [`occupied`] lists a held level, so one that holds entries is not moved.
 //! - [`restore`] captures a level into it, re-checks the capture, and unlinks
 //!   or puts it back.
+//! - [`aside`] takes a level back with no quarantine, where the filesystem
+//!   has no room to make one.
 //! - [`report`] says on stderr where a level or quarantine was left.
 //!
 //! # Accepted residuals
@@ -36,13 +41,14 @@
 //! name from `/dev/urandom`, so only a writer running as that user can act
 //! inside it, and such a writer can already delete or rewrite everything
 //! the import owns. The residuals of each step are documented with it, in
-//! [`restore`] and [`quarantine`].
+//! [`restore`], [`quarantine`] and [`aside`].
 //!
 //! Rollback is also not crash-safe. A level that holds entries when
 //! [`occupied`] lists it is left where it is, never moved; but a process
 //! killed after a level was renamed into its quarantine and before it was
-//! removed or put back leaves it at `.undo-<hex>/level` with no warning, and
-//! no later run looks for it. That capture holds data only if another writer
+//! removed or put back leaves it at `.undo-<hex>/level` (or, taken back
+//! without a quarantine, at its random `.undo-<hex>` name beside where it
+//! stood) with no warning, and no later run looks for it. That capture holds data only if another writer
 //! acted from the listing until that kill: filling the level before the
 //! rename, filling it after the rename through a descriptor or working
 //! directory it already held inside it, or swapping its own directory in
@@ -55,6 +61,7 @@ use rustix::fs::AtFlags;
 
 use super::{same_directory_identity, CreatedDirectory};
 
+mod aside;
 #[cfg(test)]
 mod hooks;
 mod occupied;
@@ -62,6 +69,7 @@ mod quarantine;
 mod report;
 mod restore;
 
+use aside::take_back_aside;
 #[cfg(test)]
 pub(super) use hooks::{
     take_back_level_capture_check_failing, take_back_level_held_stat_failing,
@@ -74,7 +82,9 @@ pub(super) use occupied::SetHeldMode;
 use occupied::{list_level, ModeLeft};
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 pub(super) use quarantine::unguessable_hex;
-use quarantine::{claim_quarantine, open_quarantine, remove_quarantine};
+use quarantine::{
+    claim_in, claim_quarantine, make_private_directory, remove_quarantine, Claim, MakeDirectory,
+};
 #[cfg(test)]
 pub(super) use quarantine::{unguessable_quarantine_name, QUARANTINE_ENTRY};
 use report::{level_location, standing, warn_if_moved_away, warn_left_standing, Standing};
@@ -118,11 +128,12 @@ pub(super) fn undo_created_directories_with_capture_hooks(
     before_take: &mut dyn FnMut(),
     in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
 ) {
-    undo_created_directories_setting_modes(
+    undo_created_directories_through(
         created,
         before_take,
         in_quarantine,
         &super::super::dest::set_held_directory_mode,
+        &mut make_private_directory,
     );
 }
 
@@ -133,16 +144,44 @@ pub(super) fn undo_created_directories_setting_modes_with(
     created: &[CreatedDirectory],
     set_mode: &SetHeldMode<'_>,
 ) {
-    undo_created_directories_setting_modes(created, &mut || {}, &mut |_, _| {}, set_mode);
+    undo_created_directories_through(
+        created,
+        &mut || {},
+        &mut |_, _| {},
+        set_mode,
+        &mut make_private_directory,
+    );
+}
+
+/// [`undo_created_directories_with_capture_hooks`] with `mkdir` making each
+/// quarantine, where a test fails it as a full filesystem does. A level
+/// taken back without a quarantine (see [`aside`]) reports its capture
+/// stages with the directory holding it, and its random name beside the
+/// level.
+#[cfg(test)]
+pub(super) fn undo_created_directories_making_with(
+    created: &[CreatedDirectory],
+    before_take: &mut dyn FnMut(),
+    in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+    mkdir: &mut MakeDirectory<'_>,
+) {
+    undo_created_directories_through(
+        created,
+        before_take,
+        in_quarantine,
+        &super::super::dest::set_held_directory_mode,
+        mkdir,
+    );
 }
 
 /// [`undo_created_directories_with_capture_hooks`] with each held level's
-/// mode set through `set_mode`.
-fn undo_created_directories_setting_modes(
+/// mode set through `set_mode` and each quarantine made by `mkdir`.
+fn undo_created_directories_through(
     created: &[CreatedDirectory],
     before_take: &mut dyn FnMut(),
     in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
     set_mode: &occupied::SetHeldMode<'_>,
+    mkdir: &mut MakeDirectory<'_>,
 ) {
     let mut quarantine = None;
     for dir in created.iter().rev() {
@@ -203,6 +242,7 @@ fn undo_created_directories_setting_modes(
                             parent,
                             dir,
                             in_quarantine,
+                            mkdir,
                         ),
                     };
                 warn_mode_left(parent, dir, listing.mode_left, went_on);
@@ -258,16 +298,25 @@ fn undo_created_directories_setting_modes(
 
 /// Takes the empty, listed `dir` back through the shared `quarantine`,
 /// claiming it first if there is none yet, or through one of its own beside
-/// it when it is on another filesystem. Whether the walk goes on.
+/// it when it is on another filesystem. Where `mkdir` finds no room for a
+/// quarantine, `dir` goes aside instead (see [`aside`]), and the next level
+/// asks again, since room may have come back. Whether the walk goes on.
 fn take_back_through_quarantine<'a>(
     quarantine: &mut Option<quarantine::Quarantine<'a>>,
     created: &'a [CreatedDirectory],
     parent: &OwnedFd,
     dir: &CreatedDirectory,
     in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+    mkdir: &mut MakeDirectory<'_>,
 ) -> bool {
     if quarantine.is_none() {
-        *quarantine = claim_quarantine(created, dir);
+        match claim_quarantine(created, dir, mkdir) {
+            Claim::Held(held) => *quarantine = Some(held),
+            Claim::NoRoom => {
+                return take_back_aside(parent, dir, in_quarantine) == Outcome::Taken;
+            }
+            Claim::Refused => return false,
+        }
     }
     let Some(held) = quarantine.as_ref() else {
         return false;
@@ -282,7 +331,7 @@ fn take_back_through_quarantine<'a>(
             if let Some(shared) = quarantine.take() {
                 remove_quarantine(&shared, &mut || {});
             }
-            take_back_beside(parent, dir)
+            take_back_beside(parent, dir, mkdir, in_quarantine)
         }
     }
 }
@@ -438,14 +487,21 @@ enum Outcome {
 
 /// Takes `dir` back through a quarantine of its own made beside it, on its
 /// own filesystem, then removes that quarantine; answers whether the walk
-/// may go on.
-fn take_back_beside(parent: &OwnedFd, dir: &CreatedDirectory) -> bool {
+/// may go on. Where `mkdir` finds no room for one, `dir` goes aside instead.
+fn take_back_beside(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    mkdir: &mut MakeDirectory<'_>,
+    in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+) -> bool {
     let Some(name) = quarantine::unguessable_quarantine_name() else {
         warn_left_standing(dir, format_args!("no entropy for a private cleanup name"));
         return false;
     };
-    let Some(local) = open_quarantine(parent.as_fd(), dir, &name, dir, &mut || {}) else {
-        return false;
+    let local = match claim_in(parent.as_fd(), dir, &name, dir, mkdir) {
+        Claim::Held(local) => local,
+        Claim::NoRoom => return take_back_aside(parent, dir, in_quarantine) == Outcome::Taken,
+        Claim::Refused => return false,
     };
     let outcome = take_back_into(&local, parent, dir, &mut |_, _| {});
     remove_quarantine(&local, &mut || {});

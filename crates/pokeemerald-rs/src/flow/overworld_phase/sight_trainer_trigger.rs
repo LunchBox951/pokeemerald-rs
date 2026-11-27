@@ -46,7 +46,7 @@ use engine::overworld::{trainer_can_see_player, MapRuntime, PlayerState};
 use crate::flow::npc_trainer_battle;
 
 use super::sight_trainer_approach::SightApproach;
-use super::{ActiveBattle, OverworldPhase};
+use super::{ActiveBattle, OverworldPhase, PartyReserves};
 
 /// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`): the base of the
 /// per-trainer "already fought" flag range `HasTrainerBeenFought` /
@@ -181,15 +181,14 @@ fn already_defeated(trainer_id: TrainerId, event_data: &EventData) -> bool {
 /// nothing else on this route.
 ///
 /// Upstream's own gate (`GetMonsStateToDoubles_2() !=
-/// PLAYER_HAS_TWO_USABLE_MONS`) refuses even a doubles-capable game unless
-/// the player's party holds two usable mons. This port has no doubles
-/// support in the `battle` crate at all and, separately, tracks at most one
-/// party mon (the phase's lead owner docs), so that gate can
-/// never pass here -- the same real outcome upstream produces for a
-/// permanently-one-mon party, not a bespoke port-only carve-out. Both twins'
-/// cones are still checked every frame, and the scan simply continues to the
-/// next candidate exactly as `CheckTrainer`'s own `return 0` does. Recorded
-/// on the ledger's `data/maps/Route103#Route103_SightTrainers` artifact.
+/// PLAYER_HAS_TWO_USABLE_MONS`) lets the double battle start once the
+/// player's party holds two usable mons. The `battle` crate has no doubles
+/// support, so a double-battle trainer is refused whatever the party holds
+/// and that gate is not evaluated: with two usable mons upstream starts the
+/// fight and this port does not. Both twins' cones are still checked every
+/// frame, and the scan continues to the next candidate as `CheckTrainer`'s
+/// own `return 0` does. Recorded on the ledger's
+/// `data/maps/Route103#Route103_SightTrainers` artifact.
 ///
 /// `false` (proceed to attempt construction, which separately fails closed)
 /// for an id [`battle::trainer_data`] does not recognize; unreachable for
@@ -216,15 +215,15 @@ struct SightScan {
     doubles_refused: Vec<TrainerId>,
 }
 
-/// Scan `objects`' live entries, in declaration order, for the first `TRAINER_TYPE_NORMAL` sight
+/// Scan `objects`' admitted entries, in object-slot order, for the first `TRAINER_TYPE_NORMAL` sight
 /// trainer whose cone reaches `player` and who is currently eligible to
 /// fight.
 ///
 /// This is `CheckForTrainersWantingBattle` (`trainer_see.c:189-222`) plus
-/// `CheckTrainer` (`:224-256`): the scan order is
-/// `data/maps/Route103/map.json`'s own `object_events` declaration order --
-/// the order [`MapRuntime::object_events_at`]'s own docs cite for every
-/// other scan in this crate -- an already-defeated trainer is skipped
+/// `CheckTrainer` (`:224-256`): the scan order is the live object slot
+/// ([`LiveObjectEvent::object_slot`], upstream's `gObjectEvents` index) --
+/// not the map's `object_events` declaration order -- an already-defeated
+/// trainer is skipped
 /// ([`already_defeated`]), and the geometry itself
 /// (`GetTrainerApproachDistance` + `CheckPathBetweenTrainerAndPlayer`) lives
 /// in [`engine::overworld::trainer_can_see_player`].
@@ -241,7 +240,18 @@ fn find_sight_trainer(
     event_data: &EventData,
 ) -> SightScan {
     let mut scan = SightScan::default();
-    for live in objects.entries() {
+    // `CheckForTrainersWantingBattle` walks `gObjectEvents` by index and skips
+    // inactive slots (`trainer_see.c:198-204`), so visit the admitted entries
+    // in object-slot order. Declaration order is not that order: an object
+    // takes the lowest free slot when it spawns (`GetAvailableObjectEventId`,
+    // `event_object_movement.c:1358-1380`). The slots are distinct, so the
+    // sort is total.
+    let mut slotted: Vec<(usize, &LiveObjectEvent)> = objects
+        .entries()
+        .filter_map(|live| live.object_slot().map(|slot| (slot, live)))
+        .collect();
+    slotted.sort_unstable_by_key(|&(slot, _)| slot);
+    for (_, live) in slotted {
         let event = live.template();
         if event.trainer_type != TrainerType::Normal {
             continue;
@@ -459,9 +469,8 @@ impl OverworldPhase {
             if self.sight_trainer_log.should_log(refused) {
                 eprintln!(
                     "sight trainer: trainer {refused:?}'s cone reached the player, but its \
-                     real party is a double battle -- this port has no doubles support and \
-                     tracks at most one party mon, so `GetMonsStateToDoubles_2` can never pass \
-                     here; skipping to the next candidate"
+                     real party is a double battle -- this port has no doubles support; \
+                     skipping to the next candidate"
                 );
             }
         }
@@ -495,8 +504,22 @@ impl OverworldPhase {
         // exactly like every other construction refusal (that function's own
         // module docs, "Nothing is built before the whole party is
         // screened").
-        match npc_trainer_battle::start_npc_trainer_battle(lead, trainer_id, &mut self.rng) {
-            Ok(battle) => {
+        // The pre-flight refuses a trainer this cone cannot fight before the saved party is
+        // inspected, and a healthy saved member that cannot join refuses the fight next. The
+        // per-frame retry of a refused cone logs nothing and draws nothing either way.
+        let started =
+            npc_trainer_battle::preflight_npc_trainer_battle(&lead, trainer_id).and_then(|()| {
+                let (player_reserves, reserves) = self.trainer_party_reserves(trainer_id)?;
+                npc_trainer_battle::start_npc_trainer_battle_with_reserves(
+                    lead,
+                    player_reserves,
+                    trainer_id,
+                    &mut self.rng,
+                )
+                .map(|battle| (battle, reserves))
+            });
+        match started {
+            Ok((battle, reserves)) => {
                 let battle = battle.with_player_obedience(self.player_obedience());
                 let walk_tiles =
                     approach_walk_tiles(live.state().position(), self.player.position());
@@ -507,6 +530,7 @@ impl OverworldPhase {
                     entry.intro,
                     battle,
                     trainer_id,
+                    reserves,
                 ));
                 SightTrainerOutcome::ApproachStarted
             }
@@ -515,7 +539,7 @@ impl OverworldPhase {
                     eprintln!(
                         "sight trainer: can't start against trainer {trainer_id:?} ({error}) -- \
                          refused before any draw (a held-item party or lead, an unimplemented \
-                         moveset, or a fainted lead)"
+                         moveset, a fainted lead, or a healthy saved member that cannot join)"
                     );
                 }
                 SightTrainerOutcome::Refused
@@ -534,19 +558,25 @@ impl OverworldPhase {
         &mut self,
         battle: battle::Battle,
         trainer_id: TrainerId,
+        reserves: PartyReserves,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
-        let mut returned_lead = None;
-        let outcome = npc_trainer_battle::advance_npc_trainer_battle(
+        let end = npc_trainer_battle::advance_npc_trainer_party_battle(
             &mut slot,
-            &mut returned_lead,
             &mut self.save1.money,
             &mut self.rng,
         );
-        // Back with the owner before the flags, the white-out or any routing.
-        if let Some(lead) = returned_lead {
-            self.restore_lead_battler(lead);
-        }
+        let Some(end) = end else {
+            // Ongoing: the whole variant stays, party included.
+            return slot.map(|battle| ActiveBattle::SightTrainer {
+                battle,
+                trainer_id,
+                reserves,
+            });
+        };
+        let outcome = end.outcome;
+        // Back with the owners before the flags, the white-out or any routing.
+        let filed = self.file_trainer_party(end, reserves);
         if let Some(outcome) = outcome {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
@@ -562,17 +592,11 @@ impl OverworldPhase {
                     );
                 }
             }
-            if outcome == battle::BattleOutcome::PlayerLost {
-                self.white_out();
-            }
         }
-        if slot.is_none() {
-            self.reinit_field_tileset_animations();
-        }
-        // `trainer_id` is dropped along with the rest of
-        // `ActiveBattle::SightTrainer` the instant `slot` empties -- an
-        // abort clears it too, not only a reported outcome.
-        slot.map(|battle| ActiveBattle::SightTrainer { battle, trainer_id })
+        self.settle_trainer_party(outcome, filed);
+        self.reinit_field_tileset_animations();
+        // The slot emptied, an abort included: `trainer_id` goes with the variant.
+        None
     }
 }
 
