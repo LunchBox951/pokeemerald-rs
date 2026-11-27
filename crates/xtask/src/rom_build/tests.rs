@@ -629,4 +629,5 @@ fn a_symlinked_output_is_refused() {
 }
 
 mod checkout_reading;
+#[cfg(unix)]
 mod fixture_git_env;

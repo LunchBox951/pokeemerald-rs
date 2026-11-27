@@ -1,6 +1,7 @@
 //! The fixture's git helper must not follow repository-routing variables the
 //! test process inherited (a git hook running `cargo test` sets `GIT_DIR` and
-//! `GIT_INDEX_FILE`).
+//! `GIT_INDEX_FILE`). Unix only: the re-run fixture tests drive a shell script
+//! standing in for `make`.
 
 use super::*;
 
@@ -71,7 +72,6 @@ fn fixture_test_ignores_inherited_routing(tag: &str, test: &str) {
 }
 
 #[test]
-#[cfg(unix)]
 fn a_good_build_ignores_an_inherited_git_dir_and_index_file() {
     fixture_test_ignores_inherited_routing(
         "env-good",
@@ -80,7 +80,6 @@ fn a_good_build_ignores_an_inherited_git_dir_and_index_file() {
 }
 
 #[test]
-#[cfg(unix)]
 fn a_mismatched_reference_under_inherited_routing_leaves_the_sentinels_alone() {
     fixture_test_ignores_inherited_routing(
         "env-mismatch",
