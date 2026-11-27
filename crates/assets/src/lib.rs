@@ -67,6 +67,7 @@ pub mod battle_palace;
 pub mod battle_pike_rooms;
 pub mod battle_pike_wild_mons;
 pub mod battle_pyramid_items;
+pub mod battle_pyramid_prizes;
 pub mod berries;
 pub mod bundled_overworld;
 pub mod credits;
