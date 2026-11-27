@@ -107,20 +107,24 @@ fn a_seeded_grass_target_takes_the_penalty_once() {
 }
 
 #[test]
-fn only_check_bad_move_has_a_ported_leech_seed_branch() {
+fn leech_seed_is_admitted_before_the_first_turn_setup_branch_is_ported() {
     let dex = Dex::new();
-    assert_eq!(
-        ensure_scoreable(&dex, MoveId::LEECH_SEED, AiFlags::CHECK_BAD_MOVE),
-        Ok(())
-    );
     for flags in [
+        AiFlags::CHECK_BAD_MOVE,
         AiFlags::CHECK_BAD_MOVE | AiFlags::CHECK_VIABILITY,
-        AiFlags::CHECK_BAD_MOVE | AiFlags::SETUP_FIRST_TURN,
     ] {
         assert_eq!(
             ensure_scoreable(&dex, MoveId::LEECH_SEED, flags),
-            Err(BattleError::UnscoreableMoveEffect(MoveId::LEECH_SEED)),
+            Ok(()),
             "{flags:?}"
         );
     }
+    assert_eq!(
+        ensure_scoreable(
+            &dex,
+            MoveId::LEECH_SEED,
+            AiFlags::CHECK_BAD_MOVE | AiFlags::SETUP_FIRST_TURN
+        ),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::LEECH_SEED))
+    );
 }
