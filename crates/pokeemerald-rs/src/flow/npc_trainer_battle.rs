@@ -17,8 +17,10 @@
 //!
 //! # Nothing is built before the whole party is screened
 //!
-//! Every rejection occurs before the first RNG draw. This keeps repeated sight-cone checks
-//! from changing the shared stream while a trainer party remains unsupported.
+//! Every rejection occurs before the first RNG draw, the Trace copies `Battle::new_trainer`
+//! projects included ([`battle::ensure_trainer_party_startable`] screens them on the fixed
+//! personalities). This keeps repeated sight-cone checks from changing the shared stream while
+//! a trainer party remains unsupported.
 //!
 //! # Player reserves
 //!
@@ -339,8 +341,10 @@ pub fn start_npc_trainer_battle(
 ///
 /// All validation finishes before party construction, so every error leaves `rng`
 /// unchanged. The lead and every healthy reserve get the same pre-flight, so a reserve the
-/// battle would refuse leaves `rng` untouched like a refused lead does. Successful
-/// construction draws each party member's OT ID before battle initialization.
+/// battle would refuse leaves `rng` untouched like a refused lead does. That pre-flight
+/// includes `Battle::new_trainer`'s Trace-copy screen, run for each member on its own
+/// against the trainer's party. Successful construction draws each party member's OT ID
+/// before battle initialization.
 ///
 /// # Errors
 ///
@@ -560,6 +564,173 @@ mod tests {
                 assert_eq!(rng.state(), before, "the refusal must precede every draw");
             }
         }
+    }
+
+    /// DALE's Wailmer takes Water Veil from its fixed personality, so a burned
+    /// Porygon2 lead could copy it: `Battle::new_trainer` refuses that Trace
+    /// projection, and the refusal must come before the OT-ID draws.
+    #[test]
+    fn burned_trace_lead_is_refused_before_any_ot_id_draw() {
+        const PORYGON2: SpeciesId = SpeciesId(233);
+        let mut lead = lead_of(PORYGON2);
+        assert_eq!(lead.ability(), assets::AbilityId::TRACE, "setup: Trace");
+        lead.set_status1(battle::Status1::Burned);
+
+        let mut rng = Rng::new(1);
+        let before = rng.state();
+        let result = start_npc_trainer_battle(lead, TrainerId::DALE, &mut rng);
+        assert_eq!(
+            result.err(),
+            Some(NpcTrainerBattleError::Battle(
+                BattleError::UnportedAbilityInteraction(assets::AbilityId::WATER_VEIL)
+            )),
+        );
+        assert_eq!(
+            rng.state(),
+            before,
+            "the Trace-copy refusal must precede every OT-ID draw"
+        );
+    }
+
+    /// An admissible Trace lead starts DALE's battle drawing one OT ID per
+    /// party member and then the constructor's turn state, which leaves the
+    /// shared generator at an exact value.
+    #[test]
+    fn an_admissible_trace_lead_starts_with_the_pinned_draws() {
+        const PORYGON2: SpeciesId = SpeciesId(233);
+        const RNG_STATE_AFTER_START: u32 = 204_300_520;
+        let lead = lead_of(PORYGON2);
+        assert_eq!(lead.ability(), assets::AbilityId::TRACE, "setup: Trace");
+
+        let mut rng = Rng::new(1);
+        let battle = start_npc_trainer_battle(lead, TrainerId::DALE, &mut rng)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(battle.enemy().species(), SpeciesId::TENTACOOL);
+        assert_eq!(rng.state(), RNG_STATE_AFTER_START);
+    }
+
+    fn preflight(lead: &BattlePokemon, id: TrainerId) -> Result<(), BattleError> {
+        let dex = Dex::new();
+        let data = battle::trainer_data(id)?;
+        let entries = party_entries(data.party);
+        let personalities =
+            party_personalities(data, &entries).expect("every trainer name has a charmap byte");
+        let movesets: Vec<Vec<MoveId>> = entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .custom_moves
+                    .clone()
+                    .unwrap_or_else(|| battle::initial_moveset(entry.species, entry.level))
+            })
+            .collect();
+        let specs: Vec<battle::TrainerPartyMon<'_>> = entries
+            .iter()
+            .zip(&movesets)
+            .zip(&personalities)
+            .map(|((entry, moves), &personality)| battle::TrainerPartyMon {
+                species: entry.species,
+                level: entry.level,
+                moves,
+                personality,
+                held_item: entry.held_item,
+            })
+            .collect();
+        battle::ensure_trainer_party_startable(&dex, lead, id, &specs)
+    }
+
+    /// `start_npc_trainer_battle`'s construction without its pre-flight: the
+    /// verdict `Battle::new_trainer` itself gives, and the RNG it leaves.
+    fn construct_without_preflight(
+        lead: &BattlePokemon,
+        id: TrainerId,
+        rng: &mut Rng,
+    ) -> Result<(), BattleError> {
+        let dex = Dex::new();
+        let data = battle::trainer_data(id)?;
+        let entries = party_entries(data.party);
+        let personalities =
+            party_personalities(data, &entries).expect("every trainer name has a charmap byte");
+        let mut party = Vec::new();
+        for (entry, personality) in entries.iter().zip(personalities) {
+            let moves = entry
+                .custom_moves
+                .clone()
+                .unwrap_or_else(|| battle::initial_moveset(entry.species, entry.level));
+            party.push(
+                battle::build_trainer_pokemon(
+                    &dex,
+                    entry.species,
+                    entry.level,
+                    battle::fixed_ivs(entry.unscaled_iv),
+                    personality,
+                    moves,
+                    &mut SharedRng::new(rng),
+                )?
+                .with_held_item(entry.held_item),
+            );
+        }
+        Battle::new_trainer(dex, lead.clone(), id, party, &mut SharedRng::new(rng)).map(|_| ())
+    }
+
+    /// For every trainer the port can start and a Trace lead under each
+    /// primary status, the pre-flight's verdict is `Battle::new_trainer`'s,
+    /// error value included; a refusal draws nothing, and an acceptance
+    /// draws exactly what constructing the same party draws.
+    #[test]
+    fn trace_lead_preflight_agrees_with_new_trainer_for_every_startable_trainer() {
+        const PORYGON2: SpeciesId = SpeciesId(233);
+        let statuses = [
+            battle::Status1::Healthy,
+            battle::Status1::Paralysed,
+            battle::Status1::Poisoned,
+            battle::Status1::Burned,
+            battle::Status1::BadPoisoned { counter: 0 },
+            battle::Status1::Frozen,
+            battle::Status1::Asleep { turns: 3 },
+        ];
+        let (mut swept, mut accepted, mut refused) = (0_usize, 0_usize, 0_usize);
+        for index in 0..assets::trainers::TrainerTable::LEN_U16 {
+            let id = TrainerId(index);
+            // A trainer whose party the port cannot start for any lead has
+            // no Trace verdict to compare.
+            if preflight(&treecko_lead(), id).is_err() {
+                continue;
+            }
+            swept += 1;
+            for status in statuses {
+                let mut lead = lead_of(PORYGON2);
+                assert_eq!(lead.ability(), assets::AbilityId::TRACE, "setup: Trace");
+                lead.set_status1(status);
+
+                let verdict = preflight(&lead, id);
+                let mut constructed_rng = Rng::new(1);
+                let constructed = construct_without_preflight(&lead, id, &mut constructed_rng);
+                assert_eq!(verdict, constructed, "{id:?} with a {status:?} Trace lead");
+
+                let mut rng = Rng::new(1);
+                let before = rng.state();
+                let started = start_npc_trainer_battle(lead, id, &mut rng);
+                match verdict {
+                    Ok(()) => {
+                        accepted += 1;
+                        assert!(started.is_ok(), "{id:?} {status:?}: {:?}", started.err());
+                        assert_eq!(rng.state(), constructed_rng.state(), "{id:?} {status:?}");
+                    }
+                    Err(error) => {
+                        refused += 1;
+                        assert_eq!(
+                            started.err(),
+                            Some(NpcTrainerBattleError::Battle(error)),
+                            "{id:?} {status:?}"
+                        );
+                        assert_eq!(rng.state(), before, "{id:?} {status:?}: refusal drew");
+                    }
+                }
+            }
+        }
+        eprintln!("swept {swept} trainers: {accepted} accepted, {refused} refused");
+        assert!(swept > 0 && accepted > 0 && refused > 0);
     }
 
     #[test]

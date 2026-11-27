@@ -4,9 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.146.0] - 2026-11-25
+## [0.0.147.0] - 2026-11-27
 
 - The Oldale Pokémon Center escalators now lock your controls and play the ride with its fade-out and fade-in, then walk you off east on the other floor with the original game's timing. The escalator sound and the floor's music are not played yet.
+
+## [0.0.146.0] - 2026-11-26
+
+- Choosing TAKE on a lead Pokémon holding MAIL now asks whether to send the removed MAIL to your PC. YES stores it in your PC's mailbox, or says the mailbox is full; NO offers to return the MAIL to your BAG with its message erased, as in the original game.
 
 ## [0.0.145.0] - 2026-11-24
 
@@ -649,7 +653,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.146.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/4fb974e40c7eca93f270c83ef035567c4579fddc...dev
+[0.0.147.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/57c36fb7428e202aad6bd0af7415ec9f7513fb31...dev
+[0.0.146.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d5cf383bd4fc090f5bcf411248fcced1508e8d8d...dev
 [0.0.145.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d065fce456fcf84399616885376c66d6ca8ea64c...dev
 [0.0.144.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/e4071950fffc09a11102ef9f9a020d18bceb1806...dev
 [0.0.143.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/554b8126a0a9db6ac4cd4c7c1b2f97e34a1d126c...dev
