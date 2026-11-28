@@ -32762,6 +32762,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "IsGrassTypeInParty": {
+          "reason": "field_specials.c:1230-1249. engine::field_specials::party_has_grass_type scans a caller-supplied six-slot PartySlot snapshot (species, occupied, Egg) in order and returns true at the first slot that is occupied, is not an Egg and whose species has Grass as either of its two types in assets::SpeciesTable (pokemon.h TYPE_GRASS 12, types[0] or types[1]). The occupancy and Egg guards run before the species lookup, so a vacant slot or an Egg is skipped even with an out-of-range species; an occupied slot with an out-of-range species reached before any match returns the lookup's AssetError::UnknownSpecies instead of indexing past the table, where upstream would read gSpeciesInfo out of bounds. No RNG, no mutation. Not modelled: reading gPlayerParty and decoding the saved party into slots, the special's dispatch (crate::script::specials lists it by name only), storing the answer in gSpecialVar_Result, and the scripts that branch on it.",
+          "rust_target": "crates/engine/src/field_specials/party_types.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "SetPacifidlogTMReceivedDay": {
           "reason": "field_specials.c:1566-1570. EventData::set_pacifidlog_tm_received_day stores the caller-supplied s16 local day in VAR_PACIFIDLOG_TM_RECEIVED_DAY (vars.h:214) and returns the stored value, both as the u16 two's-complement image upstream's s16-to-u16 VarSet and return conversions produce (-1 gives 0xFFFF, i16::MIN gives 0x8000), unnormalised. The variable is an ordinary saved var, so it round-trips through SaveBlock1 and no RNG draw is made. Not modelled: where gLocalTime.days comes from (the real-time clock policy, issue #2396), the SetPacifidlogTMReceivedDay special's dispatch (crate::script::specials lists it by name only), and the TM gift choice, text and map wiring in PacifidlogTown_House2's scripts.",
           "rust_target": "crates/engine/src/event_data.rs",
