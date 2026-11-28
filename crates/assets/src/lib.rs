@@ -34,7 +34,8 @@
 //! and trainer-class lookups (see [`facility_classes`]), the four NPC trade
 //! offers with their mail messages (see [`ingame_trades`]), and the Lilycove
 //! Lady quiz, favor, and contest data (see [`lilycove_lady`]), and the Frontier
-//! Brain appearance thresholds (see [`frontier_brain_thresholds`]); more data
+//! Brain appearance thresholds (see [`frontier_brain_thresholds`]), and the
+//! Roulette per-table motion settings (see [`roulette_tables`]); more data
 //! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -103,6 +104,7 @@ pub mod pokedex;
 pub mod pokenav_city_maps;
 pub mod region_map_layout;
 pub mod ribbon_descriptions;
+pub mod roulette_tables;
 pub mod script_refs;
 pub mod slot_machine_reels;
 pub mod species;
@@ -242,6 +244,10 @@ pub use pokedex::{
 };
 pub use ribbon_descriptions::{
     NormalRibbonId, RibbonDescription, RibbonDescriptionTable, RibbonError, NORMAL_RIBBON_COUNT,
+};
+pub use roulette_tables::{
+    roulette_motion_at, RouletteMotionSettings, RouletteTableError, ShroomishSettings,
+    TaillowSettings, ROULETTE_TABLE_COUNT,
 };
 pub use slot_machine_reels::{
     initial_position, reel_strip, symbol_at, Reel, ReelSymbol, SlotMachineError, StartKind,
