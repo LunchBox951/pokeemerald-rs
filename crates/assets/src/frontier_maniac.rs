@@ -204,7 +204,10 @@ mod tests {
                 Some((name, words.next()?.parse().ok()?))
             })
             .collect();
-        assert_eq!(ids["FRONTIER_MANIAC_FACILITY_COUNT"], FRONTIER_MANIAC_FACILITY_COUNT);
+        assert_eq!(
+            ids["FRONTIER_MANIAC_FACILITY_COUNT"],
+            FRONTIER_MANIAC_FACILITY_COUNT
+        );
 
         let source = upstream_file("src/field_specials.c");
         let start = source
