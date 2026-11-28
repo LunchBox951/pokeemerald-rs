@@ -238,12 +238,12 @@ fn an_unported_sibling_stat_drop_effect_stays_refused() {
     let defender = mon(&dex, SpeciesId(ZIGZAGOON));
     let mut rng = SequenceRng::new([0]);
     assert_eq!(
-        spend_effect_chance_draw(&dex, MoveId::MIST_BALL, true, &defender, &mut rng),
-        Err(BattleError::UnportedSecondaryEffect(MoveId::MIST_BALL))
+        spend_effect_chance_draw(&dex, MoveId::LUSTER_PURGE, true, &defender, &mut rng),
+        Err(BattleError::UnportedSecondaryEffect(MoveId::LUSTER_PURGE))
     );
     rng.assert_exhausted();
     assert_eq!(
-        ensure_resolvable(&dex, MoveId::MIST_BALL),
-        Err(BattleError::UnsupportedMoveEffect(MoveId::MIST_BALL))
+        ensure_resolvable(&dex, MoveId::LUSTER_PURGE),
+        Err(BattleError::UnsupportedMoveEffect(MoveId::LUSTER_PURGE))
     );
 }

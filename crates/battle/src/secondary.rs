@@ -18,8 +18,9 @@
 //! case, `:2666-2683`), [`EFFECT_ACCURACY_DOWN_HIT`] (its
 //! `MOVE_EFFECT_ACC_MINUS_1` sibling) and [`EFFECT_THAW_HIT`] (the
 //! `STATUS1_BURN` case, `:2341-2379`), [`EFFECT_ATTACK_DOWN_HIT`] (its
-//! `MOVE_EFFECT_ATK_MINUS_1` sibling) and the two flinch wrappers are the
-//! ported trampolines.
+//! `MOVE_EFFECT_ATK_MINUS_1` sibling), [`EFFECT_SPECIAL_ATTACK_DOWN_HIT`]
+//! (its `MOVE_EFFECT_SP_ATK_MINUS_1` sibling) and the two flinch wrappers are
+//! the ported trampolines.
 
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
@@ -36,6 +37,8 @@ pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect::POISON_HIT;
 pub const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect::SPEED_DOWN_HIT;
 /// Move effect of Aurora Beam.
 pub const EFFECT_ATTACK_DOWN_HIT: MoveEffect = MoveEffect::ATTACK_DOWN_HIT;
+/// Move effect of Mist Ball.
+pub const EFFECT_SPECIAL_ATTACK_DOWN_HIT: MoveEffect = MoveEffect::SPECIAL_ATTACK_DOWN_HIT;
 /// Move effect shared by Mud-Slap and Octazooka.
 pub const EFFECT_ACCURACY_DOWN_HIT: MoveEffect = MoveEffect::ACCURACY_DOWN_HIT;
 /// Move effect shared by Confusion and Psybeam.
@@ -109,10 +112,7 @@ pub const SECONDARY_TRAMPOLINES: [Trampoline; 31] = [
     chance_on_target(EFFECT_ATTACK_DOWN_HIT, "MOVE_EFFECT_ATK_MINUS_1"),
     chance_on_target(MoveEffect::DEFENSE_DOWN_HIT, "MOVE_EFFECT_DEF_MINUS_1"),
     chance_on_target(EFFECT_SPEED_DOWN_HIT, "MOVE_EFFECT_SPD_MINUS_1"),
-    chance_on_target(
-        MoveEffect::SPECIAL_ATTACK_DOWN_HIT,
-        "MOVE_EFFECT_SP_ATK_MINUS_1",
-    ),
+    chance_on_target(EFFECT_SPECIAL_ATTACK_DOWN_HIT, "MOVE_EFFECT_SP_ATK_MINUS_1"),
     chance_on_target(
         MoveEffect::SPECIAL_DEFENSE_DOWN_HIT,
         "MOVE_EFFECT_SP_DEF_MINUS_1",
@@ -176,7 +176,7 @@ struct StatDropHit {
     application: SecondaryApplication,
 }
 
-const STAT_DROP_HITS: [StatDropHit; 3] = [
+const STAT_DROP_HITS: [StatDropHit; 4] = [
     StatDropHit {
         effect: EFFECT_ATTACK_DOWN_HIT,
         stat: ChangedStat::Attack,
@@ -186,6 +186,11 @@ const STAT_DROP_HITS: [StatDropHit; 3] = [
         effect: EFFECT_SPEED_DOWN_HIT,
         stat: ChangedStat::Speed,
         application: SecondaryApplication::SpeedDown,
+    },
+    StatDropHit {
+        effect: EFFECT_SPECIAL_ATTACK_DOWN_HIT,
+        stat: ChangedStat::SpAttack,
+        application: SecondaryApplication::SpecialAttackDown,
     },
     StatDropHit {
         effect: EFFECT_ACCURACY_DOWN_HIT,
@@ -203,6 +208,13 @@ fn stat_drop_hit(effect: MoveEffect) -> Option<&'static StatDropHit> {
 #[must_use]
 pub fn is_attack_down_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_ATTACK_DOWN_HIT
+}
+
+/// Returns whether `effect` is [`EFFECT_SPECIAL_ATTACK_DOWN_HIT`], a
+/// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
+#[must_use]
+pub fn is_special_attack_down_hit_effect(effect: MoveEffect) -> bool {
+    effect == EFFECT_SPECIAL_ATTACK_DOWN_HIT
 }
 
 /// Returns whether `effect` is [`EFFECT_SPEED_DOWN_HIT`], a
@@ -637,6 +649,12 @@ pub enum SecondaryApplication {
     /// Smoke and Shield Dust never reach this point
     /// (`battle_script_commands.c:6987-7037`).
     AttackDown,
+    /// The caller must lower the defender's Special Attack stage by one,
+    /// subject to the same post-damage faint check and silent stage floor as
+    /// [`SecondaryApplication::SpeedDown`]. Clear Body, White Smoke and Shield
+    /// Dust never reach this point; Hyper Cutter guards Attack only, so it
+    /// does not stop this drop (`battle_script_commands.c:6987-7037`).
+    SpecialAttackDown,
 }
 
 impl SecondaryApplication {
@@ -663,8 +681,8 @@ impl SecondaryApplication {
 /// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
 /// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`],
 /// [`EFFECT_SPEED_DOWN_HIT`], [`EFFECT_ACCURACY_DOWN_HIT`],
-/// [`EFFECT_ATTACK_DOWN_HIT`], [`EFFECT_THAW_HIT`],
-/// [`MoveEffect::FLINCH_HIT`] or [`MoveEffect::FLINCH_MINIMIZE_HIT`], or
+/// [`EFFECT_ATTACK_DOWN_HIT`], [`EFFECT_SPECIAL_ATTACK_DOWN_HIT`],
+/// [`EFFECT_THAW_HIT`], [`MoveEffect::FLINCH_HIT`] or [`MoveEffect::FLINCH_MINIMIZE_HIT`], or
 /// Struggle's certain recoil effect, would apply,
 /// or [`BattleError::UnsupportedMoveType`] for an [`EFFECT_POISON_HIT`] move
 /// whose type cannot participate in battle calculations; either way, any
@@ -792,3 +810,7 @@ mod accuracy_down_tests;
 #[cfg(test)]
 #[path = "secondary/attack_down_tests.rs"]
 mod attack_down_tests;
+
+#[cfg(test)]
+#[path = "secondary/special_attack_down_tests.rs"]
+mod special_attack_down_tests;
