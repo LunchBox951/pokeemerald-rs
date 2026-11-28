@@ -49,7 +49,14 @@ const STEP_LANDING_FRAMES: usize = 1;
 const FIRST_BATTLE_TEXT_PERIOD_FRAMES: usize = 16;
 /// The frames after the trigger landing that the fight takes with that input:
 /// the opening, the turns and their holds, and the experience award, up to the
-/// frame before the battle slot empties.
+/// frame before the battle slot empties. The fight's rolls follow the field
+/// `Random()` stream, which the walk's object events advance, so this count is
+/// measured against that stream and moves with it.
+///
+/// Nine object-event draws precede the trigger landing on script frame 4498:
+/// eight from Littleroot Town's two wanderers and one from the Birch's bag on
+/// Route 101. The battle slot first empties on frame 5319, so
+/// `5319 - 4498 - 1 = 820`.
 const FIRST_BATTLE_TEXT_FRAMES: usize = 820;
 const FIRST_BATTLE_CONCLUDING_FRAMES: usize = 1;
 const FINAL_RELEASE_FRAMES: usize = 1;

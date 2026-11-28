@@ -46,10 +46,10 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
     // actually ran means starting from something other than zero.
     phase
         .wild
-        .check_standard_wild_encounter(0, None, &mut phase.rng);
+        .check_standard_wild_encounter(0, None, None, &mut phase.rng);
     phase
         .wild
-        .check_standard_wild_encounter(0, None, &mut phase.rng);
+        .check_standard_wild_encounter(0, None, None, &mut phase.rng);
     assert_eq!(
         phase.wild.immunity_steps(),
         2,
@@ -92,14 +92,28 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
         "every glyph of the intro must still be on screen while `waitbuttonpress` waits"
     );
 
-    // `waitbuttonpress`: A closes the box, and the fight starts with it --
-    // on that very frame, with the text still whole right up to it.
+    // `waitbuttonpress`: the confirm frame only ends the wait, with the text
+    // still whole; `dotrainerbattle` runs on the next frame, no clear between
+    // (`script.c:80-87`, `trainer_battle.inc:104-110`).
     phase.step(pressed(Buttons::A));
     assert!(
+        !phase.is_sight_trainer_battle_active(),
+        "the confirm frame must not run `dotrainerbattle` yet"
+    );
+    assert_eq!(
+        phase
+            .dialog
+            .as_ref()
+            .expect("no `closemessage` runs, so the box stays up")
+            .revealed_glyph_count(),
+        printed,
+        "the confirm frame must not clear the printed text"
+    );
+    phase.step(ButtonState::new());
+    assert!(
         phase.is_sight_trainer_battle_active(),
-        "the confirm edge must hand off to `dotrainerbattle` on its own frame -- no clear, \
-         no post-clear reveal delay, exactly as upstream runs `waitbuttonpress` straight \
-         into `dotrainerbattle` (`trainer_battle.inc:104-107`)"
+        "the frame after the confirm hands off to `dotrainerbattle` -- no clear, no \
+         post-clear reveal delay (`trainer_battle.inc:104-110`)"
     );
     assert!(phase.dialog.is_none(), "the box closed with the handoff");
     assert!(
@@ -208,25 +222,28 @@ fn real_pack_the_intro_message_opens_prints_and_dismisses_for_real() {
         "every glyph of the real intro line must print within the frame budget"
     );
 
-    // Confirm through the script's `waitbuttonpress`. Issue #410: the box
-    // holds every printed glyph right up to the confirm frame and closes on
-    // it, so this budget is spent on reaching a fresh edge, not on draining
-    // a clear that no longer happens.
+    // Confirm through the script's `waitbuttonpress`. The box
+    // holds every printed glyph through the confirm frame, and
+    // `dotrainerbattle` runs on the frame after it.
     let mut handed_off = false;
     for _ in 0..30 {
         phase.step(pressed(Buttons::A));
-        if phase.dialog.is_none() {
+        if phase.is_sight_trainer_battle_active() {
             handed_off = true;
             break;
         }
+        assert!(
+            phase.dialog.is_some(),
+            "the real box stays up until the frame `dotrainerbattle` runs"
+        );
     }
     assert!(
         handed_off,
-        "confirming `waitbuttonpress` must close the real box"
+        "confirming `waitbuttonpress` must reach `dotrainerbattle`"
     );
     assert!(
-        phase.is_sight_trainer_battle_active(),
-        "`dotrainerbattle` must run the instant the real box closes"
+        phase.dialog.is_none(),
+        "the box goes with the handoff to the battle"
     );
     assert!(
         phase.sight_approach.is_none(),
@@ -285,6 +302,7 @@ fn hand_off_to_the_battle(phase: &mut OverworldPhase) {
         phase.step(ButtonState::new());
     }
     phase.step(pressed(Buttons::A));
+    phase.step(ButtonState::new());
     assert!(phase.is_sight_trainer_battle_active(), "setup: handed off");
 }
 
@@ -326,4 +344,55 @@ fn a_finished_sight_battle_restores_the_lead_to_its_slot() {
     phase.assert_lead_at_slot_for_test(0);
     let lent = phase.take_lead_battler().expect("the loan was closed");
     phase.restore_lead_battler(lent);
+}
+
+/// Upstream `waitbuttonpress` returns from `RunScriptCommand` on the confirm
+/// frame (`script.c:80-87`); `dotrainerbattle` runs on the next script tick,
+/// with no `closemessage` in between (`trainer_battle.inc:101-110`).
+#[test]
+fn dotrainerbattle_runs_the_frame_after_the_waitbuttonpress_confirm() {
+    use engine::text::Token;
+
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    seed_approach(&mut phase, 0);
+    phase
+        .sight_approach
+        .as_mut()
+        .expect("just seeded")
+        .skip_to_open_intro_message();
+    phase.dialog = Some(
+        crate::overworld::dialog::synthetic_dialog(vec![Token::Char('W'), Token::End])
+            .with_waitbuttonpress(),
+    );
+    for _ in 0..FRAMES_STANDING_STILL {
+        phase.step(ButtonState::new());
+    }
+
+    phase.step(pressed(Buttons::A));
+    assert!(
+        !phase.is_sight_trainer_battle_active(),
+        "confirm frame: bytecode has not resumed yet, so no battle"
+    );
+    assert!(
+        phase.lead_for_test().is_some(),
+        "confirm frame: the lead is not lent before `dotrainerbattle`"
+    );
+    assert_eq!(
+        phase
+            .dialog
+            .as_ref()
+            .expect("no `closemessage` runs, so the box stays up")
+            .revealed_glyph_count(),
+        1,
+        "confirm frame: the intro is still whole on screen"
+    );
+
+    phase.step(ButtonState::new());
+    assert!(
+        phase.is_sight_trainer_battle_active(),
+        "next frame: dotrainerbattle runs"
+    );
+    assert!(phase.dialog.is_none(), "the box goes with the handoff");
+    assert!(phase.lead_for_test().is_none(), "the lead is lent now");
 }

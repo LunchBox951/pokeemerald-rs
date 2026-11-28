@@ -4,9 +4,10 @@ use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
     battle_interface_ids, evolution_scene_ids, healthbox_element_ids, healthbox_frame_ids,
-    layout_ids, naming_screen_ids, opening_scene_ids, poke_ball_ids, sprite_palette_ids,
-    sprite_sheet_ids, starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids,
-    BATTLERS, FONTS, INTERFACE_IMAGE_IDS, INTERFACE_PALETTE_IDS, KEYPAD_ICONS, TILESETS,
+    layout_ids, naming_screen_ids, opening_scene_ids, party_menu_ids, poke_ball_ids,
+    sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
+    tileset_animation_ids, title_ids, BATTLERS, FONTS, GENERAL_1_PALETTE_ID, INTERFACE_IMAGE_IDS,
+    INTERFACE_PALETTE_IDS, KEYPAD_ICONS, TALL_GRASS_IMAGE_ID, TILESETS,
 };
 use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
@@ -36,11 +37,15 @@ pub fn require_tilesets(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every pinned sprite sheet and sprite palette is present.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every pinned sprite sheet and sprite palette, and the tall-grass field-effect sheet and palette, is present.
 pub fn require_sprites(pack: &PackSource) -> Result<(), GenRomProfileError> {
     sprite_sheet_ids()
         .into_iter()
         .chain(sprite_palette_ids())
+        .chain([
+            TALL_GRASS_IMAGE_ID.to_owned(),
+            GENERAL_1_PALETTE_ID.to_owned(),
+        ])
         .try_for_each(|id| pack.get(&id).map(|_| ()))
 }
 
@@ -81,6 +86,23 @@ pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileErr
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the field-message token table is present.
 pub fn require_field_messages(pack: &PackSource) -> Result<(), GenRomProfileError> {
     pack.get(rom_import::FIELD_MESSAGE_PACK_ID).map(|_| ())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the trainer defeat-speech table is present.
+pub fn require_trainer_defeat_speeches(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::TRAINER_DEFEAT_SPEECH_PACK_ID)
+        .map(|_| ())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the sight-trainer intro-speech table is present.
+pub fn require_sight_trainer_intro_speeches(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::SIGHT_TRAINER_INTRO_SPEECH_PACK_ID)
+        .map(|_| ())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the trainer class-name table is present.
+pub fn require_trainer_class_names(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::TRAINER_CLASS_NAME_PACK_ID).map(|_| ())
 }
 
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle-animation catalog is present.
@@ -230,6 +252,28 @@ pub fn require_naming_screen(pack: &PackSource) -> Result<(), GenRomProfileError
     Ok(())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every party-menu sheet, palette,
+/// and map is present, and with [`GenRomProfileError::StructMismatch`] for a pack `party-menu/`
+/// entry outside the fixed inventory, which the locator, reading only the inventory, would
+/// otherwise silently leave out of the profile.
+pub fn require_party_menu(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = party_menu_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("party-menu/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's party-menu inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle textbox image, its
 /// three palettes, its tilemap, the health-box elements, the battle bar, the two singles frames,
 /// the enemy shadow, and the two ball palettes are present, and with
@@ -327,6 +371,9 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battlers(pack)?;
     require_battle_messages(pack)?;
     require_field_messages(pack)?;
+    require_trainer_defeat_speeches(pack)?;
+    require_sight_trainer_intro_speeches(pack)?;
+    require_trainer_class_names(pack)?;
     require_interface_images(pack)?;
     require_interface_palettes(pack)?;
     require_bag(pack, bag_ids)?;
@@ -336,6 +383,7 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_poke_ball(pack)?;
     require_battle_interface(pack)?;
     require_naming_screen(pack)?;
+    require_party_menu(pack)?;
     require_trainer_front(pack)?;
     require_trainer_battlers(pack)
 }

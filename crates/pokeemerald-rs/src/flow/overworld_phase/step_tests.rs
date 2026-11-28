@@ -189,6 +189,7 @@ fn unhide_vigoroth_1(phase: &mut OverworldPhase) {
         .event_data
         .flag_clear(flag)
         .expect("an ordinary flag id");
+    run_camera_update(phase);
 }
 
 /// An object event with a real, non-`"0x0"` script this port does not model
@@ -575,16 +576,28 @@ fn the_tv_and_sink_tiles_of_both_houses_are_enterable_on_a_fresh_save() {
 }
 
 /// Mom stands at `ONE_F` (2, 6); the live collection walks her north to
-/// (2, 5). Her authored tile frees up and the live one fills, for both
-/// interaction and movement.
+/// (2, 5). Once her step settles, her authored tile frees up and the live one
+/// fills, for both interaction and movement.
 fn phase_with_mom_moved_north(start: (i32, i32)) -> OverworldPhase {
+    let mut phase = phase_with_mom_stepping_north(start);
+    phase
+        .object_events
+        .get_mut(1)
+        .expect("Mom is local id 1 in ONE_F")
+        .state_mut()
+        .settle_previous_position();
+    phase
+}
+
+/// [`phase_with_mom_moved_north`] with her step just begun, so she still holds (2, 6).
+fn phase_with_mom_stepping_north(start: (i32, i32)) -> OverworldPhase {
     let mut phase = synthetic_phase(PlayerState::new(start, 3, Direction::West), None);
     phase
         .object_events
         .get_mut(1)
         .expect("Mom is local id 1 in ONE_F")
         .state_mut()
-        .walk(Direction::North);
+        .begin_normal_walk(Direction::North);
     phase
 }
 
@@ -613,4 +626,22 @@ fn a_moved_npc_vacates_its_authored_tile_and_blocks_its_live_one() {
     let mut occupied = phase_with_mom_moved_north((3, 5));
     occupied.step(held(Buttons::LEFT));
     assert_eq!(occupied.player.position(), (3, 5));
+}
+
+#[test]
+fn a_stepping_npc_blocks_the_tile_it_is_leaving_but_is_not_found_on_it() {
+    let mut leaving = phase_with_mom_stepping_north((3, 6));
+    let runtime = runtime_for(&leaving);
+    assert!(
+        leaving
+            .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+            .is_none(),
+        "interaction identifies her by her current tile alone"
+    );
+    leaving.step(held(Buttons::LEFT));
+    assert_eq!(
+        leaving.player.position(),
+        (3, 6),
+        "her source tile is held until the step settles"
+    );
 }

@@ -15,7 +15,7 @@
 //!
 //! Both return ROM offsets, not bus addresses, and cap each needle at
 //! [`MATCH_LIMIT`] hits unless the caller asks for a larger bound through
-//! `find_all_up_to`.
+//! `find_all_up_to`, or for every hit through `find_all_uncapped`.
 
 use std::collections::HashMap;
 
@@ -31,7 +31,10 @@ const ANCHOR: usize = 8;
 /// to name the duplicates in an error, takes this cap. It bounds memory for
 /// a short blob that repeats hundreds of times. A locator that must give each
 /// of several ids its own copy needs at least that many hits and asks for the
-/// bound through `find_all_up_to`.
+/// bound through `find_all_up_to`. A locator that picks one copy by a table
+/// that names it needs every copy: the cap keeps the lowest offsets, so
+/// enough stray copies below the named one would discard it before the table
+/// is read. It asks through `find_all_uncapped`.
 pub const MATCH_LIMIT: usize = 16;
 
 /// The fewest distinct byte values an eight-byte window needs to serve as an
@@ -87,6 +90,15 @@ impl<'a> RawSearch<'a> {
     /// [`PointerIndex`] to find a four-byte pointer.
     pub fn find_all(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
         self.find_all_up_to(needles, MATCH_LIMIT)
+    }
+
+    /// [`Self::find_all`] with no cap: every occurrence of each needle.
+    ///
+    /// For a locator that picks one copy by a table naming it, which must see
+    /// every candidate. Memory stays bounded because a needle cannot occur
+    /// more often than the ROM has offsets.
+    pub fn find_all_uncapped(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
+        self.find_all_up_to(needles, self.rom.len())
     }
 
     /// [`Self::find_all`] with each needle capped at `limit` hits instead of
@@ -228,6 +240,16 @@ impl<'a> Lz77Search<'a> {
     /// capped at [`MATCH_LIMIT`] and sorted ascending.
     pub fn find_all(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
         self.find_all_up_to(needles, MATCH_LIMIT)
+    }
+
+    /// [`Self::find_all`] with no cap: every stream that decompresses to each
+    /// needle.
+    ///
+    /// For a locator that picks one copy by a table naming it, which must see
+    /// every candidate. Memory stays bounded because a needle cannot match
+    /// more streams than the ROM has offsets.
+    pub fn find_all_uncapped(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
+        self.find_all_up_to(needles, self.rom.len())
     }
 
     /// [`Self::find_all`] with each needle capped at `limit` hits instead of
@@ -404,6 +426,7 @@ mod tests {
         assert_eq!(raised[0].len(), copies);
         assert!(raised[0].windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(raised[0][..MATCH_LIMIT], capped[0][..]);
+        assert_eq!(search.find_all_uncapped(&[needle.to_vec()]), raised);
     }
 
     #[test]
@@ -444,5 +467,9 @@ mod tests {
         let raised = search.find_all_up_to(std::slice::from_ref(&payload), copies);
         assert_eq!(raised[0].len(), copies);
         assert_eq!(raised[0][..MATCH_LIMIT], capped[0][..]);
+        assert_eq!(
+            search.find_all_uncapped(std::slice::from_ref(&payload)),
+            raised
+        );
     }
 }

@@ -126,6 +126,26 @@ fn a_pristine_upstream_image_is_adopted_without_a_generation_stamp() {
 }
 
 #[test]
+fn mail_in_the_party_and_pc_slots_survives_a_save_and_load() {
+    use crate::save::{Mail, MAIL_COUNT};
+    let mut block1 = sample_block1();
+    for slot in [0, 5, 6, MAIL_COUNT - 1] {
+        block1.mail[slot] = Mail {
+            words: [0x0101 * u16::try_from(slot).unwrap() + 1; 9],
+            player_name: [u8::try_from(slot).unwrap() + 1; 8],
+            trainer_id: [9; 4],
+            species: 0x0123,
+            item_id: assets::items::ItemId::SHADOW_MAIL,
+            padding: [0xA5, 0x5A],
+        };
+    }
+    let mut store = SaveStore::new();
+    store.save(&block1, &sample_block2());
+    let reopened = store.load().block1;
+    assert_eq!(reopened.mail, block1.mail);
+}
+
+#[test]
 fn save_then_load_round_trips_identical_state() {
     let mut store = SaveStore::new();
     let block1 = sample_block1();
@@ -525,4 +545,30 @@ fn menu_owned_state_survives_save_and_continue_without_disturbing_other_bytes() 
             "block 2 bytes {range:?} must not move"
         );
     }
+}
+
+#[test]
+fn a_coin_balance_survives_save_and_load_without_disturbing_neighbouring_bytes() {
+    let mut block1 = sample_block1();
+    let block2 = sample_block2();
+    assert_ne!(
+        block2.encryption_key & 0xFFFF,
+        0,
+        "test needs a key low half"
+    );
+    let mut store = SaveStore::new();
+    store.save(&block1, &block2);
+    let before = store.base_block1.clone();
+
+    block1.coins.set(9999);
+    store.save(&block1, &block2);
+
+    let mut reopened = SaveStore::from_flash_image(store.flash_image()).expect("valid image");
+    let outcome = reopened.load();
+    assert_eq!(outcome.status, SaveStatus::Ok);
+    assert_eq!(outcome.block1.coins.get(), 9999);
+    assert_eq!(outcome.block1.money, block1.money);
+    assert_eq!(outcome.block1.registered_item, block1.registered_item);
+    assert_eq!(reopened.base_block1[..0x494], before[..0x494]);
+    assert_eq!(reopened.base_block1[0x496..], before[0x496..]);
 }

@@ -20,13 +20,26 @@
 //! instead was rejected: it would leave a hidden directory and a warning
 //! after every failed import, which is meant to leave no trace.
 //!
+//! - Where that repair runs, a swapped-in directory of this user's with no
+//!   group or other bits, whose owner bits are missing, is given them back
+//!   before the listing can show it is not empty; it is then refused and
+//!   left with its contents, but at `0700`. Only this user's own private
+//!   directory is reachable this way.
+//! - A umask that takes the owner's read from the quarantine is repaired
+//!   through an `O_PATH` pin (see [`open_listable`]), which holds a second
+//!   descriptor for a moment: with exactly one free, that case is left
+//!   standing, as any quarantine that cannot be opened is.
+//!
 //! A quarantine that cannot be opened after `mkdirat` is left standing, since
 //! nothing proves the name still denotes it. On a filesystem out of space,
-//! quota or inodes the quarantine's `mkdirat` fails and the created levels
-//! are left standing.
+//! quota or inodes the quarantine's `mkdirat` fails with `ENOSPC` or
+//! `EDQUOT`; that one failure is not reported or fatal: the level is taken
+//! back without a quarantine instead (see [`super::aside`]), as is a level
+//! without the owner's write bit (see [`super::restore`]). Any other
+//! `mkdirat` failure leaves the level standing.
 
 use std::ffi::OsStr;
-use std::os::fd::{AsFd, BorrowedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::PathBuf;
 
 use rom_import::OneLinePath;
@@ -55,7 +68,9 @@ pub(in super::super) fn unguessable_quarantine_name() -> Option<String> {
 /// group or other permission bits, as a quarantine this rollback just made
 /// with `0700` is under any umask; one that qualifies is then set to
 /// exactly `0700` through its own descriptor, since a umask such as `0177`
-/// masks the owner's search bit the capture's rename needs. It is read
+/// masks the owner's search bit the capture's rename needs (one that masks
+/// the owner's read is repaired earlier, by [`open_listable`], which this
+/// descriptor comes from). It is read
 /// through its own descriptor, never a second one opened for the listing,
 /// so a quarantine that took the last free descriptor can still be vouched
 /// for. A stat, listing or `fchmod` that fails is the error, not a verdict:
@@ -88,6 +103,74 @@ fn is_fresh_quarantine(quarantine: &mut Dir) -> rustix::io::Result<bool> {
     Ok(true)
 }
 
+/// Opens the quarantine `name` in `home` for listing, giving back first the
+/// owner access a umask took from it where that is needed: `None` if what
+/// it denotes is not a directory of this user's without group or other
+/// permission bits, as a quarantine just made with `0700` is under any
+/// umask.
+///
+/// A umask such as `0444` or `0777` leaves a quarantine its owner cannot
+/// read, which the read-mode open refuses with `EACCES` before
+/// [`is_fresh_quarantine`] could `fchmod` it. That open is still tried first
+/// because it needs one descriptor, not two. On Linux and Android the
+/// `EACCES` falls back to an `O_PATH` pin, and the repair goes through the pin
+/// so a later swap of the name cannot redirect it. Elsewhere the `EACCES`
+/// stands. Emptiness is left to [`is_fresh_quarantine`].
+fn open_listable(home: BorrowedFd<'_>, name: &str) -> rustix::io::Result<Option<OwnedFd>> {
+    let read_mode = rustix::fs::openat(
+        home,
+        name,
+        OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    );
+    match read_mode {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        Err(rustix::io::Errno::ACCESS) => open_listable_through_pin(home, name),
+        other => other.map(Some),
+    }
+}
+
+/// [`open_listable`]'s fallback when the owner's read bit is missing.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn open_listable_through_pin(
+    home: BorrowedFd<'_>,
+    name: &str,
+) -> rustix::io::Result<Option<OwnedFd>> {
+    use std::os::fd::AsRawFd as _;
+
+    let pin = rustix::fs::openat(
+        home,
+        name,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let stat = rustix::fs::fstat(&pin)?;
+    let mode = Mode::from_raw_mode(stat.st_mode);
+    if stat.st_uid != rustix::process::geteuid().as_raw()
+        || !(mode & Mode::RWXG.union(Mode::RWXO)).is_empty()
+    {
+        return Ok(None);
+    }
+    // `fchmod(2)` refuses an `O_PATH` descriptor. `fchmodat(pin, ".")` acts
+    // on the pinned inode but needs its search bit, which a mask such as
+    // `0777` took too; the pin's `/proc/self/fd` link names the same inode.
+    match rustix::fs::chmodat(&pin, ".", Mode::RWXU, AtFlags::empty()) {
+        Err(rustix::io::Errno::ACCESS) => rustix::fs::chmod(
+            format!("/proc/self/fd/{}", pin.as_raw_fd()).as_str(),
+            Mode::RWXU,
+        )
+        .map_err(|_| rustix::io::Errno::ACCESS)?,
+        result => result?,
+    }
+    rustix::fs::openat(
+        &pin,
+        ".",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map(Some)
+}
+
 /// A quarantine this rollback made and holds open, in `home` under `name`.
 pub(super) struct Quarantine<'a> {
     /// The quarantine itself; listed only through this descriptor.
@@ -113,25 +196,34 @@ impl Quarantine<'_> {
 }
 
 /// The quarantine for one rollback, made under a fresh random name beside
-/// the outermost pinned level, so no level it empties contains it; `None`,
-/// with `dir` reported as left standing, if none can be made.
+/// the outermost pinned level, so no level it empties contains it. Refused,
+/// with `dir` reported as left standing, if none can be made, unless the
+/// filesystem has no room for one ([`Claim::NoRoom`]). `mkdir` makes it.
 pub(super) fn claim_quarantine<'a>(
     created: &'a [CreatedDirectory],
     dir: &CreatedDirectory,
-) -> Option<Quarantine<'a>> {
-    let outermost = created.iter().find(|level| level.parent.is_some())?;
-    let home = outermost.parent.as_deref()?;
+    mkdir: &mut MakeDirectory<'_>,
+) -> Claim<'a> {
+    let Some(outermost) = created.iter().find(|level| level.parent.is_some()) else {
+        return Claim::Refused;
+    };
+    let Some(home) = outermost.parent.as_deref() else {
+        return Claim::Refused;
+    };
     let Some(name) = unguessable_quarantine_name() else {
         warn_left_standing(dir, format_args!("no entropy for a private cleanup name"));
-        return None;
+        return Claim::Refused;
     };
-    open_quarantine(home.as_fd(), outermost, &name, dir, &mut || {})
+    claim_in(home.as_fd(), outermost, &name, dir, mkdir)
 }
 
 /// Makes and opens the quarantine `name` in `home` (beside `home_level`),
 /// with `after_mkdir` run between the two, where a test swaps the name, and
 /// checks it is fresh. `None`, with `dir` reported as left standing, if it
-/// cannot be made, held or vouched for; nothing at the name is removed.
+/// cannot be made, held or vouched for; nothing at the name is removed. A
+/// `mkdirat` that fails for want of room is `None` too, but unreported (see
+/// [`claim_in`]).
+#[cfg(test)]
 pub(super) fn open_quarantine<'a>(
     home: BorrowedFd<'a>,
     home_level: &CreatedDirectory,
@@ -151,6 +243,7 @@ pub(super) fn open_quarantine<'a>(
 
 /// [`open_quarantine`] with `vouch` in place of [`is_fresh_quarantine`], so
 /// a test can make the freshness check fail with an error.
+#[cfg(test)]
 pub(super) fn open_quarantine_vouched_by<'a>(
     home: BorrowedFd<'a>,
     home_level: &CreatedDirectory,
@@ -159,8 +252,91 @@ pub(super) fn open_quarantine_vouched_by<'a>(
     after_mkdir: &mut dyn FnMut(),
     vouch: fn(&mut Dir) -> rustix::io::Result<bool>,
 ) -> Option<Quarantine<'a>> {
+    open_quarantine_through(
+        home,
+        home_level,
+        name,
+        dir,
+        after_mkdir,
+        vouch,
+        &mut |home, name| make_private_directory(home, name),
+    )
+}
+
+/// What makes the quarantine `name` in `home`: [`make_private_directory`], or
+/// a test's stand-in that fails.
+pub(super) type MakeDirectory<'m> = dyn FnMut(BorrowedFd<'_>, &str) -> rustix::io::Result<()> + 'm;
+
+/// The real quarantine `mkdirat`: private to the owner.
+pub(super) fn make_private_directory(home: BorrowedFd<'_>, name: &str) -> rustix::io::Result<()> {
+    rustix::fs::mkdirat(home, name, Mode::RWXU)
+}
+
+/// Whether a failed `mkdirat` says the filesystem has no room for another
+/// directory: out of space or inodes, or over quota.
+fn is_out_of_room(err: rustix::io::Errno) -> bool {
+    matches!(err, rustix::io::Errno::NOSPC | rustix::io::Errno::DQUOT)
+}
+
+/// What asking for a quarantine came to.
+pub(super) enum Claim<'a> {
+    /// Made, held and vouched for.
+    Held(Quarantine<'a>),
+    /// None could be made for want of room (`ENOSPC` or `EDQUOT`): nothing
+    /// was created and nothing is reported, so the level can be taken back
+    /// without one (see [`super::aside`]).
+    NoRoom,
+    /// Not had, and reported with the level left standing.
+    Refused,
+}
+
+/// [`open_quarantine`] as a [`Claim`], with `mkdir` making the quarantine;
+/// only a `mkdir` that fails for want of room is [`Claim::NoRoom`].
+pub(super) fn claim_in<'a>(
+    home: BorrowedFd<'a>,
+    home_level: &CreatedDirectory,
+    name: &str,
+    dir: &CreatedDirectory,
+    mkdir: &mut MakeDirectory<'_>,
+) -> Claim<'a> {
+    let mut out_of_room = false;
+    let held = open_quarantine_through(
+        home,
+        home_level,
+        name,
+        dir,
+        &mut || {},
+        is_fresh_quarantine,
+        &mut |home, name| {
+            let made = mkdir(home, name);
+            out_of_room = made.err().is_some_and(is_out_of_room);
+            made
+        },
+    );
+    match held {
+        Some(held) => Claim::Held(held),
+        None if out_of_room => Claim::NoRoom,
+        None => Claim::Refused,
+    }
+}
+
+/// [`open_quarantine_vouched_by`] with `mkdir` making the quarantine. A
+/// failure for want of room is not reported here: [`claim_in`] tells it from
+/// the rest, and answers for it.
+pub(super) fn open_quarantine_through<'a>(
+    home: BorrowedFd<'a>,
+    home_level: &CreatedDirectory,
+    name: &str,
+    dir: &CreatedDirectory,
+    after_mkdir: &mut dyn FnMut(),
+    vouch: fn(&mut Dir) -> rustix::io::Result<bool>,
+    mkdir: &mut MakeDirectory<'_>,
+) -> Option<Quarantine<'a>> {
     let path = located_beside(home, home_level, OsStr::new(name));
-    if let Err(err) = rustix::fs::mkdirat(home, name, Mode::RWXU) {
+    if let Err(err) = mkdir(home, name) {
+        if is_out_of_room(err) {
+            return None;
+        }
         warn_left_standing(
             dir,
             format_args!(
@@ -174,13 +350,22 @@ pub(super) fn open_quarantine_vouched_by<'a>(
     after_mkdir();
     // `Dir::new` lists through this same descriptor, so checking the
     // quarantine costs no second one.
-    let opened = rustix::fs::openat(
-        home,
-        name,
-        OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .and_then(Dir::new);
+    let opened = match open_listable(home, name) {
+        // What the name denotes cannot be ours to fill: not a private
+        // directory of this user's, whatever else it holds.
+        Ok(None) => {
+            warn_left_standing(
+                dir,
+                format_args!(
+                    "{} is not the private cleanup directory rollback made, so it is left untouched",
+                    OneLinePath(&path)
+                ),
+            );
+            return None;
+        }
+        Ok(Some(fd)) => Dir::new(fd),
+        Err(err) => Err(err),
+    };
     let Ok(mut held) = opened else {
         // Without a descriptor nothing proves the name still denotes the
         // directory just made, so it is not unlinked by name.

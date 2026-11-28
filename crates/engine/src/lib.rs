@@ -2,9 +2,9 @@
 //!
 //! Use this crate for deterministic randomness ([`rng`]), field-script
 //! execution ([`script`]), flags and variables ([`event_data`]), text and
-//! dialogue presentation ([`text`]), bag-menu selection state ([`bag_menu`]),
-//! save data and file persistence ([`save`]), and overworld rules
-//! ([`overworld`]).
+//! dialogue presentation ([`text`]), bag-menu selection state ([`bag_menu`]), field-special classifiers
+//! ([`field_specials`]), save data and file persistence ([`save`]), and
+//! overworld rules ([`overworld`]).
 //!
 //! Typed game assets come from `assets`; shared data-directory resolution
 //! comes from `pack-format`. Callers supply script hosts, input, and frame
@@ -13,6 +13,7 @@
 
 pub mod bag_menu;
 pub mod event_data;
+pub mod field_specials;
 pub mod overworld;
 pub mod rng;
 pub mod save;

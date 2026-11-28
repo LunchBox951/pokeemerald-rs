@@ -43,7 +43,7 @@ fn consume_unmodelled_held_item_draw(rng: &mut Rng) {
 ///
 /// # Errors
 ///
-/// Returns the lead's admission error before any draw, or
+/// Returns the lead's fainted or admission error before any draw, or
 /// opponent-construction or battle-initialization errors.
 pub fn start_first_battle(
     player_lead: BattlePokemon,

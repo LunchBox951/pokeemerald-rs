@@ -623,7 +623,8 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
         PlayerState::new((10, 4), 3, Direction::North),
         None,
         source,
-    );
+    )
+    .with_private_object_event_rng();
     phase.rng = Rng::new(IMMUNITY_SEED);
     phase
         .save1
