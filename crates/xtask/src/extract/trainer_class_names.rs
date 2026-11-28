@@ -20,7 +20,9 @@ use assets::{
 };
 use pack_format::PackWriter;
 
-use super::text_source::{ident, is_punct, string_args, tokenize, Charmap, Fault, Tok, Token};
+use super::text_source::{
+    ident, is_punct, string_args, tokenize_with_directive, Charmap, Fault, Tok, Token,
+};
 use super::{read_text, ExtractError};
 
 const PACK_ID: &str = "trainer-class-name/table";
@@ -241,17 +243,13 @@ fn parse_rows(
     charmap: &Charmap,
     indices: &HashMap<String, usize>,
 ) -> Result<Vec<(u16, Vec<u8>)>, Fault> {
-    if let Some((index, _)) = text
-        .lines()
-        .enumerate()
-        .find(|(_, line)| line.trim_start().starts_with('#'))
-    {
+    let (tokens, directive) = tokenize_with_directive(text)?;
+    if let Some(line) = directive {
         return Err(Fault::new(
-            index + 1,
+            line,
             "preprocessor lines are not supported in the class-name table",
         ));
     }
-    let tokens = tokenize(text)?;
     let mut k = initializer_start(&tokens)?;
     let mut rows = Vec::with_capacity(TRAINER_CLASS_NAME_COUNT);
     let mut seen = [false; TRAINER_CLASS_NAME_COUNT];

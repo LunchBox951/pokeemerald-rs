@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 pub(in crate::extract) use charmap::Charmap;
-pub(in crate::extract) use lex::{tokenize, Tok, Token};
+pub(in crate::extract) use lex::{tokenize, tokenize_with_directive, Tok, Token};
 
 /// A parse failure inside one source file.
 #[derive(Debug)]
