@@ -35013,6 +35013,14 @@
       "status": "pending"
     },
     "src/roulette.c": {
+      "artifacts": {
+        "sRouletteTables": {
+          "reason": "src/roulette.c:812-856 sRouletteTables (structure at :267-279), transcribed as the two RouletteTable rows (left, right) with their nested Shroomish and Taillow settings and the exact f32 var1C values (-0.5, -1.0), behind roulette_motion_at, which refuses a table id outside 0 and 1. Every field the rows carry here is pinned by unit tests (floats by bit pattern) and by an ignored test that re-parses src/roulette.c. The minBet field of each row, which the game never reads (it takes the bet from sTableMinBets), is left out. Data only: the physics, sprites, random travel selection, wheel-slot data, betting, coin changes and sTableMinBets are NOT modelled.",
+          "rust_target": "crates/assets/src/roulette_tables.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
