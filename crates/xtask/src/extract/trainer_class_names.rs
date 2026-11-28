@@ -244,14 +244,7 @@ fn parse_rows(
     indices: &HashMap<String, usize>,
 ) -> Result<Vec<(u16, Vec<u8>)>, Fault> {
     let (tokens, directive) = tokenize_with_directive(text)?;
-    // The scanner does not splice lines, so a comment closed across a
-    // backslash-newline hides the directive after it; a physical line that
-    // begins with `#` is refused as well.
-    let hash_line = text
-        .lines()
-        .position(|line| line.trim_start().starts_with('#'))
-        .map(|index| index + 1);
-    if let Some(line) = directive.into_iter().chain(hash_line).min() {
+    if let Some(line) = directive {
         return Err(Fault::new(
             line,
             "preprocessor lines are not supported in the class-name table",

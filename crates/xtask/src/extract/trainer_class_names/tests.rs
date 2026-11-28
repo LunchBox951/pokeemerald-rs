@@ -454,13 +454,25 @@ fn a_hash_inside_a_line_comment_is_not_a_directive() {
 }
 
 #[test]
-fn a_directive_after_a_spliced_comment_close_is_refused() {
-    let text = format!(
-        "/* comment *\\\n/\n#define _(s) \"b\"\n/* end */\n{}",
-        names(&in_order())
-    );
-    let (file, fault_) = fault(build_with(&constants(&in_order()), &text));
-    assert_eq!(file, File::Names);
-    assert!(fault_.detail.contains("preprocessor"), "{fault_:?}");
-    assert_eq!(fault_.line, 3);
+fn a_directive_after_a_comment_closed_across_a_line_splice_is_refused() {
+    // The second input is new behaviour: its `#` shares a physical line with
+    // the `/` that closes the comment. The first the base already refused.
+    for (prefix, line) in [
+        ("/* comment *\\\n/\n#define _(s) \"b\"\n/* end */\n", 3),
+        ("/* comment *\\\n/ #define _(s) \"b\"\n/* end */\n", 2),
+    ] {
+        let text = format!("{prefix}{}", names(&in_order()));
+        let (file, fault_) = fault(build_with(&constants(&in_order()), &text));
+        assert_eq!(file, File::Names, "{prefix:?}");
+        assert!(fault_.detail.contains("preprocessor"), "{fault_:?}");
+        assert_eq!(fault_.line, line, "{prefix:?}");
+    }
+}
+
+#[test]
+fn spliced_lines_keep_physical_line_numbers() {
+    let (tokens, directive) = tokenize_with_directive("a \\\nb\n#if 0\nc").unwrap();
+    let lines: Vec<_> = tokens.iter().map(|t| t.line).collect();
+    assert_eq!(lines, [1, 2, 4]);
+    assert_eq!(directive, Some(3));
 }

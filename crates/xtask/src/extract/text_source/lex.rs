@@ -25,8 +25,9 @@ pub(in crate::extract) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
 
 /// Like [`tokenize`], and also the line of the first preprocessor directive,
 /// which the token stream drops. A directive is a `#` that is the first token
-/// of its line once comments are read as whitespace, as C's translation phases
-/// see it, so a comment before the `#` does not hide it.
+/// of its line once backslash-newlines are spliced away and comments are read
+/// as whitespace, as C's translation phases see it, so neither a comment before
+/// the `#` nor a comment closed across a splice hides it.
 pub(in crate::extract) fn tokenize_with_directive(
     src: &str,
 ) -> Result<(Vec<Token>, Option<usize>), Fault> {
@@ -35,27 +36,22 @@ pub(in crate::extract) fn tokenize_with_directive(
 
 /// Tokens and the line of the first dropped preprocessor directive.
 fn scan(src: &str) -> Result<(Vec<Token>, Option<usize>), Fault> {
-    let c: Vec<char> = src.chars().collect();
+    let (c, lines) = splice_lines(src);
     let mut out = Vec::new();
     let mut directive = None;
-    let (mut i, mut line, mut line_start) = (0, 1, true);
+    let (mut i, mut line_start) = (0, true);
     while i < c.len() {
         let ch = c[i];
+        let line = lines[i];
         match ch {
             '\n' => {
-                line += 1;
                 line_start = true;
                 i += 1;
             }
             _ if ch.is_whitespace() => i += 1,
             '#' if line_start => {
-                // Preprocessor line, with backslash continuations.
                 directive.get_or_insert(line);
                 while i < c.len() && c[i] != '\n' {
-                    if c[i] == '\\' && c.get(i + 1) == Some(&'\n') {
-                        line += 1;
-                        i += 1;
-                    }
                     i += 1;
                 }
             }
@@ -65,7 +61,6 @@ fn scan(src: &str) -> Result<(Vec<Token>, Option<usize>), Fault> {
                 }
             }
             '/' if c.get(i + 1) == Some(&'*') => {
-                let start = line;
                 i += 2;
                 loop {
                     match (c.get(i), c.get(i + 1)) {
@@ -73,13 +68,8 @@ fn scan(src: &str) -> Result<(Vec<Token>, Option<usize>), Fault> {
                             i += 2;
                             break;
                         }
-                        (Some(&d), _) => {
-                            if d == '\n' {
-                                line += 1;
-                            }
-                            i += 1;
-                        }
-                        (None, _) => return Err(Fault::new(start, "unterminated block comment")),
+                        (Some(_), _) => i += 1,
+                        (None, _) => return Err(Fault::new(line, "unterminated block comment")),
                     }
                 }
             }
@@ -129,6 +119,29 @@ fn scan(src: &str) -> Result<(Vec<Token>, Option<usize>), Fault> {
         }
     }
     Ok((out, directive))
+}
+
+/// The source characters with each backslash-newline removed, as C's second
+/// translation phase does before comments and directives are recognized, and
+/// the physical line each remaining character came from.
+fn splice_lines(src: &str) -> (Vec<char>, Vec<usize>) {
+    let raw: Vec<char> = src.chars().collect();
+    let (mut chars, mut lines) = (Vec::with_capacity(raw.len()), Vec::with_capacity(raw.len()));
+    let (mut i, mut line) = (0, 1);
+    while i < raw.len() {
+        if raw[i] == '\\' && raw.get(i + 1) == Some(&'\n') {
+            line += 1;
+            i += 2;
+            continue;
+        }
+        chars.push(raw[i]);
+        lines.push(line);
+        if raw[i] == '\n' {
+            line += 1;
+        }
+        i += 1;
+    }
+    (chars, lines)
 }
 
 /// Read a string-literal body from just past the opening quote; returns the raw
