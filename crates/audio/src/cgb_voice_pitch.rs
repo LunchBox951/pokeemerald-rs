@@ -68,7 +68,7 @@ fn fixed_rate_note_on_applies_the_dac_correction_before_the_sweep_mute_check() {
         "the DAC-corrected sum must overflow the sweep and stop the channel"
     );
     assert!(
-        fixed_frame.iter().all(|&sample| sample == (28, 28)),
+        fixed_frame.iter().all(|&sample| sample == (30, 30)),
         "the stopped channel holds the level its trigger latched"
     );
     assert!(

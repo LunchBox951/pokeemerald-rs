@@ -88,10 +88,38 @@ fn nr32_byte_decodes_to_the_five_wave_gains() {
     assert_eq!(nr32_wave_gain_256(0x80), THREE_QUARTER_GAIN_256);
 }
 
-// Amplitude-modulated track volumes (158, 157) (`sequencer/lfo_tests.rs`) push
-// the centred goal to level 18, past the 16-entry `gCgb3Vol`.
+// Goal 15 with xSUST 17 sustains at level 16 (`m4a.c:921`), past the 16-entry
+// `gCgb3Vol`. The combined goal never gets there itself: `CgbModVol` stores the
+// stereo sum in a byte before dividing (`m4a.c:910-911`).
 #[test]
-fn amplitude_modulated_wave_above_the_table_is_muted_like_upstream() {
+fn wave_sustain_above_the_table_is_muted_like_upstream() {
+    let sustaining_past_the_table = CgbAdsr {
+        attack: 0,
+        decay: 0,
+        sustain: 17,
+        release: 0,
+    };
+    let mut voice = wave_voice_with_adsr(sustaining_past_the_table, false, TestNote::unmodulated());
+    let mut acc = vec![(0i32, 0i32); 256];
+    voice.begin_frame(false);
+    voice.render(&mut acc, &[]);
+    let level = voice.envelope_volume();
+    assert_eq!(
+        level, 16,
+        "envelope level must exceed the 16-entry gCgb3Vol table"
+    );
+    assert!(
+        acc.iter().all(|&(l, r)| l == 0 && r == 0),
+        "upstream reads gClockTable[{}] as NR32 (mute), got audible output at level {level}",
+        level - 16,
+    );
+}
+
+// Amplitude-modulated track volumes (158, 157) (`sequencer/lfo_tests.rs`) sum
+// past 255, so the combined goal wraps to a low level instead of rising past
+// the table (`m4a.c:910-911`).
+#[test]
+fn amplitude_modulated_wave_combined_volume_wraps_to_a_low_level() {
     let note = TestNote {
         track_right: 158,
         track_left: 157,
@@ -101,15 +129,10 @@ fn amplitude_modulated_wave_above_the_table_is_muted_like_upstream() {
     let mut acc = vec![(0i32, 0i32); 256];
     voice.begin_frame(false);
     voice.render(&mut acc, &[]);
-    let level = voice.envelope_volume();
+    assert_eq!(voice.envelope_volume(), 3);
     assert!(
-        level > 15,
-        "envelope level {level} must exceed the 16-entry gCgb3Vol table"
-    );
-    assert!(
-        acc.iter().all(|&(l, r)| l == 0 && r == 0),
-        "upstream reads gClockTable[{}] as NR32 (mute), got audible output at level {level}",
-        level - 16,
+        acc.iter().any(|&(l, r)| l != 0 || r != 0),
+        "a wrapped level inside the table is audible"
     );
 }
 

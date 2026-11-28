@@ -1,14 +1,16 @@
 use super::fixture::*;
 use super::*;
 
-/// Hold a square voice's envelope at `expected_level` (the ADSR's zero
-/// attack and non-zero decay latch `volume` to the goal on entering decay,
-/// before any decay step consumes it) and return its peak render sample.
-fn square_peak_at_level(track_volume: u8, expected_level: u8) -> i32 {
-    let held_at_goal = CgbAdsr {
+/// Hold a square voice's envelope at `expected_level` and return its peak
+/// render sample. A zero attack and decay enter sustain on the first frame
+/// with `volume` latched to the sustain goal (`m4a.c:921`), which is
+/// `ceil(goal * sustain / 16)` in a byte; the goal of 15 these track volumes
+/// leave lets `sustain` reach levels past the 4-bit hardware nibble.
+fn square_peak_at_sustain(track_volume: u8, sustain: u8, expected_level: u8) -> i32 {
+    let held_at_sustain = CgbAdsr {
         attack: 0,
-        decay: 8,
-        sustain: 15,
+        decay: 0,
+        sustain,
         release: 0,
     };
     let note = TestNote {
@@ -16,7 +18,7 @@ fn square_peak_at_level(track_volume: u8, expected_level: u8) -> i32 {
         track_left: track_volume,
         ..TestNote::default()
     };
-    let mut voice = square_voice_with_adsr(CgbChannelNumber::Square1, None, held_at_goal, note);
+    let mut voice = square_voice_with_adsr(CgbChannelNumber::Square1, None, held_at_sustain, note);
     voice.begin_frame(false);
     assert_eq!(
         voice.envelope_volume(),
@@ -31,6 +33,11 @@ fn square_peak_at_level(track_volume: u8, expected_level: u8) -> i32 {
         .unwrap_or(0)
 }
 
+/// Hold a square voice at the goal-derived `expected_level` (full sustain).
+fn square_peak_at_level(track_volume: u8, expected_level: u8) -> i32 {
+    square_peak_at_sustain(track_volume, MAX_ADSR_LEVEL, expected_level)
+}
+
 #[test]
 fn square_envelope_levels_above_fifteen_render_through_the_nrx2_low_nibble() {
     let level_14_peak = square_peak_at_level(121, 14);
@@ -40,15 +47,20 @@ fn square_envelope_levels_above_fifteen_render_through_the_nrx2_low_nibble() {
     // (`PSG_LEVEL_FIFO_UNITS`'s derivation): +-28 and +-30.
     assert_eq!(level_14_peak, 28);
     assert_eq!(level_15_peak, 30);
-    assert_eq!(square_peak_at_level(131, 16), 0);
-    assert_eq!(square_peak_at_level(243, 30), level_14_peak);
-    assert_eq!(square_peak_at_level(255, 31), level_15_peak);
+    // The combined goal tops out at 15 (`CgbModVol` truncates the stereo sum to
+    // a byte first), so levels past it come only from an xSUST byte above 15:
+    // goal 15 with sustain 17, 32 and 33 gives levels 16, 30 and 31.
+    assert_eq!(square_peak_at_sustain(130, 17, 16), 0);
+    assert_eq!(square_peak_at_sustain(130, 32, 30), level_14_peak);
+    assert_eq!(square_peak_at_sustain(130, 33, 31), level_15_peak);
 }
 
-fn centred_goal_thirty_one_note() -> TestNote {
+/// A centred note at the largest goal upstream's byte-truncated stereo sum
+/// leaves: two sides of 130 give a combined 15 (`CgbModVol`, `m4a.c:910-911`).
+fn centred_goal_fifteen_note() -> TestNote {
     TestNote {
-        track_right: u8::MAX,
-        track_left: u8::MAX,
+        track_right: 130,
+        track_left: 130,
         ..TestNote::default()
     }
 }
@@ -81,7 +93,7 @@ fn square_peaks_from_note_on(adsr: CgbAdsr, frames: usize) -> Vec<i32> {
         CgbChannelNumber::Square1,
         None,
         adsr,
-        centred_goal_thirty_one_note(),
+        centred_goal_fifteen_note(),
     );
     (0..frames)
         .map(|_| peak_magnitude(&clock.frame(&mut voice, false)))
@@ -112,7 +124,7 @@ fn a_hardware_step_takes_effect_at_its_event_inside_the_render_frame() {
             channel,
             None,
             CLIMBING_EVERY_EVENT,
-            centred_goal_thirty_one_note(),
+            centred_goal_fifteen_note(),
         );
         let heard = magnitudes(&clock.frame(&mut voice, false));
 
@@ -140,7 +152,7 @@ fn a_note_on_write_leaves_the_hardware_unstepped_until_the_first_event() {
             CgbChannelNumber::Square1,
             None,
             CLIMBING_EVERY_EVENT,
-            centred_goal_thirty_one_note(),
+            centred_goal_fifteen_note(),
         );
         let heard = magnitudes(&clock.frame(&mut voice, extra_iteration));
         assert!(
@@ -176,7 +188,7 @@ fn a_downward_note_on_write_at_level_zero_leaves_hardware_dead() {
 }
 
 #[test]
-fn centred_goal_thirty_one_decay_falls_with_the_hardware_envelope_between_writes() {
+fn centred_goal_fifteen_decay_falls_with_the_hardware_envelope_between_writes() {
     let level_15_peak = square_peak_at_level(130, 15);
     let level_14_peak = square_peak_at_level(121, 14);
 
@@ -191,13 +203,13 @@ fn centred_goal_thirty_one_decay_falls_with_the_hardware_envelope_between_writes
         CgbChannelNumber::Square1,
         None,
         paced_decay,
-        centred_goal_thirty_one_note(),
+        centred_goal_fifteen_note(),
     );
 
     let heard = magnitudes(&clock.frame(&mut voice, false));
     assert_eq!(
         voice.envelope_volume(),
-        31,
+        15,
         "the software envelope does not step inside a render frame"
     );
     assert_eq!(voice.hardware_volume(), 14);
@@ -282,52 +294,52 @@ fn live_volume_write_mid_decay_restarts_the_hardware_envelope_timer() {
 }
 
 #[test]
-fn centred_goal_thirty_one_attack_climbs_with_the_hardware_envelope_then_freezes_at_fifteen() {
-    let paced_attack = CgbAdsr {
-        attack: 1,
-        decay: 1,
-        sustain: 15,
-        release: 0,
+fn a_released_sustain_level_above_fifteen_falls_with_the_hardware_envelope() {
+    // Goal 15 with xSUST 33 sustains at level 31 (`m4a.c:921`). The hardware
+    // nibble steps down on its own clock, a level per frame here, and bottoms
+    // out while the software level is still above fifteen.
+    let released_from_thirty_one = CgbAdsr {
+        attack: 0,
+        decay: 0,
+        sustain: 33,
+        release: 1,
     };
     let mut clock = SharedClock::new();
     let mut voice = square_voice_with_adsr(
         CgbChannelNumber::Square1,
         None,
-        paced_attack,
-        centred_goal_thirty_one_note(),
+        released_from_thirty_one,
+        centred_goal_fifteen_note(),
     );
-
     let level_15_peak = square_peak_at_level(130, 15);
-    let mut previous_peak = -1i32;
-    let mut frames_pinned_above_fifteen = 0;
+
+    assert_eq!(
+        peak_magnitude(&clock.frame(&mut voice, false)),
+        level_15_peak
+    );
+    assert_eq!(voice.envelope_volume(), 31);
+    voice.note_off();
+
+    let mut previous_peak = level_15_peak;
+    let mut silent_above_fifteen = false;
     for _ in 0..40 {
         let peak = peak_magnitude(&clock.frame(&mut voice, false));
-        let level = voice.envelope_volume();
         assert!(
-            peak >= previous_peak,
-            "loudness must not fall while the hardware climbs"
+            peak <= previous_peak,
+            "loudness must not rise while released"
         );
-        if level > 15 && previous_peak == level_15_peak {
-            assert_eq!(
-                peak, level_15_peak,
-                "hardware must stay pinned at level 15's loudness once the level exceeds it"
-            );
-            frames_pinned_above_fifteen += 1;
-        }
+        silent_above_fifteen |= voice.envelope_volume() > 15 && peak == 0;
         previous_peak = peak;
-        if level >= 31 {
-            break;
-        }
     }
-    assert_eq!(previous_peak, level_15_peak);
     assert!(
-        frames_pinned_above_fifteen > 0,
-        "test setup must run the software attack past level 15"
+        silent_above_fifteen,
+        "hardware must bottom out before the software level falls back to fifteen"
     );
+    assert_eq!(voice.envelope_volume(), 0);
 }
 
 #[test]
-fn centred_goal_thirty_one_decay_freezes_at_zero_before_software_reaches_it() {
+fn centred_goal_fifteen_decay_freezes_at_zero_before_software_reaches_it() {
     let paced_decay_to_silence = CgbAdsr {
         attack: 0,
         decay: 1,
@@ -339,7 +351,7 @@ fn centred_goal_thirty_one_decay_freezes_at_zero_before_software_reaches_it() {
         CgbChannelNumber::Square1,
         None,
         paced_decay_to_silence,
-        centred_goal_thirty_one_note(),
+        centred_goal_fifteen_note(),
     );
 
     let mut saw_silence_while_still_in_range = false;
@@ -374,7 +386,7 @@ fn live_track_volume_drop_during_sustain_does_not_silence_the_channel() {
         CgbChannelNumber::Square1,
         None,
         held_at_full_sustain,
-        centred_goal_thirty_one_note(),
+        centred_goal_fifteen_note(),
     );
     voice.begin_frame(false); // enters sustain at its write frame
 

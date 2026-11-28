@@ -146,7 +146,7 @@ fn release_start_volume_write_retriggers_the_noise_lfsr() {
 
 const SLOW_NOISE_KEY: u8 = 21;
 const MAX_SAMPLES_TO_LATCH_HIGH: usize = 20_000;
-const FULL_VOLUME: u8 = 14;
+const FULL_VOLUME: u8 = 15;
 /// Samples before key 21's first LFSR clock after a restart: none lands in
 /// the first 13 frames, one does in the 14th.
 const SLOW_KEY_FIRST_CLOCK_SAMPLE: usize = 2979;
@@ -494,10 +494,12 @@ fn a_dac_disabled_replacement_holds_the_inherited_latch() {
     assert_eq!(replacement.noise_output_latch(), Some(FULL_VOLUME));
 }
 
-/// Centred goal 16 (`m4a.c:908-911`) wraps to a zero NR42 volume nibble
-/// (`m4a.c:1222`).
-const WRAPPING_GOAL_TRACK_VOLUME: u8 = 132;
-const WRAPPING_GOAL: u8 = 16;
+/// Goal 15 with xSUST 17 sustains at level 16 (`m4a.c:921`), which wraps to a
+/// zero NR42 volume nibble (`m4a.c:1222`). The combined goal itself never gets
+/// there: `CgbModVol` truncates the stereo sum to a byte first (`m4a.c:910-911`).
+const WRAPPING_SUSTAIN: u8 = 17;
+const WRAPPING_LEVEL: u8 = 16;
+const GOAL_FIFTEEN_TRACK_VOLUME: u8 = 130;
 
 fn latch_after_slow_clock(adsr: CgbAdsr, note: TestNote) -> (CgbVoice, Option<u8>) {
     let predecessor = noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, WIDE_NOISE);
@@ -512,24 +514,34 @@ fn latch_after_slow_clock(adsr: CgbAdsr, note: TestNote) -> (CgbVoice, Option<u8
     (replacement, latch)
 }
 
-/// `m4a.c:1158,1222`: NR42 `decay | 0x00` fails the DAC test
+/// `m4a.c:1060-1069,1222`: NR42 `release | 0x00` fails the DAC test
 /// (`gb/audio.c:346-352,856-860`).
 #[test]
 fn a_wrapped_zero_volume_decreasing_store_stops_clocking() {
-    let decaying = CgbAdsr {
+    let releasing = CgbAdsr {
         attack: 0,
-        decay: 1,
-        ..CgbAdsr::flat()
+        decay: 0,
+        sustain: WRAPPING_SUSTAIN,
+        release: 1,
     };
     let note = TestNote {
-        track_right: WRAPPING_GOAL_TRACK_VOLUME,
-        track_left: WRAPPING_GOAL_TRACK_VOLUME,
+        track_right: GOAL_FIFTEEN_TRACK_VOLUME,
+        track_left: GOAL_FIFTEEN_TRACK_VOLUME,
         ..TestNote::at_key(SLOW_NOISE_KEY)
     };
-    let (replacement, latch) = latch_after_slow_clock(decaying, note);
+    let predecessor = noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, WIDE_NOISE);
+    let mut replacement = noise_voice(releasing, WIDE_NOISE, note);
+    replacement.carry_hardware_state_from(&predecessor);
+    replacement.begin_frame(false);
+    replacement.note_off();
+    replacement.begin_frame(false);
+    let mut acc = [(0i32, 0i32); 1];
+    for _ in 0..(2 * SLOW_KEY_FIRST_CLOCK_SAMPLE) {
+        replacement.render(&mut acc, &[]);
+    }
     assert_eq!(
         replacement.envelope_volume(),
-        WRAPPING_GOAL,
+        WRAPPING_LEVEL,
         "sanity: unmasked volume 16"
     );
     assert_eq!(
@@ -538,7 +550,7 @@ fn a_wrapped_zero_volume_decreasing_store_stops_clocking() {
         "sanity: nibble wraps to 0"
     );
     assert_eq!(
-        latch,
+        replacement.noise_output_latch(),
         Some(FULL_VOLUME),
         "the disabled LFSR holds the latch"
     );
