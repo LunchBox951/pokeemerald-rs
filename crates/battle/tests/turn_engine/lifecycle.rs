@@ -843,3 +843,42 @@ fn a_wild_knockouts_free_slot_learns_precede_the_prompt_in_learnset_order() {
         ]
     );
 }
+
+/// `Cmd_getexp` runs `MonGainEVs` ahead of the exp write
+/// (`src/battle_script_commands.c:3420`), so a level crossed by a knockout's
+/// own award recalculates stats with that knockout's EVs already folded in.
+#[test]
+fn a_knockouts_ev_yield_lands_before_its_level_up_recalculates_stats() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, CHARMANDER, 99, vec![TACKLE]);
+    let growth_rate = dex.species(player.species()).unwrap().growth_rate;
+    let one_short =
+        assets::experience_for_level(growth_rate, MAX_LEVEL).unwrap() - 1 - player.experience();
+    assert!(player.apply_experience(&dex, one_short).unwrap().is_none());
+    // Three Speed EVs: the Rattata's one-point yield crosses the `ev / 4`
+    // boundary, so the level-100 Speed stat differs by one with or without it.
+    let player = player.with_evs(battle::Evs {
+        speed: 3,
+        ..battle::Evs::default()
+    });
+    let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
+    assert_eq!(dex.species(SpeciesId(RATTATA)).unwrap().ev_yield.speed, 1);
+    let base_speed = u32::from(dex.species(SpeciesId(CHARMANDER)).unwrap().speed);
+
+    let mut rng = SequenceRng::new([MAX_ROLL; 7]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let _ = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    rng.assert_exhausted();
+    assert_eq!(battle.player().level(), MAX_LEVEL);
+    assert_eq!(battle.player().evs().speed, 4);
+    // Hardy, 31 IVs, level 100: (2 * base + 31 + 4 / 4) * 100 / 100 + 5.
+    assert_eq!(
+        battle.player().stats().speed,
+        2 * base_speed + 31 + 1 + 5,
+        "the level-up recalculation must see the knockout's own Speed EV"
+    );
+}
