@@ -32773,6 +32773,12 @@
           "rust_target": "crates/engine/src/event_data.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "Special_AreLeadMonEVsMaxedOut": {
+          "reason": "field_specials.c:1390-1396: the predicate half. engine::field_specials::evs_are_maxed_out takes the six raw effort-value bytes the caller read from the lead Pokemon, sums them in a u16 as GetMonEVCount does (pokemon.c:6067-6076; six bytes of 255 total 1530, so no wrap), and returns true when the total is at least MAX_TOTAL_EVS (510, include/constants/pokemon.h:204): 509 is false, 510 and 511 are true. It is a pure function of the bytes, with no mutation and no RNG draw. Not modelled: GetLeadMonIndex's choice of lead Pokemon (field_specials.c:1531-1542), reading the six MON_DATA_*_EV fields from the party, dispatching the special (crate::script::specials lists only its name) and the branching on its result in SlateportCity's script (data/maps/SlateportCity/scripts.inc:143). The parent file row stays pending.",
+          "rust_target": "crates/engine/src/field_specials/effort.rs",
+          "spec": "S-5",
+          "status": "stubbed"
         }
       },
       "category": "code.source",
