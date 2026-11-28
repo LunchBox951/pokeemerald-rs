@@ -20,8 +20,24 @@ pub(in crate::extract) struct Token {
 }
 
 pub(in crate::extract) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
+    scan(src).map(|(tokens, _)| tokens)
+}
+
+/// Like [`tokenize`], and also the line of the first preprocessor directive,
+/// which the token stream drops. A directive is a `#` that is the first token
+/// of its line once comments are read as whitespace, as C's translation phases
+/// see it, so a comment before the `#` does not hide it.
+pub(in crate::extract) fn tokenize_with_directive(
+    src: &str,
+) -> Result<(Vec<Token>, Option<usize>), Fault> {
+    scan(src)
+}
+
+/// Tokens and the line of the first dropped preprocessor directive.
+fn scan(src: &str) -> Result<(Vec<Token>, Option<usize>), Fault> {
     let c: Vec<char> = src.chars().collect();
     let mut out = Vec::new();
+    let mut directive = None;
     let (mut i, mut line, mut line_start) = (0, 1, true);
     while i < c.len() {
         let ch = c[i];
@@ -34,6 +50,7 @@ pub(in crate::extract) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
             _ if ch.is_whitespace() => i += 1,
             '#' if line_start => {
                 // Preprocessor line, with backslash continuations.
+                directive.get_or_insert(line);
                 while i < c.len() && c[i] != '\n' {
                     if c[i] == '\\' && c.get(i + 1) == Some(&'\n') {
                         line += 1;
@@ -111,7 +128,7 @@ pub(in crate::extract) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
             }
         }
     }
-    Ok(out)
+    Ok((out, directive))
 }
 
 /// Read a string-literal body from just past the opening quote; returns the raw

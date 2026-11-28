@@ -430,3 +430,37 @@ fn an_octal_literal_is_refused_instead_of_read_as_decimal() {
     let (file, _) = fault(build_with(&octal, &names(&in_order())));
     assert_eq!(file, File::Constants);
 }
+
+#[test]
+fn comment_prefixed_preprocessor_conditionals_are_refused() {
+    for (open, close) in [
+        ("/* guard */ #if 0", "/* guard */ #endif"),
+        ("/* a\n b */ #if 0", "/**/#endif"),
+        ("/* guard */ #if 0", "#endif"),
+        ("#if 0", "/* guard */ #endif"),
+    ] {
+        let text = format!("{open}\n{}{close}\n", names(&in_order()));
+        let (file, fault_) = fault(build_with(&constants(&in_order()), &text));
+        assert_eq!(file, File::Names, "{open:?}");
+        assert!(fault_.detail.contains("preprocessor"), "{fault_:?}");
+        assert_eq!(fault_.line, 1 + open.matches('\n').count(), "{open:?}");
+    }
+}
+
+#[test]
+fn a_hash_inside_a_line_comment_is_not_a_directive() {
+    let text = format!("// #if 0\n{}", names(&in_order()));
+    assert!(build_with(&constants(&in_order()), &text).is_ok());
+}
+
+#[test]
+fn a_directive_after_a_spliced_comment_close_is_refused() {
+    let text = format!(
+        "/* comment *\\\n/\n#define _(s) \"b\"\n/* end */\n{}",
+        names(&in_order())
+    );
+    let (file, fault_) = fault(build_with(&constants(&in_order()), &text));
+    assert_eq!(file, File::Names);
+    assert!(fault_.detail.contains("preprocessor"), "{fault_:?}");
+    assert_eq!(fault_.line, 3);
+}
