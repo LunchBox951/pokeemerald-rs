@@ -11,7 +11,8 @@ use super::common::{
     TREECKO,
 };
 use assets::items::ItemId;
-use battle::{BattlePokemon, Dex, Ivs};
+use assets::{AbilityId, MoveId, SpeciesId, Type};
+use battle::{Battle, BattlePokemon, BattleRng, Dex, Ivs, PlayerAction};
 use engine::save::{BoxPokemon, Pokemon};
 
 const TENTACOOL: assets::SpeciesId = assets::SpeciesId(72);
@@ -953,4 +954,71 @@ fn assert_status_word_fails_closed(dex: &Dex, word: u32) {
         record, before,
         "no battler exists to re-save over it, so the record is untouched: word {word:#x}"
     );
+}
+
+/// Every draw is zero: no tie and a hit, whatever the move.
+struct AllZero;
+
+impl BattleRng for AllZero {
+    fn next_u16(&mut self) -> u16 {
+        0
+    }
+}
+
+#[test]
+fn a_color_change_override_does_not_reach_the_saved_party_bytes() {
+    let dex = Dex::new();
+    let kecleon = BattlePokemon::new(
+        &dex,
+        SpeciesId::KECLEON,
+        50,
+        Ivs::default(),
+        FIXTURE_PERSONALITY,
+        vec![MoveId::SPLASH],
+    )
+    .unwrap();
+    let rattata = BattlePokemon::new(
+        &dex,
+        SpeciesId::RATTATA,
+        5,
+        Ivs::default(),
+        0,
+        vec![MoveId::DRAGON_RAGE],
+    )
+    .unwrap();
+    assert_eq!(kecleon.ability(), AbilityId::COLOR_CHANGE);
+    assert_eq!(kecleon.species_types(), [Type::Normal; 2]);
+    let mut unchanged = kecleon.clone();
+    let mut rng = AllZero;
+    let mut battle = Battle::new(dex.clone(), kecleon, rattata, false, &mut rng).unwrap();
+    battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(
+        battle.player().types(),
+        [Type::Dragon; 2],
+        "Dragon Rage must have changed the holder"
+    );
+    let mut changed = battle.player().clone();
+
+    // The control took the same Dragon Rage and spent the same Splash, so the two differ
+    // only in the override.
+    unchanged.apply_damage(40);
+    unchanged.deduct_pp(0).unwrap();
+    assert_eq!(changed.types(), [Type::Dragon; 2]);
+    assert_eq!(
+        to_save_pokemon(&dex, &changed).to_bytes(),
+        to_save_pokemon(&dex, &unchanged).to_bytes(),
+        "an active override must not reach the bytes"
+    );
+    changed.clear_battle_scratch();
+    unchanged.clear_battle_scratch();
+
+    // The codec never saves typing, so the bytes alone cannot see a leaked override.
+    assert_eq!(changed.types(), [Type::Normal; 2]);
+    assert_eq!(unchanged.types(), [Type::Normal; 2]);
+    let changed_bytes = to_save_pokemon(&dex, &changed).to_bytes();
+    let unchanged_bytes = to_save_pokemon(&dex, &unchanged).to_bytes();
+    assert_eq!(changed_bytes.len(), 100);
+    assert_eq!(changed_bytes, unchanged_bytes);
 }

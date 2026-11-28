@@ -41,6 +41,7 @@
 use super::bag::{Bag, BAG_LEN};
 use super::coins::Coins;
 use super::game_stats::GameStats;
+use super::mail::{Mail, MAIL_COUNT};
 use super::pokemon::{Pokemon, POKEMON_LEN};
 use crate::event_data::{self, EventData};
 use crate::overworld::ELEVATION_MULTI_LEVEL;
@@ -100,6 +101,10 @@ const FLAGS_OFFSET: usize = 0x1270;
 const VARS_OFFSET: usize = 0x139C;
 // `SaveBlock1::gameStats` (`pokeemerald/include/global.h:1022`).
 const GAME_STATS_OFFSET: usize = 0x159C;
+/// `SaveBlock1::mail` (`pokeemerald/include/global.h:1053`); the array ends
+/// where `unlockedTrendySayings` begins, at `0x2E20` (`:1054`).
+const MAIL_OFFSET: usize = 0x2BE0;
+const _: () = assert!(MAIL_OFFSET + MAIL_COUNT * Mail::LEN == 0x2E20);
 const OBJECT_EVENTS_OFFSET: usize = 0xA30;
 const OBJECT_EVENT_LEN: usize = 0x24;
 const OBJECT_EVENT_DIRECTIONS_OFFSET: usize = 0x18;
@@ -690,6 +695,8 @@ pub struct SaveBlock1 {
     pub player_object_event: SavedObjectEvent,
     /// Plaintext `gameStats` counters.
     pub game_stats: GameStats,
+    /// `mail`: six party slots, then the PC mailbox's ten (see [`super::mail`]).
+    pub mail: [Mail; MAIL_COUNT],
 }
 
 impl Default for SaveBlock1 {
@@ -708,6 +715,7 @@ impl Default for SaveBlock1 {
             event_data: EventData::default(),
             player_object_event: SavedObjectEvent::default(),
             game_stats: GameStats::default(),
+            mail: [Mail::default(); MAIL_COUNT],
         }
     }
 }
@@ -780,6 +788,10 @@ impl SaveBlock1 {
         }
         base[GAME_STATS_OFFSET..GAME_STATS_OFFSET + GameStats::LEN]
             .copy_from_slice(&self.game_stats.to_bytes(encryption_key));
+        for (index, mail) in self.mail.iter().enumerate() {
+            let offset = MAIL_OFFSET + index * Mail::LEN;
+            base[offset..offset + Mail::LEN].copy_from_slice(&mail.to_bytes());
+        }
         base[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET] = self.player_object_event.to_direction_byte();
         base[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = self.player_object_event.to_elevation_byte();
         // Only bit 0 is modeled; the byte's other bitfields stay as loaded.
@@ -820,6 +832,12 @@ impl SaveBlock1 {
             *value = read_u16(bytes, VARS_OFFSET + index * SERIALIZED_U16_LEN);
         }
 
+        let mail = std::array::from_fn(|index| {
+            let offset = MAIL_OFFSET + index * Mail::LEN;
+            let mut raw = [0u8; Mail::LEN];
+            raw.copy_from_slice(&bytes[offset..offset + Mail::LEN]);
+            Mail::from_bytes(&raw)
+        });
         let pos = Coords16::from_bytes(&bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]);
         Ok(Self {
             pos,
@@ -848,6 +866,7 @@ impl SaveBlock1 {
             )
             .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET])
             .with_active(trusted_player_object(bytes, pos)),
+            mail,
         })
     }
 }
@@ -1658,9 +1677,13 @@ mod tests {
             .event_data
             .var_set(event_data::VARS_END, 0xBEEF)
             .unwrap();
+        block.mail[0] = sample_mail(1);
+        block.mail[MAIL_COUNT - 1] = sample_mail(2);
 
         let bytes = block.to_bytes(key);
         assert_eq!(bytes.len(), 0x3D88);
+        assert_eq!(&bytes[0x2BE0..0x2BE0 + 0x24], &sample_mail(1).to_bytes());
+        assert_eq!(&bytes[0x2E20 - 0x24..0x2E20], &sample_mail(2).to_bytes());
         assert_eq!(&bytes[0x00..0x04], &block.pos.to_bytes());
         assert_eq!(&bytes[0x04..0x0C], &block.location.to_bytes());
         assert_eq!(&bytes[0x0C..0x14], &block.continue_game_warp.to_bytes());
@@ -1707,6 +1730,47 @@ mod tests {
             Ok(0xBEEF)
         );
         assert_eq!(restored.player_object_event, block.player_object_event);
+        assert_eq!(restored.mail, block.mail);
+    }
+
+    fn sample_mail(seed: u8) -> Mail {
+        Mail {
+            words: [u16::from(seed) << 8 | 0x34; 9],
+            player_name: [seed; 8],
+            trainer_id: [seed + 1; 4],
+            species: 0x0100 + u16::from(seed),
+            item_id: ItemId::ORANGE_MAIL,
+            padding: [seed + 2, seed + 3],
+        }
+    }
+
+    #[test]
+    fn patching_the_mail_array_leaves_its_neighbours_alone() {
+        let key = 0xA1B2_C3D4;
+        let mut block = SaveBlock1::default();
+        block.mail[3] = sample_mail(7);
+        let mut base = [0x5A_u8; SaveBlock1::PAYLOAD_LEN];
+        block.patch_bytes(&mut base, key);
+        assert_eq!(base[0x2BDF], 0x5A, "easyChatBattleLost's last byte");
+        assert_eq!(base[0x2E20], 0x5A, "unlockedTrendySayings");
+        assert_eq!(
+            &base[0x2BE0 + 3 * 0x24..0x2BE0 + 4 * 0x24],
+            &sample_mail(7).to_bytes()
+        );
+        assert_eq!(
+            SaveBlock1::from_bytes(&base, key).unwrap().mail[3],
+            sample_mail(7)
+        );
+    }
+
+    #[test]
+    fn a_zeroed_mail_region_loads_as_sixteen_empty_slots() {
+        let block = SaveBlock1::from_bytes(&[0; SaveBlock1::PAYLOAD_LEN], 0).unwrap();
+        assert!(block.mail.iter().all(Mail::is_empty));
+        assert_eq!(
+            block.mail[0].words, [0; 9],
+            "loaded zeros are not rewritten"
+        );
     }
 
     #[test]
