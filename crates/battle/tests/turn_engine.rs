@@ -76,6 +76,8 @@ mod poison_synchronize;
 mod poison_trainer_aftermath;
 #[path = "turn_engine/pressure.rs"]
 mod pressure;
+#[path = "turn_engine/restore_hp.rs"]
+mod restore_hp;
 #[path = "turn_engine/rollout/mod.rs"]
 mod rollout;
 #[path = "turn_engine/rough_skin_contact.rs"]

@@ -43,6 +43,7 @@ mod color_change;
 mod cute_charm;
 mod effect_spore;
 mod pipelines;
+mod restore_hp;
 mod rollout;
 mod yawn;
 use pipelines::hit_failure_event;
@@ -99,6 +100,7 @@ pub(super) enum MovePipeline {
     Rollout,
     Attract,
     Yawn,
+    RestoreHp,
     OrdinaryHit,
 }
 
@@ -150,6 +152,8 @@ impl MovePipeline {
             (Self::Attract, crate::attract::ensure_resolvable)
         } else if yawn::is_yawn_effect(effect) {
             (Self::Yawn, yawn::ensure_resolvable)
+        } else if restore_hp::is_restore_hp_effect(effect) {
+            (Self::RestoreHp, restore_hp::ensure_resolvable)
         } else {
             (Self::OrdinaryHit, crate::hit::ensure_resolvable)
         }
@@ -481,6 +485,10 @@ impl Battle {
             }
             MovePipeline::Yawn => {
                 self.execute_yawn_move(attacker_is_player, move_id, events);
+                Ok(())
+            }
+            MovePipeline::RestoreHp => {
+                self.execute_restore_hp_move(attacker_is_player, move_id, events);
                 Ok(())
             }
             MovePipeline::OrdinaryHit => {
@@ -1280,6 +1288,7 @@ mod pipeline_agreement_tests {
         (&[117], MovePipeline::Rollout),
         (&[120], MovePipeline::Attract),
         (&[187], MovePipeline::Yawn),
+        (&[32], MovePipeline::RestoreHp),
         (
             &[
                 0, 2, 12, 14, 15, 17, 21, 22, 31, 43, 55, 56, 61, 63, 64, 68, 70, 73, 74, 76, 78,
@@ -1318,7 +1327,8 @@ mod pipeline_agreement_tests {
                     || crate::leech_seed::ensure_resolvable(dex, move_id).is_ok()
                     || crate::rollout::ensure_resolvable(dex, move_id).is_ok()
                     || crate::attract::ensure_resolvable(dex, move_id).is_ok()
-                    || move_id == MoveId::YAWN;
+                    || move_id == MoveId::YAWN
+                    || matches!(move_id, MoveId::RECOVER | MoveId::SLACK_OFF);
                 if accepted {
                     Ok(())
                 } else {

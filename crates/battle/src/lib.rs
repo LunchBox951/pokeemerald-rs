@@ -27,7 +27,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this crate, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the twelve pipelines
+//! one of the battle scripts this crate reproduces — the pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script |
@@ -44,6 +44,7 @@
 //! | [`leech_seed`] | `BattleScript_EffectLeechSeed` ([`leech_seed::is_leech_seed_effect`]) |
 //! | [`rollout`] | `BattleScript_EffectRollout` ([`rollout::is_rollout_effect`]) |
 //! | `battle::execute::yawn` | `BattleScript_EffectYawn` |
+//! | `battle::execute::restore_hp` | `BattleScript_EffectRestoreHp` |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
