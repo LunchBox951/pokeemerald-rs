@@ -672,6 +672,7 @@ impl Battle {
                 }
             }
             SecondaryApplication::AttackDown
+            | SecondaryApplication::SpecialAttackDown
             | SecondaryApplication::SpeedDown
             | SecondaryApplication::AccuracyDown => {
                 if let Some(stat) = secondary_effect.dropped_stat() {
@@ -686,14 +687,15 @@ impl Battle {
         poisoned_synchronize_holder
     }
 
-    /// `MOVE_EFFECT_ATK_MINUS_1`, `MOVE_EFFECT_SPD_MINUS_1` and
-    /// `MOVE_EFFECT_ACC_MINUS_1` as secondary effects: one `stat` stage off a target that survived the hit.
+    /// `MOVE_EFFECT_ATK_MINUS_1`, `MOVE_EFFECT_SP_ATK_MINUS_1`,
+    /// `MOVE_EFFECT_SPD_MINUS_1` and `MOVE_EFFECT_ACC_MINUS_1` as secondary
+    /// effects: one `stat` stage off a target that survived the hit.
     /// `SetMoveEffect` leads with an `hp == 0` guard
     /// (`battle_script_commands.c:2261`-`:2264`), and a target already at the
     /// minimum stage is left alone with no message because `ChangeStatBuffs`
     /// runs with `flags == 0` (`:7056`-`:7059`, `:7094`-`:7095`). Clear Body,
     /// White Smoke and Shield Dust, Keen Eye for Accuracy and Hyper Cutter for
-    /// Attack, never reach this point ([`crate::secondary::spend_effect_chance_draw`]).
+    /// Attack only, never reach this point ([`crate::secondary::spend_effect_chance_draw`]).
     fn apply_secondary_stat_drop(
         &mut self,
         attacker_is_player: bool,
