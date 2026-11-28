@@ -1,7 +1,12 @@
 //! Field-script specials that read party state.
 //!
-//! Only the friendship classifier is modelled here. Choosing the lead Pokemon,
+//! The friendship classifier and, in `original_trainer`, the Name Rater's
+//! original-trainer check are modelled here. Choosing the party Pokemon,
 //! dispatching the special and branching on its result belong to callers.
+
+mod original_trainer;
+
+pub use original_trainer::{mon_ot_name_not_player, GAME_LANGUAGE};
 
 /// Friendship category returned by upstream's `GetLeadMonFriendshipScore`
 /// (`src/field_specials.c:949-966`).

@@ -32762,6 +32762,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MonOTNameNotPlayer": {
+          "reason": "field_specials.c:1572-1583. engine::field_specials::mon_ot_name_not_player takes the Pokemon's language byte, the player's 8-byte name buffer and the Pokemon's 7-byte OT name field. A language other than GAME_LANGUAGE (LANGUAGE_ENGLISH, 2; constants/global.h:21,30) is true. Otherwise the OT name is copied with the EOS that GetMonData(MON_DATA_OT_NAME) appends after its 7 bytes (pokemon.c:3808-3820), and the two names compare byte by byte as StringCompare does (string_util.c:124-135): equal on a shared EOS, so bytes after the first EOS are ignored, names of different lengths differ, and a 7-glyph OT name ends at the appended EOS. The comparison is on encoded bytes, not decoded text, and not on trainer ids. No RNG. Not modelled: reading gSpecialVar_0x8004 as the party slot and the Pokemon's language and OT name from gPlayerParty, the specialvar dispatch (crate::script::specials lists only its name) and the caller SlateportCity_NameRatersHouse_EventScript_RateMonNickname (data/maps/SlateportCity_NameRatersHouse/scripts.inc:30), after its IsMonOTIDNotPlayers check (scripts.inc:28), and the Name Rater's UI and nickname editing.",
+          "rust_target": "crates/engine/src/field_specials/original_trainer.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "SetPacifidlogTMReceivedDay": {
           "reason": "field_specials.c:1566-1570. EventData::set_pacifidlog_tm_received_day stores the caller-supplied s16 local day in VAR_PACIFIDLOG_TM_RECEIVED_DAY (vars.h:214) and returns the stored value, both as the u16 two's-complement image upstream's s16-to-u16 VarSet and return conversions produce (-1 gives 0xFFFF, i16::MIN gives 0x8000), unnormalised. The variable is an ordinary saved var, so it round-trips through SaveBlock1 and no RNG draw is made. Not modelled: where gLocalTime.days comes from (the real-time clock policy, issue #2396), the SetPacifidlogTMReceivedDay special's dispatch (crate::script::specials lists it by name only), and the TM gift choice, text and map wiring in PacifidlogTown_House2's scripts.",
           "rust_target": "crates/engine/src/event_data.rs",
