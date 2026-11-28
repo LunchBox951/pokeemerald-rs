@@ -1,7 +1,7 @@
 use super::{
     ensure_resolvable, fixed_damage_for_effect, is_fixed_damage_effect, resolve_fixed_damage_move,
-    FixedDamage, DRAGON_RAGE_DAMAGE, EFFECT_DRAGON_RAGE, EFFECT_LEVEL_DAMAGE, EFFECT_SONICBOOM,
-    FIXED_DAMAGE_EFFECTS, SONIC_BOOM_DAMAGE,
+    FixedDamage, DRAGON_RAGE_DAMAGE, EFFECT_DRAGON_RAGE, EFFECT_LEVEL_DAMAGE, EFFECT_PSYWAVE,
+    EFFECT_SONICBOOM, FIXED_DAMAGE_EFFECTS, SONIC_BOOM_DAMAGE,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -14,6 +14,8 @@ const BULBASAUR: SpeciesId = SpeciesId(1);
 const SQUIRTLE: SpeciesId = SpeciesId(7);
 const RATTATA: SpeciesId = SpeciesId(19);
 const GASTLY: SpeciesId = SpeciesId(92);
+/// Dark: immune to Psychic.
+const POOCHYENA: SpeciesId = SpeciesId::POOCHYENA;
 /// `SPECIES_SHEDINJA`: Wonder Guard in its primary (and only) ability slot.
 const SHEDINJA: SpeciesId = SpeciesId(303);
 
@@ -22,6 +24,7 @@ const SONIC_BOOM: MoveId = MoveId::SONIC_BOOM;
 const SEISMIC_TOSS: MoveId = MoveId::SEISMIC_TOSS;
 const DRAGON_RAGE: MoveId = MoveId::DRAGON_RAGE;
 const NIGHT_SHADE: MoveId = MoveId::NIGHT_SHADE;
+const PSYWAVE: MoveId = MoveId::PSYWAVE;
 
 const HARDY_PERSONALITY: u32 = 0;
 const ACCURACY_HIT_DRAW: u16 = 0;
@@ -44,13 +47,14 @@ fn mon(dex: &Dex, species: SpeciesId, level: u8, moves: Vec<MoveId>) -> BattlePo
 }
 
 #[test]
-fn four_moves_map_to_the_three_supported_effects() {
+fn five_moves_map_to_the_four_supported_effects() {
     let dex = Dex::new();
     for (move_id, effect) in [
         (SONIC_BOOM, EFFECT_SONICBOOM),
         (DRAGON_RAGE, EFFECT_DRAGON_RAGE),
         (SEISMIC_TOSS, EFFECT_LEVEL_DAMAGE),
         (NIGHT_SHADE, EFFECT_LEVEL_DAMAGE),
+        (PSYWAVE, EFFECT_PSYWAVE),
     ] {
         let move_data = dex.move_data(move_id).unwrap();
         assert_eq!(move_data.effect, effect);
@@ -72,6 +76,7 @@ fn effects_select_literal_or_attacker_level_damage() {
         [
             (EFFECT_DRAGON_RAGE, FixedDamage::Literal(DRAGON_RAGE_DAMAGE)),
             (EFFECT_LEVEL_DAMAGE, FixedDamage::AttackerLevel),
+            (EFFECT_PSYWAVE, FixedDamage::LevelScaledRandom),
             (EFFECT_SONICBOOM, FixedDamage::Literal(SONIC_BOOM_DAMAGE)),
         ]
     );
@@ -87,19 +92,25 @@ fn effects_select_literal_or_attacker_level_damage() {
         fixed_damage_for_effect(EFFECT_LEVEL_DAMAGE),
         Some(FixedDamage::AttackerLevel)
     );
+    assert_eq!(
+        fixed_damage_for_effect(EFFECT_PSYWAVE),
+        Some(FixedDamage::LevelScaledRandom)
+    );
     assert_eq!(fixed_damage_for_effect(crate::drain::EFFECT_ABSORB), None);
 
     let literal_damage = 17;
     let attacker_level = 77;
+    let mut rng = SequenceRng::new([]);
     assert_eq!(
-        FixedDamage::Literal(literal_damage).amount(attacker_level),
+        FixedDamage::Literal(literal_damage).amount(attacker_level, &mut rng),
         literal_damage
     );
     assert_eq!(
-        FixedDamage::AttackerLevel.amount(attacker_level),
+        FixedDamage::AttackerLevel.amount(attacker_level, &mut rng),
         u32::from(attacker_level)
     );
-    assert_eq!(FixedDamage::AttackerLevel.amount(1), 1);
+    assert_eq!(FixedDamage::AttackerLevel.amount(1, &mut rng), 1);
+    assert_eq!(rng.draws(), 0, "only the random source draws");
 }
 
 #[test]
@@ -408,4 +419,166 @@ fn a_missed_fixed_damage_move_against_wonder_guard_reports_wonder_guard() {
         1,
         "a failed roll still skips the trailing effect-chance draw"
     );
+}
+
+/// `Cmd_psywavedamageeffect` (`battle_script_commands.c:7932-7941`): the
+/// sample is a 16-way draw accepted only through 10, and the damage is the
+/// attacker's level times `(10 * sample + 50)` over 100, truncated.
+#[test]
+fn psywave_deals_level_scaled_damage_from_the_lowest_and_highest_samples() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 50, vec![PSYWAVE]);
+    let defender = mon(&dex, SQUIRTLE, 50, vec![TACKLE]);
+
+    for (sample_draw, expected_damage) in [(0, 25), (10, 75)] {
+        let mut rng =
+            SequenceRng::new([ACCURACY_HIT_DRAW, sample_draw, DISCARDED_EFFECT_CHANCE_DRAW]);
+        let outcome =
+            resolve_fixed_damage_move(&dex, PSYWAVE, &attacker, &defender, &mut rng).unwrap();
+
+        assert_eq!(
+            outcome,
+            HitOutcome::Hit {
+                damage: expected_damage,
+                is_critical: false,
+            }
+        );
+        assert_eq!(rng.draws(), 3, "accuracy, one sample, effect chance");
+    }
+}
+
+#[test]
+fn psywave_truncates_the_scaled_damage() {
+    let dex = Dex::new();
+    // 33 * (7 * 10 + 50) / 100 = 3960 / 100.
+    let attacker = mon(&dex, BULBASAUR, 33, vec![PSYWAVE]);
+    let defender = mon(&dex, SQUIRTLE, 50, vec![TACKLE]);
+    let mut rng = SequenceRng::new([ACCURACY_HIT_DRAW, 7, DISCARDED_EFFECT_CHANCE_DRAW]);
+
+    let outcome = resolve_fixed_damage_move(&dex, PSYWAVE, &attacker, &defender, &mut rng).unwrap();
+
+    assert_eq!(
+        outcome,
+        HitOutcome::Hit {
+            damage: 39,
+            is_critical: false,
+        }
+    );
+}
+
+/// A level-1 user's lowest samples scale below one HP and truncate to zero
+/// (`1 * 50 / 100`); upstream applies no floor of one on this path.
+#[test]
+fn psywave_at_level_one_can_deal_zero_damage() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 1, vec![PSYWAVE]);
+    let defender = mon(&dex, SQUIRTLE, 50, vec![TACKLE]);
+
+    for (sample_draw, expected_damage) in [(0, 0), (4, 0), (5, 1), (10, 1)] {
+        let mut rng =
+            SequenceRng::new([ACCURACY_HIT_DRAW, sample_draw, DISCARDED_EFFECT_CHANCE_DRAW]);
+        let outcome =
+            resolve_fixed_damage_move(&dex, PSYWAVE, &attacker, &defender, &mut rng).unwrap();
+
+        assert_eq!(
+            outcome,
+            HitOutcome::Hit {
+                damage: expected_damage,
+                is_critical: false,
+            }
+        );
+    }
+}
+
+/// Samples above 10 are redrawn, each consuming a draw. The draw is taken
+/// modulo 16, so 27 (11) and 31 (15) are rejected and 26 (10) is kept.
+#[test]
+fn psywave_redraws_rejected_samples_and_each_consumes_a_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 50, vec![PSYWAVE]);
+    let defender = mon(&dex, SQUIRTLE, 50, vec![TACKLE]);
+    let script = [
+        ACCURACY_HIT_DRAW,
+        11,
+        15,
+        27,
+        31,
+        26,
+        DISCARDED_EFFECT_CHANCE_DRAW,
+    ];
+    let mut rng = SequenceRng::new(script);
+
+    let outcome = resolve_fixed_damage_move(&dex, PSYWAVE, &attacker, &defender, &mut rng).unwrap();
+
+    assert_eq!(
+        outcome,
+        HitOutcome::Hit {
+            damage: 75,
+            is_critical: false,
+        }
+    );
+    assert_eq!(rng.draws(), script.len());
+}
+
+/// A landed Psywave is accuracy, the sample, and the discarded effect-chance
+/// draw: no critical-hit draw and no damage-variance draw follow.
+#[test]
+fn an_effective_psywave_hit_draws_exactly_three_times_with_no_rejection() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 50, vec![PSYWAVE]);
+    let defender = mon(&dex, SQUIRTLE, 50, vec![TACKLE]);
+    let mut rng = SequenceRng::new([ACCURACY_HIT_DRAW, 5, DISCARDED_EFFECT_CHANCE_DRAW]);
+
+    let outcome = resolve_fixed_damage_move(&dex, PSYWAVE, &attacker, &defender, &mut rng).unwrap();
+
+    assert!(matches!(outcome, HitOutcome::Hit { damage: 50, .. }));
+    assert_eq!(rng.draws(), 3);
+}
+
+/// 80 accuracy: a roll of 80 yields `80 % 100 + 1 == 81`, so the move misses
+/// before the sample is drawn.
+#[test]
+fn a_psywave_miss_consumes_only_the_accuracy_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 50, vec![PSYWAVE]);
+    let defender = mon(&dex, SQUIRTLE, 50, vec![TACKLE]);
+    let mut rng = SequenceRng::new([80]);
+
+    let outcome = resolve_fixed_damage_move(&dex, PSYWAVE, &attacker, &defender, &mut rng).unwrap();
+
+    assert_eq!(outcome, HitOutcome::Miss);
+    assert_eq!(rng.draws(), 1);
+}
+
+/// The script runs `psywavedamageeffect` before the immunity result is
+/// consulted, so a Dark target still costs the sample (including a rejected
+/// one) and the trailing draw, and takes nothing.
+#[test]
+fn psywave_against_a_type_immune_target_still_spends_its_sample_draws() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 50, vec![PSYWAVE]);
+    let defender = mon(&dex, POOCHYENA, 50, vec![TACKLE]);
+    let script = [ACCURACY_HIT_DRAW, 12, 3, DISCARDED_EFFECT_CHANCE_DRAW];
+    let mut rng = SequenceRng::new(script);
+
+    let outcome = resolve_fixed_damage_move(&dex, PSYWAVE, &attacker, &defender, &mut rng).unwrap();
+
+    assert_eq!(outcome, HitOutcome::NoEffect);
+    assert_eq!(rng.draws(), script.len());
+}
+
+/// Shedinja's Bug/Ghost typing leaves Psychic neutral, so only Wonder Guard
+/// blocks it, after the sample is drawn.
+#[test]
+fn psywave_against_wonder_guard_still_spends_its_sample_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 50, vec![PSYWAVE]);
+    let defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    let script = [ACCURACY_HIT_DRAW, 12, 3, DISCARDED_EFFECT_CHANCE_DRAW];
+    let mut rng = SequenceRng::new(script);
+
+    let outcome = resolve_fixed_damage_move(&dex, PSYWAVE, &attacker, &defender, &mut rng).unwrap();
+
+    assert_eq!(outcome, HitOutcome::WonderGuardBlocked);
+    assert_eq!(rng.draws(), script.len());
 }
