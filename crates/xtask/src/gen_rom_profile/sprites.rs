@@ -8,7 +8,9 @@
 //! a tag. `sObjectEventSpritePalettes`, the `{data, tag}` table in
 //! `src/event_object_movement.c`, picks it. A unique bank's table entry
 //! locates the table, whose extent then selects the real copy of each
-//! ambiguous bank. A bank the table does not reference is refused, as the
+//! ambiguous bank. Every unique bank is tried, so extra record-shaped words
+//! pointing at one of them do not hide a table another identifies; if the
+//! references reach several tables, the one naming every bank wins. A bank the table does not reference is refused, as the
 //! importer rejects roots outside the table.
 //!
 //! The tall-grass field-effect sheet is located like any other sheet. Its
@@ -72,16 +74,24 @@ pub fn locate(
     }
     let hits = ctx.raw.find_all_uncapped(&needles);
 
-    let seed = ids
-        .iter()
-        .zip(hits.iter())
-        .find(|(_, offsets)| offsets.len() == 1)
-        .map(|(id, offsets)| (id.clone(), super::locate::to_addr(offsets[0])))
-        .ok_or_else(|| GenRomProfileError::StructMismatch {
-            id: "sObjectEventSpritePalettes".to_owned(),
-            reason: "no object-event palette is unique, so nothing seeds the table".to_owned(),
-        })?;
-    let table = find_palette_table(ctx, seed.1)?;
+    let mut seeds: Vec<(&str, u32)> = Vec::new();
+    for (id, offsets) in ids.iter().zip(hits.iter()) {
+        let [offset] = offsets.as_slice() else {
+            continue;
+        };
+        let addr = super::locate::to_addr(*offset);
+        if seeds.iter().all(|&(_, seen)| seen != addr) {
+            seeds.push((id, addr));
+        }
+    }
+    let names_every_bank = |table: &PaletteTable| {
+        hits.iter().all(|offsets| {
+            offsets
+                .iter()
+                .any(|&offset| table.references(ctx, super::locate::to_addr(offset)))
+        })
+    };
+    let (table, seed_id) = find_palette_table(ctx, &seeds, names_every_bank)?;
     report.push(
         ReportLine::unique(
             "sObjectEventSpritePalettes",
@@ -90,7 +100,7 @@ pub fn locate(
         )
         .with(Resolution::StructDerived)
         .local_symbol("sObjectEventSpritePalettes")
-        .note(format!("seeded from `{}`", seed.0)),
+        .note(format!("seeded from `{seed_id}`")),
     );
 
     let mut palettes = Vec::with_capacity(ids.len());
@@ -171,49 +181,119 @@ impl PaletteTable {
     }
 }
 
-/// Find the table by the one record that points at a bank found only once.
-fn find_palette_table(ctx: &Context<'_>, seed: u32) -> Result<PaletteTable, GenRomProfileError> {
+/// Find the table by the records that point at banks found only once.
+///
+/// Every unique bank in `seeds` is tried, and every record-shaped reference
+/// to it. A reference that does not lead to a readable table is skipped, so
+/// one bank named by unrelated record-shaped words does not hide a table
+/// another bank identifies. When the references lead to more than one
+/// distinct table, `names_every_bank` keeps those that name every bank in the
+/// inventory; the search is refused unless exactly one table remains.
+///
+/// Returns the table and the id of the first bank that led to it.
+fn find_palette_table<'a>(
+    ctx: &Context<'_>,
+    seeds: &[(&'a str, u32)],
+    names_every_bank: impl Fn(&PaletteTable) -> bool,
+) -> Result<(PaletteTable, &'a str), GenRomProfileError> {
     let id = "sObjectEventSpritePalettes";
-    let record = only_one_matching(
-        id,
-        "the `struct SpritePalette` layout",
-        ctx.pointers.refs_to(seed).iter().copied(),
-        |&at| record_shape(ctx, at).is_some(),
-    )?;
+    let mut found: Vec<(PaletteTable, &'a str)> = Vec::new();
+    let mut first_refusal = None;
+    for &(seed_id, seed) in seeds {
+        for &record in ctx.pointers.refs_to(seed) {
+            if record_shape(ctx, record).is_none() {
+                continue;
+            }
+            match table_around(ctx, record) {
+                Ok(table) => {
+                    // Views ending at one terminator are parts of one run
+                    // seen from different records; the widest is the table.
+                    match found.iter_mut().find(|(kept, _)| kept.end == table.end) {
+                        Some(kept) if table.start < kept.0.start => *kept = (table, seed_id),
+                        Some(_) => {}
+                        None => found.push((table, seed_id)),
+                    }
+                }
+                Err(refusal) => {
+                    first_refusal.get_or_insert(refusal);
+                }
+            }
+        }
+    }
+    if found.len() > 1 {
+        found.retain(|(table, _)| names_every_bank(table));
+        if found.len() != 1 {
+            return Err(GenRomProfileError::StructMismatch {
+                id: id.to_owned(),
+                reason: format!(
+                    "{} tables with the `struct SpritePalette` layout name every object-event \
+                     palette, expected exactly 1",
+                    found.len()
+                ),
+            });
+        }
+    }
+    match found.pop() {
+        Some(found) => Ok(found),
+        None => Err(
+            first_refusal.unwrap_or_else(|| GenRomProfileError::StructMismatch {
+                id: id.to_owned(),
+                reason: if seeds.is_empty() {
+                    "no object-event palette is unique, so nothing seeds the table".to_owned()
+                } else {
+                    "no unique object-event palette is named by a `struct SpritePalette` record"
+                        .to_owned()
+                },
+            }),
+        ),
+    }
+}
+
+/// The table `record` belongs to, read out to its NULL terminator.
+fn table_around(ctx: &Context<'_>, record: u32) -> Result<PaletteTable, GenRomProfileError> {
+    let id = "sObjectEventSpritePalettes";
     let seed_tag = record_shape(ctx, record).ok_or_else(|| GenRomProfileError::StructMismatch {
         id: id.to_owned(),
         reason: "the seed record stopped reading as one".to_owned(),
     })?;
 
+    // Both walks stop once the run reaches the importer's bound, so a long
+    // run of record-shaped words costs a bounded read however many
+    // references lead into it.
     let mut start = record;
-    while let Some(previous) = start.checked_sub(RECORD_BYTES) {
+    let mut end = record + RECORD_BYTES;
+    while (end - start) / RECORD_BYTES < MAX_RECORDS {
+        let Some(previous) = start.checked_sub(RECORD_BYTES) else {
+            break;
+        };
         if !is_neighbour(ctx, previous, seed_tag) {
             break;
         }
         start = previous;
     }
-    let mut end = record + RECORD_BYTES;
-    while is_neighbour(ctx, end, seed_tag) {
+    while (end - start) / RECORD_BYTES < MAX_RECORDS && is_neighbour(ctx, end, seed_tag) {
         end += RECORD_BYTES;
     }
     // The importer reads whole records up to one with a NULL `data`, so a
-    // table ending in anything else (filler, a stray record) or whose
-    // terminator record is cut short by the image end is one it cannot read.
-    let terminator = slice_at_addr(ctx.rom, end, RECORD_BYTES as usize);
-    if terminator.map(|record| &record[..4]) != Some(&[0, 0, 0, 0]) {
-        return Err(GenRomProfileError::StructMismatch {
-            id: id.to_owned(),
-            reason: format!("the table at {start:#010X} does not end in a NULL terminator"),
-        });
-    }
+    // run reaching its bound can never be followed by the terminator in time.
     let live = (end - start) / RECORD_BYTES;
     if live >= MAX_RECORDS {
         return Err(GenRomProfileError::StructMismatch {
             id: id.to_owned(),
             reason: format!(
-                "the table at {start:#010X} holds {live} records, so its terminator is past \
-                 the importer's {MAX_RECORDS}-record bound"
+                "the table at {start:#010X} holds {MAX_RECORDS} or more records, so its \
+                 terminator is past the importer's {MAX_RECORDS}-record bound"
             ),
+        });
+    }
+    // A table ending in anything but a NULL record (filler, a stray record),
+    // or whose terminator is cut short by the image end, is one the importer
+    // cannot read.
+    let terminator = slice_at_addr(ctx.rom, end, RECORD_BYTES as usize);
+    if terminator.map(|record| &record[..4]) != Some(&[0, 0, 0, 0]) {
+        return Err(GenRomProfileError::StructMismatch {
+            id: id.to_owned(),
+            reason: format!("the table at {start:#010X} does not end in a NULL terminator"),
         });
     }
     Ok(PaletteTable { start, end })
@@ -396,6 +476,95 @@ mod tests {
     }
 
     #[test]
+    fn a_seed_named_twice_does_not_block_another_unique_seed() {
+        // The first unique bank (SEED) is named by two records; TARGET is
+        // unique and named once, so it alone identifies the same table.
+        let records = [
+            record(0x0800_2000, 0x1100),
+            record(0x0800_2000, 0x1101),
+            record(0x0800_3000, 0x1102),
+            terminator(),
+        ];
+        let (rom, entries) = fixture(&records, &[0x3000]);
+        with_context("sprite-palette-seed-twice", &rom, entries, |ctx| {
+            let plan = locate(ctx, &mut Vec::new()).expect("located");
+            assert_eq!(plan.palette_table, 0x0800_4000);
+        });
+    }
+
+    /// Two terminated tables, the second after a zeroed record that keeps it
+    /// from reading as a continuation of the first. The first names only the
+    /// seed bank; the second names `second` too.
+    fn two_tables(second: &[Vec<u8>]) -> Vec<Vec<u8>> {
+        let mut records = vec![record(0x0800_2000, 0x1100), terminator(), terminator()];
+        records.extend_from_slice(second);
+        records.push(terminator());
+        records
+    }
+
+    #[test]
+    fn a_seed_named_by_two_tables_resolves_to_the_one_naming_every_bank() {
+        let second = [record(0x0800_2000, 0x1100), record(0x0800_3000, 0x1101)];
+        let (rom, entries) = fixture(&two_tables(&second), &[0x3000]);
+        with_context("sprite-palette-two-tables", &rom, entries, |ctx| {
+            let plan = locate(ctx, &mut Vec::new()).expect("located");
+            // The second table starts three records after the first.
+            assert_eq!(plan.palette_table, 0x0800_4000 + 3 * RECORD_BYTES);
+        });
+    }
+
+    #[test]
+    fn views_of_one_run_from_different_records_are_one_table() {
+        // The tags 0x1100 and 0x1200 are too far apart to share a walk, so
+        // the second SEED record sees only the run's tail while TARGET's
+        // record sees all of it: both end at one terminator.
+        let records = [
+            record(0x0800_2000, 0x1100),
+            record(0x0800_3000, 0x1180),
+            record(0x0800_2000, 0x1200),
+            terminator(),
+        ];
+        let (rom, entries) = fixture(&records, &[0x3000]);
+        with_context("sprite-palette-tail-view", &rom, entries, |ctx| {
+            let plan = locate(ctx, &mut Vec::new()).expect("located");
+            assert_eq!(plan.palette_table, 0x0800_4000);
+        });
+    }
+
+    #[test]
+    fn two_tables_each_naming_every_bank_are_refused() {
+        let second = [record(0x0800_2000, 0x1100), record(0x0800_3000, 0x1101)];
+        let mut records = vec![
+            record(0x0800_2000, 0x1100),
+            record(0x0800_3000, 0x1101),
+            terminator(),
+            terminator(),
+        ];
+        records.extend_from_slice(&second);
+        records.push(terminator());
+        assert_refused_for("sprite-palette-two-full-tables", &records, "2 tables");
+    }
+
+    #[test]
+    fn a_table_after_a_seed_whose_own_table_is_malformed_is_still_found() {
+        // SEED is named by a record in an unterminated run and by the real
+        // table's record; the real table is the only viable one.
+        let records = [
+            record(0x0800_2000, 0x1100),
+            record(0x0800_3000, 0x1101),
+            terminator(),
+        ];
+        let (mut rom, entries) = fixture(&records, &[0x3000]);
+        let stray = record(0x0800_2000, 0x1100);
+        let len = rom.len();
+        rom[len - stray.len()..].copy_from_slice(&stray);
+        with_context("sprite-palette-stray-record", &rom, entries, |ctx| {
+            let plan = locate(ctx, &mut Vec::new()).expect("located");
+            assert_eq!(plan.palette_table, 0x0800_4000);
+        });
+    }
+
+    #[test]
     fn a_table_ending_in_filler_without_a_terminator_is_refused() {
         // Two live records then 0xFF filler: the importer reads on past the
         // records, parses 0xFFFF_FFFF as a pointer and fails.
@@ -446,6 +615,15 @@ mod tests {
             let plan = locate(ctx, &mut Vec::new()).expect("located");
             assert_eq!(plan.palette_table, 0x0800_4000);
         });
+    }
+
+    #[test]
+    fn an_unterminated_run_past_the_importer_bound_is_refused_at_the_bound() {
+        // 300 live records and no terminator: the walks stop at the bound
+        // rather than reading the whole run.
+        let mut records = terminated_table(300);
+        records.pop();
+        assert_refused_for("sprite-palette-long-run", &records, "128-record bound");
     }
 
     #[test]
