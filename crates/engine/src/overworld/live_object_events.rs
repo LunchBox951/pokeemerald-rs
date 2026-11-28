@@ -1039,6 +1039,17 @@ mod tests {
         }
 
         #[test]
+        fn a_removal_finds_nothing_when_only_a_carried_entry_holds_the_local_id() {
+            let mut rig = Rig::new(vec![fixed(1, 5, 6)], (5, 5));
+            rig.tick(1);
+            let mut crossed = cross(&rig.collection, vec![fixed(2, 5, 25)]);
+            frame(&mut crossed, (5, 24));
+
+            assert!(!crossed.remove_by_local_id(1));
+            assert!(crossed.find(Some(DEPARTED), 1).unwrap().is_active());
+        }
+
+        #[test]
         fn an_entrys_id_survives_the_removal_of_an_earlier_entry_and_a_crossing() {
             let mut rig = Rig::new(vec![fixed(1, 5, 9), fixed(2, 5, 4)], (5, 5));
             rig.tick(1);

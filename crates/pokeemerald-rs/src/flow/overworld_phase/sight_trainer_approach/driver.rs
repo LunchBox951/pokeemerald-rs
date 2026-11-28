@@ -5,7 +5,8 @@
 use platform::ButtonState;
 
 use crate::authored_message;
-use crate::overworld::NpcDialog;
+use crate::overworld::dialog::confirm_printer_input;
+use crate::overworld::{DialogOutcome, NpcDialog};
 
 use super::super::sight_trainer_trigger::SightTrainerOutcome;
 use super::super::{ActiveBattle, OverworldPhase};
@@ -223,6 +224,10 @@ impl OverworldPhase {
             ApproachStage::IntroMessage { opened } => {
                 Some(self.advance_intro_message(opened, buttons))
             }
+            ApproachStage::BattleHandoff => {
+                self.dialog = None;
+                Some(self.start_sight_trainer_battle())
+            }
         }
     }
 
@@ -244,7 +249,10 @@ impl OverworldPhase {
              abandoning the approach"
         );
         self.sight_approach = None;
-        if matches!(stage, ApproachStage::IntroMessage { opened: true }) {
+        if matches!(
+            stage,
+            ApproachStage::IntroMessage { opened: true } | ApproachStage::BattleHandoff
+        ) {
             self.dialog = None;
         }
         SightTrainerOutcome::ApproachAdvanced
@@ -259,12 +267,12 @@ impl OverworldPhase {
     /// [`NpcDialog::open_at_speed`] applies
     /// [`NpcDialog::with_waitbuttonpress`], so the finished box holds its
     /// last printed frame -- every glyph still on screen -- until a confirm
-    /// edge lands, and closes on that very tick. `start_sight_trainer_battle`
-    /// therefore runs on the confirm frame itself, with no intervening clear
-    /// and no post-clear reveal delay, exactly as upstream goes straight from
-    /// `waitbuttonpress` to `dotrainerbattle`. The intro strings carry no
-    /// trailing `{P}` for the same reason ([`super::super::sight_trainer_trigger`]'s
-    /// `SightTrainer::intro` docs).
+    /// edge lands. That frame only moves the approach to
+    /// [`ApproachStage::BattleHandoff`]: `RunScriptCommand` returns after a
+    /// native wait finishes (`script.c:80-87`), so `dotrainerbattle` runs on
+    /// the next frame, and with no `closemessage` the box stays up until
+    /// then. The intro strings carry no trailing `{P}` for the same reason
+    /// ([`super::super::sight_trainer_trigger`]'s `SightTrainer::intro` docs).
     ///
     /// `ShowTrainerIntroSpeech` -> `ShowFieldMessage`
     /// (`pokeemerald/src/battle_setup.c:1378-1401`), so the box opens at
@@ -305,12 +313,16 @@ impl OverworldPhase {
                 }
             }
         }
-        self.advance_dialog_frame(buttons);
-        if self.dialog.is_some() {
-            SightTrainerOutcome::ApproachAdvanced
-        } else {
-            self.start_sight_trainer_battle()
+        self.take_field_lock();
+        let confirmed = self.dialog.as_mut().is_none_or(|dialog| {
+            dialog.tick(confirm_printer_input(buttons)) == DialogOutcome::Closed
+        });
+        if confirmed {
+            if let Some(approach) = &mut self.sight_approach {
+                approach.stage = ApproachStage::BattleHandoff;
+            }
         }
+        SightTrainerOutcome::ApproachAdvanced
     }
 
     /// `dotrainerbattle` (`trainer_battle.inc:110`): the approach ends

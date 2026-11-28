@@ -3,6 +3,7 @@
 pub mod abandoned_ship_keys;
 pub mod background_event;
 pub mod collision;
+pub mod dept_store_floor;
 pub mod direction;
 pub mod interaction;
 pub mod map_runtime;
