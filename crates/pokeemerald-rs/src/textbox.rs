@@ -375,6 +375,10 @@ pub(crate) enum WindowOp {
 ///
 /// The fill is a [`WindowOp::ScrollFill`] across the content width at the
 /// bottom `dy` rows, so a later scroll carries it up with everything else.
+///
+/// A scroll only moves content up, so an op whose whole painted extent now lies
+/// above the window can never be seen again; the scroll drops it rather than
+/// shift and replay it for the rest of the message.
 pub(crate) fn scroll_window_ops(
     ops: &mut Vec<WindowOp>,
     dy: i32,
@@ -384,6 +388,7 @@ pub(crate) fn scroll_window_ops(
     for op in ops.iter_mut() {
         op.shift_y(-dy);
     }
+    ops.retain(|op| !op.is_above_window());
     ops.push(WindowOp::ScrollFill(ClearedSpan {
         x: 0,
         y: content_size.1.saturating_sub(dy),
@@ -402,6 +407,24 @@ impl WindowOp {
             Self::KeypadIcon(icon) => icon.y = icon.y.saturating_add(dy),
             Self::DownArrow(arrow) => arrow.y = arrow.y.saturating_add(dy),
         }
+    }
+
+    /// Whether every row this op paints lies above the window's top edge, so
+    /// no later scroll can bring any of it back into view.
+    fn is_above_window(&self) -> bool {
+        let painted_rows = match self {
+            Self::Glyph(_) => assets::fonts::GLYPH_SIZE.cast_signed(),
+            Self::ClearSpan(span) | Self::ScrollFill(span) => span.height,
+            Self::KeypadIcon(icon) => i32::from(icon.height),
+            Self::DownArrow(arrow) => arrow.height,
+        };
+        let top = match self {
+            Self::Glyph(glyph) => glyph.y,
+            Self::ClearSpan(span) | Self::ScrollFill(span) => span.y,
+            Self::KeypadIcon(icon) => icon.y,
+            Self::DownArrow(arrow) => arrow.y,
+        };
+        top.saturating_add(painted_rows) <= 0
     }
 
     /// This op without its rows at or below a window's bottom edge, or `None`
@@ -1709,3 +1732,7 @@ mod tests {
 #[cfg(test)]
 #[path = "textbox/color_tests.rs"]
 mod color_tests;
+
+#[cfg(test)]
+#[path = "textbox/scroll_prune_tests.rs"]
+mod scroll_prune_tests;
