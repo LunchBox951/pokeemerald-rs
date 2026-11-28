@@ -32773,6 +32773,12 @@
           "rust_target": "crates/engine/src/event_data.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "sFrontierManiacStreakThresholds": {
+          "reason": "src/field_specials.c:2126-2138 sFrontierManiacStreakThresholds, the ten (first, second) win-streak threshold pairs of the Frontier Maniac, held as assets::frontier_maniac::frontier_maniac_thresholds indexed by FRONTIER_MANIAC_* (include/constants/battle_frontier.h:72-82, Tower singles 0 through Pyramid 9), separate from the seven FRONTIER_FACILITY_* ids. Values are upstream's as written, including the 255/255 Tower multis and link rows and the Pike 112 that upstream marks as probably a mistake. An index at or past FRONTIER_MANIAC_FACILITY_COUNT (10) is refused, never clamped. The ignored test checks every row against src/field_specials.c. NOT modelled: the win-streak selection and saved-state reading (field_specials.c:2140-2199), the threshold comparison loop (:2200), the message table and its dialogue, and the script wiring.",
+          "rust_target": "crates/assets/src/frontier_maniac.rs",
+          "spec": "S-4",
+          "status": "ported"
         }
       },
       "category": "code.source",
