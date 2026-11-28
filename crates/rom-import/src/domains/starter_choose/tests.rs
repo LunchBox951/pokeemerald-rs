@@ -274,4 +274,10 @@ fn a_compressed_four_bit_sheet_and_tilemap_round_trip() {
         }
     );
     assert_eq!(entries[1].kind, EntryKind::Raw);
+    let payload = |e: &pack_format::DirectoryEntry| &bytes[e.offset..e.offset + e.length];
+    // One pixel per byte: row 0 counts `0..=7`, the other seven rows are zero.
+    let mut sheet = vec![0u8, 1, 2, 3, 4, 5, 6, 7];
+    sheet.resize(64, 0);
+    assert_eq!(payload(&entries[0]), sheet.as_slice());
+    assert_eq!(payload(&entries[1]), tilemap.as_slice());
 }
