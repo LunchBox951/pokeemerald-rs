@@ -313,7 +313,10 @@ fn a_released_sustain_level_above_fifteen_falls_with_the_hardware_envelope() {
     );
     let level_15_peak = square_peak_at_level(130, 15);
 
-    assert_eq!(peak_magnitude(&clock.frame(&mut voice, false)), level_15_peak);
+    assert_eq!(
+        peak_magnitude(&clock.frame(&mut voice, false)),
+        level_15_peak
+    );
     assert_eq!(voice.envelope_volume(), 31);
     voice.note_off();
 
@@ -321,7 +324,10 @@ fn a_released_sustain_level_above_fifteen_falls_with_the_hardware_envelope() {
     let mut silent_above_fifteen = false;
     for _ in 0..40 {
         let peak = peak_magnitude(&clock.frame(&mut voice, false));
-        assert!(peak <= previous_peak, "loudness must not rise while released");
+        assert!(
+            peak <= previous_peak,
+            "loudness must not rise while released"
+        );
         silent_above_fifteen |= voice.envelope_volume() > 15 && peak == 0;
         previous_peak = peak;
     }
