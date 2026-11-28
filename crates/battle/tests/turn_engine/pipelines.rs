@@ -930,3 +930,111 @@ fn above_max_saved_hp_absorb_does_not_underflow() {
         .any(|event| matches!(event, BattleEvent::Drained { healed: 0, .. })));
     assert!(battle.player().current_hp() <= stats.max_hp);
 }
+
+/// Psywave spends accuracy, its sample draws (a rejected sample still
+/// consumes a draw), and the discarded effect chance: no crit roll and no
+/// damage roll. Level 50 with sample 7 deals `50 * (7 * 10 + 50) / 100`.
+#[test]
+fn psywave_applies_its_level_scaled_damage_and_spends_exactly_its_draws() {
+    const PSYWAVE: MoveId = MoveId::PSYWAVE;
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, BULBASAUR, 50, vec![PSYWAVE]);
+    let enemy = max_iv_mon(&dex, SQUIRTLE, 50, vec![TACKLE]);
+    let enemy_max_hp = enemy.stats().max_hp;
+
+    // Battle start (3), Psywave: accuracy, a rejected sample (13), the
+    // accepted sample (7), effect chance; then the enemy's Tackle (4).
+    let script = [0, 0, 0, 0, 13, 7, 0, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[1],
+        BattleEvent::Hit {
+            by_player: true,
+            move_id: PSYWAVE,
+            damage: 60,
+            is_critical: false,
+        },
+        "{events:?}"
+    );
+    assert_eq!(battle.enemy().current_hp(), enemy_max_hp - 60);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::TypeEffectiveness { .. })),
+        "fixed damage clears the matchup flags: {events:?}"
+    );
+    assert_eq!(rng.draws(), script.len());
+}
+
+/// A Dark target takes nothing, but upstream's damage command still runs
+/// before the immunity result is read, so the sample draws are spent.
+#[test]
+fn psywave_against_a_dark_target_reports_no_effect_after_spending_its_sample() {
+    const PSYWAVE: MoveId = MoveId::PSYWAVE;
+    /// `SPECIES_POOCHYENA`.
+    const POOCHYENA: u16 = 286;
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, BULBASAUR, 50, vec![PSYWAVE]);
+    let enemy = max_iv_mon(&dex, POOCHYENA, 5, vec![TACKLE]);
+    let enemy_max_hp = enemy.stats().max_hp;
+
+    // Battle start (3), Psywave: accuracy, rejected sample, accepted
+    // sample, effect chance; then the enemy's Tackle (4).
+    let script = [0, 0, 0, 0, 12, 4, 0, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            BattleEvent::NoEffect {
+                by_player: true,
+                move_id: PSYWAVE,
+            }
+        )),
+        "{events:?}"
+    );
+    assert_eq!(battle.enemy().current_hp(), enemy_max_hp);
+    assert_eq!(rng.draws(), script.len());
+}
+
+/// A miss spends only the accuracy draw; no sample is drawn.
+#[test]
+fn a_psywave_miss_draws_no_sample() {
+    const PSYWAVE: MoveId = MoveId::PSYWAVE;
+    /// `80 % 100 + 1 == 81`, above Psywave's 80 accuracy.
+    const PSYWAVE_ACCURACY_ROLL_MISSES: u16 = 80;
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, BULBASAUR, 50, vec![PSYWAVE]);
+    let enemy = max_iv_mon(&dex, SQUIRTLE, 50, vec![TACKLE]);
+    let enemy_max_hp = enemy.stats().max_hp;
+
+    // Battle start (3), Psywave's accuracy, then the enemy's Tackle (4).
+    let script = [0, 0, 0, PSYWAVE_ACCURACY_ROLL_MISSES, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            BattleEvent::Missed {
+                by_player: true,
+                move_id: PSYWAVE,
+            }
+        )),
+        "{events:?}"
+    );
+    assert_eq!(battle.enemy().current_hp(), enemy_max_hp);
+    assert_eq!(rng.draws(), script.len());
+}
