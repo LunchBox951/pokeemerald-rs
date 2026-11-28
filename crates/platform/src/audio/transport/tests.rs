@@ -362,7 +362,12 @@ fn retries_are_bounded_by_a_burst_then_a_cooldown() {
     let mut now = Duration::ZERO;
     // An attempt reschedules the retry; a discovery probe in a cooldown
     // leaves it alone while the identity stays the same.
-    while attempts.len() < 6 {
+    // The simulation passes in about ten steps; the bound is an independent
+    // cap so a retry deadline that stops advancing fails instead of hanging.
+    for _ in 0..64 {
+        if attempts.len() == 6 {
+            break;
+        }
         let before = rig.transport.next_attempt;
         let next = rig.transport.step(now);
         if rig.transport.next_attempt != before {
@@ -373,6 +378,11 @@ fn retries_are_bounded_by_a_burst_then_a_cooldown() {
         assert_eq!(early, next);
         now = next;
     }
+    assert_eq!(
+        attempts.len(),
+        6,
+        "the retry deadline stalled at {now:?} after attempts {attempts:?}"
+    );
     assert_eq!(
         attempts,
         [MS(0), MS(100), MS(300), MS(700), MS(5_700), MS(5_800)]
@@ -451,7 +461,13 @@ fn a_stream_that_keeps_failing_cannot_reset_the_retry_budget() {
     let mut rig = rig(&w, 4);
     let mut builds = Vec::new();
     let mut now = Duration::ZERO;
-    while builds.len() < 5 {
+    // The simulation passes in about ten steps; the bound is an
+    // independent cap so a retry deadline that stops advancing fails instead
+    // of hanging.
+    for _ in 0..256 {
+        if builds.len() == 5 {
+            break;
+        }
         let before = with(&w).builds;
         rig.transport.step(now);
         if with(&w).builds > before {
@@ -463,6 +479,11 @@ fn a_stream_that_keeps_failing_cannot_reset_the_retry_budget() {
         }
         now = rig.transport.step(now);
     }
+    assert_eq!(
+        builds.len(),
+        5,
+        "the retry deadline stalled at {now:?} after builds {builds:?}"
+    );
     assert_eq!(builds, [MS(0), MS(120), MS(340), MS(760), MS(5_780)]);
 }
 

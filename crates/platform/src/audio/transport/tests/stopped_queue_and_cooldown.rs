@@ -105,10 +105,17 @@ fn an_unchanged_default_waits_out_its_cooldown() {
         now = rig.transport.step(now);
     }
     with(&w).fail_build = false;
-    while now < MS(5_700) {
+    // The cooldown is crossed in a handful of discovery probes; the bound is
+    // an independent cap so a deadline that stops advancing fails instead of
+    // hanging.
+    for _ in 0..64 {
+        if now >= MS(5_700) {
+            break;
+        }
         now = rig.transport.step(now);
         assert_eq!(with(&w).builds, 0, "no attempt before {now:?}");
     }
+    assert!(now >= MS(5_700), "the cooldown deadline stalled at {now:?}");
     rig.transport.step(now);
     assert_eq!(with(&w).builds, 1);
 }
