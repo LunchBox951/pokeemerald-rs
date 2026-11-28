@@ -27,7 +27,8 @@
 //! tables (see [`battle_pike_rooms`]), the Battle Pyramid floor-item and Pickup
 //! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
-//! starting positions (see [`slot_machine_reels`]), the region-map section
+//! starting positions (see [`slot_machine_reels`]), the slot-machine match
+//! payouts (see [`slot_machine_payouts`]), the region-map section
 //! grid (see [`region_map_layout`]), the Battle Palace per-nature
 //! move-group, target and flavor tables (see [`battle_palace`]), the Easy Chat
 //! Events word group (see [`easy_chat_events`]), the facility-class portrait
@@ -104,6 +105,7 @@ pub mod pokenav_city_maps;
 pub mod region_map_layout;
 pub mod ribbon_descriptions;
 pub mod script_refs;
+pub mod slot_machine_payouts;
 pub mod slot_machine_reels;
 pub mod species;
 pub mod species_names;
@@ -211,6 +213,7 @@ pub use region_map_layout::{
     REGION_MAP_WIDTH,
 };
 pub use script_refs::{MapScriptTableRef, ScriptRef};
+pub use slot_machine_payouts::{slot_match_payout, SlotMatch, SlotMatchError, SLOT_MATCH_COUNT};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the

@@ -35448,6 +35448,12 @@
           "rust_target": "crates/assets/src/slot_machine_reels.rs",
           "spec": "S-4",
           "status": "ported"
+        },
+        "sSlotPayouts": {
+          "reason": "src/slot_machine.c:5505-5515 sSlotPayouts, transcribed as the nine payouts (2, 4, 0, 6, 12, 3, 90, 300, 300) in MATCH_* order (src/slot_machine.c:130-140), behind slot_match_payout over the typed SlotMatch, whose constructor refuses MATCH_NONE and any other raw id outside the nine. The replay match pays 0. Pinned by unit tests and an ignored test that re-parses src/slot_machine.c. Data only: match detection, reel stopping, luck selection, coin changes, the payout animation and replay scheduling are NOT modelled. The parent file stays pending.",
+          "rust_target": "crates/assets/src/slot_machine_payouts.rs",
+          "spec": "S-4",
+          "status": "ported"
         }
       },
       "category": "code.source",
