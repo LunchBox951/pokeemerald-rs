@@ -1,5 +1,6 @@
 //! On-foot movement, map and object queries, collision, warps, wild encounters, trainer sight, and background-event targets.
 
+pub mod abandoned_ship_keys;
 pub mod background_event;
 pub mod collision;
 pub mod dept_store_floor;

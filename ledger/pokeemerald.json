@@ -32714,6 +32714,30 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "FoundAbandonedShipRoom1Key": {
+          "reason": "field_specials.c:1328-1337. engine::overworld::abandoned_ship_keys::found_abandoned_ship_room_key with AbandonedShipRoom::Room1: stores the room's flag id (FLAG_HIDDEN_ITEM_ABANDONED_SHIP_RM_1_KEY, resolved through assets::hidden_item_flags, flags.h:577-580) in VAR_0x8004 on both answers, then returns whether that flag is set, changing no flag and no other variable. No RNG. Not modelled: the specialvar dispatch (crate::script::specials), the sparkle field effect and the AbandonedShip_HiddenFloorRooms scripts that branch on VAR_RESULT (scripts.inc:47-83), and the key pickup.",
+          "rust_target": "crates/engine/src/overworld/abandoned_ship_keys.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "FoundAbandonedShipRoom2Key": {
+          "reason": "field_specials.c:1339-1348. engine::overworld::abandoned_ship_keys::found_abandoned_ship_room_key with AbandonedShipRoom::Room2: stores the room's flag id (FLAG_HIDDEN_ITEM_ABANDONED_SHIP_RM_2_KEY, resolved through assets::hidden_item_flags, flags.h:577-580) in VAR_0x8004 on both answers, then returns whether that flag is set, changing no flag and no other variable. No RNG. Not modelled: the specialvar dispatch (crate::script::specials), the sparkle field effect and the AbandonedShip_HiddenFloorRooms scripts that branch on VAR_RESULT (scripts.inc:47-83), and the key pickup.",
+          "rust_target": "crates/engine/src/overworld/abandoned_ship_keys.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "FoundAbandonedShipRoom4Key": {
+          "reason": "field_specials.c:1350-1359. engine::overworld::abandoned_ship_keys::found_abandoned_ship_room_key with AbandonedShipRoom::Room4: stores the room's flag id (FLAG_HIDDEN_ITEM_ABANDONED_SHIP_RM_4_KEY, resolved through assets::hidden_item_flags, flags.h:577-580) in VAR_0x8004 on both answers, then returns whether that flag is set, changing no flag and no other variable. No RNG. Not modelled: the specialvar dispatch (crate::script::specials), the sparkle field effect and the AbandonedShip_HiddenFloorRooms scripts that branch on VAR_RESULT (scripts.inc:47-83), and the key pickup.",
+          "rust_target": "crates/engine/src/overworld/abandoned_ship_keys.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "FoundAbandonedShipRoom6Key": {
+          "reason": "field_specials.c:1361-1370. engine::overworld::abandoned_ship_keys::found_abandoned_ship_room_key with AbandonedShipRoom::Room6: stores the room's flag id (FLAG_HIDDEN_ITEM_ABANDONED_SHIP_RM_6_KEY, resolved through assets::hidden_item_flags, flags.h:577-580) in VAR_0x8004 on both answers, then returns whether that flag is set, changing no flag and no other variable. No RNG. Not modelled: the specialvar dispatch (crate::script::specials), the sparkle field effect and the AbandonedShip_HiddenFloorRooms scripts that branch on VAR_RESULT (scripts.inc:47-83), and the key pickup.",
+          "rust_target": "crates/engine/src/overworld/abandoned_ship_keys.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "GetDaysUntilPacifidlogTMAvailable": {
           "reason": "field_specials.c:1555-1564, read by data/maps/PacifidlogTown_House2/scripts.inc:20-23. EventData::days_until_pacifidlog_tm_available reads VAR_PACIFIDLOG_TM_RECEIVED_DAY (vars.h:214) as a u16 and keeps upstream's branch order on the signed difference (the s16 gLocalTime.days minus the u16 day, as C's promoted int): zero once seven days passed, then 8 for a negative local day, otherwise 7 minus the difference truncated to the u16 return. A recorded day ahead of the local day is not clamped (9 after recording 10 gives 8, 3 gives 14) and a recorded day of 0xFFFF wraps (day 0 gives 6, day 6 gives 0), as does a negative day already stored as its u16 image. The local day count is a caller-supplied i16 and makes no RNG draw. Not modelled: where gLocalTime.days comes from (the real-time clock policy, issue #2396), the GetDaysUntilPacifidlogTMAvailable special's dispatch (crate::script::specials lists it by name only), and the PacifidlogTown_House2 script's VAR_RESULT branch that clears FLAG_RECEIVED_FANCLUB_TM_THIS_WEEK.",
           "rust_target": "crates/engine/src/event_data.rs",
