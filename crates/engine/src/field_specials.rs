@@ -1,7 +1,12 @@
 //! Field-script specials that read party state.
 //!
-//! Only the friendship classifier is modelled here. Choosing the lead Pokemon,
-//! dispatching the special and branching on its result belong to callers.
+//! Only the friendship classifier and the effort-value maxed-out predicate are
+//! modelled here. Choosing the lead Pokemon, dispatching the special and
+//! branching on its result belong to callers.
+
+mod effort;
+
+pub use effort::evs_are_maxed_out;
 
 /// Friendship category returned by upstream's `GetLeadMonFriendshipScore`
 /// (`src/field_specials.c:949-966`).
