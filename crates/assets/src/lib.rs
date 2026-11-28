@@ -34,7 +34,8 @@
 //! and trainer-class lookups (see [`facility_classes`]), the four NPC trade
 //! offers with their mail messages (see [`ingame_trades`]), and the Lilycove
 //! Lady quiz, favor, and contest data (see [`lilycove_lady`]), and the Frontier
-//! Brain appearance thresholds (see [`frontier_brain_thresholds`]); more data
+//! Brain appearance thresholds (see [`frontier_brain_thresholds`]), and the
+//! Frontier Maniac streak thresholds (see [`frontier_maniac`]); more data
 //! follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
@@ -83,6 +84,7 @@ pub mod facility_classes;
 pub mod fonts;
 pub mod frontier_brain_thresholds;
 pub mod frontier_exchange_corner;
+pub mod frontier_maniac;
 pub mod hidden_item_flags;
 pub mod ingame_trades;
 pub mod items;
@@ -174,6 +176,10 @@ pub use fonts::{
 pub use frontier_brain_thresholds::{
     frontier_brain_thresholds, FrontierBrainThresholds, FrontierBrainThresholdsError,
     FRONTIER_FACILITY_COUNT,
+};
+pub use frontier_maniac::{
+    frontier_maniac_thresholds, FrontierManiacThresholds, FrontierManiacThresholdsError,
+    FRONTIER_MANIAC_FACILITY_COUNT,
 };
 pub use ingame_trades::{
     InGameTrade, InGameTradeError, InGameTradeId, InGameTradeMail, InGameTradeTable, TradeOtGender,
