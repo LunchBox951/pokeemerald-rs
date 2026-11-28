@@ -29374,6 +29374,12 @@
     },
     "src/battle_pyramid.c": {
       "artifacts": {
+        "sBorderedSquareIds": {
+          "reason": "src/battle_pyramid.c:812-830 sBorderedSquareIds, transcribed as the 16 squares of a floor's 4x4 grid, each with 4 ordered neighbour slots, behind pyramid_square_neighbors, which refuses a square at or above 16. An absent neighbour reads as None, not as upstream's byte sentinel; a compile-time check pins that every neighbour is a square, present neighbours come first and ascend, and adjacency is reciprocal. Pinned row by row by unit tests and an ignored test that re-parses src/battle_pyramid.c. Data only: floor generation, connectivity decisions, map assets, trainer placement and RNG are NOT modelled.",
+          "rust_target": "crates/assets/src/pyramid_adjacency.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "sPickupItemOffsets": {
           "reason": "src/battle_pyramid.c:411 sPickupItemOffsets, transcribed as the first row of each of the 7 floors in the floor-row list (0, 9, 18, 27, 36, 45, 54), behind floor_item_row_offset, which refuses an out-of-range floor. Pinned by unit tests and an ignored test that re-parses src/battle_pyramid.c.",
           "rust_target": "crates/assets/src/battle_pyramid_items.rs",
