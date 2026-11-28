@@ -222,11 +222,12 @@ mod tests {
                 continue;
             };
             let facility = ids[index.trim_start_matches('[').trim()];
-            let values = values
-                .split_once('{')
-                .and_then(|(_, rest)| rest.split_once('}'))
-                .map(|(inside, _)| inside)
-                .unwrap_or_else(|| panic!("braced row expected: `{line}`"));
+            let Some((_, rest)) = values.split_once('{') else {
+                panic!("braced row expected: `{line}`");
+            };
+            let Some((values, _)) = rest.split_once('}') else {
+                panic!("closing brace expected: `{line}`");
+            };
             let bytes: Vec<u8> = values
                 .split(',')
                 .map(|value| value.trim().parse().expect("a byte"))
