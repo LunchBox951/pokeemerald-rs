@@ -365,6 +365,25 @@ pub enum BattleEvent {
         /// The move that applied the effect.
         move_id: MoveId,
     },
+    /// A restore-HP move healed its user (`STRINGID_PKMNREGAINEDHEALTH`,
+    /// `BattleScript_EffectRestoreHp`, `data/battle_scripts_1.s:672`-`:684`).
+    RegainedHealth {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that healed.
+        move_id: MoveId,
+        /// HP the user actually regained, after the cap at maximum HP.
+        healed: u32,
+    },
+    /// A restore-HP move found its user at maximum HP and healed nothing
+    /// (`STRINGID_PKMNHPFULL`, `BattleScript_AlreadyAtFullHp`,
+    /// `data/battle_scripts_1.s:2042`-`:2046`). The move still spent its PP.
+    HpAlreadyFull {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that failed to heal.
+        move_id: MoveId,
+    },
     /// The target's Insomnia or Vital Spirit made Yawn ineffective
     /// (`STRINGID_PKMNSXMADEITINEFFECTIVE`,
     /// `BattleScript_PrintBankAbilityMadeIneffective`,

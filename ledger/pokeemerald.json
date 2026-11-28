@@ -122,6 +122,12 @@
     },
     "data/battle_scripts_1.s": {
       "artifacts": {
+        "BattleScript_AlreadyAtFullHp": {
+          "reason": "data/battle_scripts_1.s:2042-2046, the failure target of tryhealhalfhealth in BattleScript_EffectRestoreHp (:676). Modelled only for that caller, as BattleEvent::HpAlreadyFull (STRINGID_PKMNHPFULL) from crate::battle::execute::Battle::execute_restore_hp_move: no HP changes, no status changes, no Random() call, and the PP was already spent by ppreduce. The script sets no gMoveResultFlags, so the move still records as landed. NOT modelled: the pause and waitmessage delays, and the script's other callers, Rest (trysetrest, :741) and the weather-based heal (recoverbasedonsunlight, :1737).",
+          "rust_target": "crates/battle/src/battle/execute/restore_hp.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "BattleScript_EffectAbsorb": {
           "reason": "data/battle_scripts_1.s:322-:360, EFFECT_ABSORB (Absorb, Mega Drain, Giga Drain). Reproduced end to end: the single accuracycheck, the ordinary critcalc/damagecalc/typecalc/adjustnormaldamage damage half (hit::damage_core), datahpupdate BS_TARGET's clamp, negativedamage, the jumpifability BS_TARGET ABILITY_LIQUID_OOZE branch at :345 with its manipulatedamage DMG_CHANGE_SIGN, datahpupdate BS_ATTACKER's max-HP clamp on the heal, and tryfaintmon BS_ATTACKER BEFORE tryfaintmon BS_TARGET (:358-:359). The script ends with goto BattleScript_MoveEnd (:360) and therefore never reaches seteffectwithchance, so a landed drain costs 3 draws where an ordinary landed move costs 4. NOT modelled: orword gHitMarker HITMARKER_IGNORE_SUBSTITUTE at :344 (no Substitute anywhere in this crate) and the animation/wait/sound instructions (no presentation layer).",
           "rust_target": "crates/battle/src/drain.rs",
@@ -191,6 +197,12 @@
         "BattleScript_EffectRecoil": {
           "reason": "data/battle_scripts_1.s:897-901 (EffectRecoil's MOVE_EFFECT_RECOIL_25 | MOVE_EFFECT_AFFECTS_USER | MOVE_EFFECT_CERTAIN, then goto EffectHit for Struggle -- the only reachable move here, since Struggle is admitted through hit::ensure_resolvable's own special case and no other EFFECT_RECOIL move is admitted by ensure_executable) and :3938-3949 (BattleScript_MoveEffectRecoil / DoRecoil: gHpDealt/4 floored to 1 at battle_script_commands.c:2636-2642, applied to the attacker before its own tryfaintmon, ahead of the target's tryfaintmon at :266). Modelled for Struggle only: Battle::execute_hit_move applies max(1, target HP actually lost / 4) recoil to the attacker immediately after the target's Hit event, settling the attacker's own faint first, then the target's -- bypassing Rock Head exactly as the jumpifmove MOVE_STRUGGLE branch does (no Rock Head modelling exists this slice). NOT modelled: Take Down and Submission's own EFFECT_RECOIL branch (both remain refused by ensure_executable), the Rock Head jumpifability gate, and the certain-effect message/animation steps.",
           "rust_target": "crates/battle/src/battle/execute.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "BattleScript_EffectRestoreHp": {
+          "reason": "data/battle_scripts_1.s:672-684, dispatched from EFFECT_RESTORE_HP (32; Recover and Slack Off). Modelled by crate::battle::execute::Battle::execute_restore_hp_move after the shared attackcanceler, attackstring and ppreduce steps (see src/battle_script_commands.c#Cmd_attackcanceler and #Cmd_ppreduce): UsedMove precedes the outcome, the move spends one PP even against a Pressure holder because it targets the user, and neither path draws from the RNG, since the script has no accuracycheck despite Slack Off's accuracy of 100. src/battle_script_commands.c#Cmd_tryhealhalfhealth either jumps to BattleScript_AlreadyAtFullHp (HpAlreadyFull) or the user regains half its maximum HP, capped at maximum HP (RegainedHealth, STRINGID_PKMNREGAINEDHEALTH). The user's primary status is untouched on both paths. NOT modelled: attackanimation and waitanimation, the healthbarupdate and datahpupdate presentation, the HITMARKER_IGNORE_SUBSTITUTE write (no Substitute in this battle model), the waitmessage delay, and the Snatch steal at Cmd_attackcanceler (battle_script_commands.c:970-980, FLAG_SNATCH_AFFECTED). The battle_narration layer in crates/pokeemerald-rs maps the two events to their strings but plays no animation or health bar.",
+          "rust_target": "crates/battle/src/battle/execute/restore_hp.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
@@ -29628,6 +29640,12 @@
         "Cmd_switchoutabilities": {
           "reason": "battle_script_commands.c:9590-:9603. Battle::switch_enemy_to clears the primary status of a leaving Natural Cure member before it returns to its party slot, for the trainer side's switch actions. Other abilities have no switch-out effect here, as upstream. NOT modelled: the player-side switch action, Pursuit/forced-out (Roar, Whirlwind) callers and doubles.",
           "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_tryhealhalfhealth": {
+          "reason": "battle_script_commands.c:6615-6631, attacker branch only (BS_ATTACKER, :6619-6620). crate::battle::execute::restore_hp::half_max_hp halves the user's maximum HP rounding down and raises a zero to one (:6622-6624), and resolve_restore_hp takes the failure jump exactly when current HP equals maximum HP (:6627-6628), otherwise falls through (:6630). The command makes no Random() call. The heal is not carried in gBattleMoveDamage (:6625): Battle::execute_restore_hp_move applies it with BattlePokemon::heal_hp, which caps at maximum HP as Cmd_datahpupdate's HP-gain branch does (:1896-1900), and reports the HP actually gained in BattleEvent::RegainedHealth; the failure jump is BattleEvent::HpAlreadyFull. A one-HP maximum is always full, so the minimum of one never heals. NOT modelled: the BS_TARGET branch, whose only user is the Present heal script (data/battle_scripts_1.s:2031), and the gBattleMoveDamage hand-off to later commands.",
+          "rust_target": "crates/battle/src/battle/execute/restore_hp.rs",
           "spec": "S-6",
           "status": "stubbed"
         },

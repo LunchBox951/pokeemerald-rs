@@ -138,6 +138,12 @@ fn move_events() -> Vec<BattleEvent> {
 fn ability_and_status_events() -> Vec<BattleEvent> {
     let (by_player, move_id) = (BY_PLAYER, MOVE);
     vec![
+        BattleEvent::RegainedHealth {
+            by_player,
+            move_id,
+            healed: 4,
+        },
+        BattleEvent::HpAlreadyFull { by_player, move_id },
         BattleEvent::MadeDrowsy { by_player, move_id },
         BattleEvent::YawnAbilityProtected {
             by_player,
@@ -265,11 +271,12 @@ fn party_events() -> Vec<BattleEvent> {
 }
 
 /// How many variants `BattleEvent` has.
-const VARIANTS: usize = 97;
+const VARIANTS: usize = 99;
 
 /// A variant's position in `BattleEvent`. The match has no wildcard, so a new
 /// variant stops this file compiling until it is listed here and in the
 /// fixture above.
+#[expect(clippy::too_many_lines, reason = "one arm per BattleEvent variant")]
 const fn variant(event: &BattleEvent) -> usize {
     match event {
         BattleEvent::RunAttempt { .. } => 0,
@@ -369,6 +376,8 @@ const fn variant(event: &BattleEvent) -> usize {
         BattleEvent::BurnedByFlameBody { .. } => 94,
         BattleEvent::BurnedByAttackerSynchronize { .. } => 95,
         BattleEvent::AttackerSynchronizeFireTypeProtected { .. } => 96,
+        BattleEvent::RegainedHealth { .. } => 97,
+        BattleEvent::HpAlreadyFull { .. } => 98,
     }
 }
 
@@ -432,4 +441,37 @@ fn a_free_slot_learn_prints_the_learned_line_a_replacement_ends_with() {
     assert_eq!(learned.len(), 1);
     assert_eq!(learned[0].template, TemplateId::Table(PKMNLEARNEDMOVE));
     assert_eq!(Some(&learned[0]), replaced.last());
+}
+
+/// Both restore-HP outcomes print one table string naming the user, whose
+/// ids are `STRINGID_PKMNREGAINEDHEALTH` and `STRINGID_PKMNHPFULL`.
+#[test]
+fn restore_hp_outcomes_print_the_regained_and_full_hp_strings() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let move_id = MoveId::RECOVER;
+
+    let regained = narrator
+        .requests(
+            &AssetNames,
+            &BattleEvent::RegainedHealth {
+                by_player: true,
+                move_id,
+                healed: 52,
+            },
+        )
+        .unwrap();
+    let full = narrator
+        .requests(
+            &AssetNames,
+            &BattleEvent::HpAlreadyFull {
+                by_player: true,
+                move_id,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(regained.len(), 1);
+    assert_eq!(regained[0].template, TemplateId::Table(75));
+    assert_eq!(full.len(), 1);
+    assert_eq!(full[0].template, TemplateId::Table(76));
 }

@@ -111,6 +111,9 @@ pub(super) fn requests(
     if let Some(requests) = yawn_protection_results(narrator, event) {
         return Ok(requests);
     }
+    if let Some(requests) = restore_hp_results(narrator, event) {
+        return Ok(requests);
+    }
     if let Some(requests) = status_results(narrator, event) {
         return Ok(requests);
     }
@@ -474,6 +477,21 @@ fn yawn_protection_results(
         .with_ability(holder, ability);
     context.scripting = Some(holder);
     Some(vec![table(id::PKMNSXMADEITINEFFECTIVE, context)])
+}
+
+/// `BattleScript_EffectRestoreHp`'s heal and `BattleScript_AlreadyAtFullHp`
+/// (`data/battle_scripts_1.s:672`-`:684`, `:2042`-`:2046`): both print the
+/// user's name, because `Cmd_tryhealhalfhealth` makes the user the target
+/// (`src/battle_script_commands.c:6619`-`:6620`).
+fn restore_hp_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
+    let (by_player, string) = match *event {
+        BattleEvent::RegainedHealth { by_player, .. } => (by_player, id::PKMNREGAINEDHEALTH),
+        BattleEvent::HpAlreadyFull { by_player, .. } => (by_player, id::PKMNHPFULL),
+        _ => return None,
+    };
+    let mut context = narrator.context();
+    context.defender = Some(Side::user(by_player));
+    Some(vec![table(string, context)])
 }
 
 /// Flame Body's contact burn and its Synchronize reflection
