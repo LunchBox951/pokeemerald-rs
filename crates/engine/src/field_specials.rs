@@ -1,7 +1,12 @@
 //! Field-script specials that read party state.
 //!
-//! Only the friendship classifier is modelled here. Choosing the lead Pokemon,
-//! dispatching the special and branching on its result belong to callers.
+//! Only the friendship classifier and the Grass-type party check are modelled
+//! here. Choosing the lead Pokemon, reading the party, dispatching the specials
+//! and branching on their results belong to callers.
+
+mod party_types;
+
+pub use party_types::{party_has_grass_type, PartySlot};
 
 /// Friendship category returned by upstream's `GetLeadMonFriendshipScore`
 /// (`src/field_specials.c:949-966`).
