@@ -15,7 +15,7 @@ fn a_trigger_stopped_square_keeps_its_duty_position_running() {
     let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
     muted.render(&mut acc, &[]);
     assert!(
-        acc.iter().all(|&sample| sample == (28, 28)),
+        acc.iter().all(|&sample| sample == (30, 30)),
         "the overflow stops the channel on the level its trigger latched",
     );
     for _ in 0..FRAME_SAMPLES {
@@ -51,7 +51,7 @@ fn square1_upward_sweep_overflow_is_born_muted_and_revives_on_a_safe_trigger() {
         muted.begin_frame(false);
         muted.render(&mut acc, &[]);
         assert!(
-            acc.iter().all(|&sample| sample == (28, 28)),
+            acc.iter().all(|&sample| sample == (30, 30)),
             "a born-stopped channel holds its trigger's level from frame 0"
         );
         assert!(muted.hardware_muted && muted.sweep_held);
@@ -631,7 +631,7 @@ fn live_track_volume_update_retriggers_channel1_sweep_from_the_current_frequency
     let mut acc = vec![(0i32, 0i32); 8];
     voice.render(&mut acc, &[]);
     assert!(
-        acc.iter().all(|&sample| sample == (28, 28)),
+        acc.iter().all(|&sample| sample == (30, 30)),
         "a live volume update must retrigger channel 1, reloading the sweep shadow from \
          the bent frequency and finding it overflows; the channel holds the re-latched level"
     );
@@ -655,7 +655,7 @@ fn a_trigger_time_sweep_overflow_only_stops_the_channel_until_the_next_safe_trig
     let mut muted = vec![(0i32, 0i32); 8];
     voice.render(&mut muted, &[]);
     assert!(
-        muted.iter().all(|&sample| sample == (28, 28)),
+        muted.iter().all(|&sample| sample == (30, 30)),
         "the overflowing trigger must stop the channel on the level it re-latched"
     );
 

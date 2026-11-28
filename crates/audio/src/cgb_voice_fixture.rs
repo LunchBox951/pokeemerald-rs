@@ -4,10 +4,12 @@ use crate::psg::{FrameClocks, FrameSequencer, WaveChannel};
 use std::sync::Arc;
 
 pub(super) const TEST_KEY: u8 = 60;
+/// The largest per-side volume. Two full sides sum to 508, which `CgbModVol`
+/// truncates to a byte (252) before dividing, so a centred note still resolves
+/// to goal 15 rather than 31 (`m4a.c:910-911`).
 pub(super) const FULL_TRACK_VOLUME: u8 = u8::MAX;
 /// The largest track volume an unmodulated track reaches; two such sides centre
-/// to envelope level 15, the last `gCgb3Vol` entry. `FULL_TRACK_VOLUME` is an
-/// amplitude-modulated extreme that lifts a centred wave past the table.
+/// to envelope level 15, the last `gCgb3Vol` entry.
 pub(super) const MAX_TRACK_VOLUME: u8 = 127;
 pub(super) const FULL_VELOCITY: u8 = 127;
 pub(super) const MAX_ADSR_LEVEL: u8 = 15;

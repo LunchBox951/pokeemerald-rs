@@ -28,7 +28,7 @@ mod hardware;
 use hardware::NRX2_ENV_DIR_INC;
 pub(crate) use hardware::{HardwareEnvelopePacing, HardwareEnvelopeVolume};
 
-const CGB_ENVELOPE_LEVELS: u32 = 16;
+const CGB_ENVELOPE_LEVELS: u8 = 16;
 const CGB_ENVELOPE_LEVEL_MAX: u8 = 15;
 /// Only the low nibble of the envelope volume reaches NRx2's high nibble (`m4a.c:1222`).
 const NRX2_VOLUME_NIBBLE_MASK: u8 = 0x0F;
@@ -89,10 +89,12 @@ pub struct CgbEnvelope {
 
 /// The sustain goal `CgbModVol` stores into its `u8` field (`m4a.c:921`). A
 /// full-byte `xSUST` operand can push the rounded-up product past 255, and the
-/// store keeps only the low byte instead of saturating.
+/// store keeps only the low byte instead of saturating. A goal resolved by
+/// [`cgb_envelope_goal`] is at most 15, so the product tops out at 240 and only
+/// a goal handed to [`CgbEnvelope::new`] directly can wrap.
 fn sustain_goal_of(goal: u8, sustain: u8) -> u8 {
     let scaled = u32::from(goal) * u32::from(sustain);
-    let rounded_up = scaled.div_ceil(CGB_ENVELOPE_LEVELS);
+    let rounded_up = scaled.div_ceil(u32::from(CGB_ENVELOPE_LEVELS));
     rounded_up.to_le_bytes()[0]
 }
 
@@ -431,17 +433,17 @@ pub fn cgb_pan(right: u8, left: u8) -> Panning {
 
 /// Resolve an envelope goal from the stereo base volumes and panning.
 ///
-/// Centred goals keep the full combined volume and can reach 31. Hard-panned
-/// goals stop at 15 (`CgbModVol`, `m4a.c:903..921`).
+/// The stereo sum is stored into a byte before it is divided by 16, so a sum
+/// above 255 wraps first (`CgbModVol`, `m4a.c:903..921`; the field is a `u8`,
+/// `m4a_internal.h:99`). A centred goal therefore tops out at 15 as well, and
+/// the hard-panned clamp to 15 only runs after that truncated divide.
 #[must_use]
 pub fn cgb_envelope_goal(right: u8, left: u8, panning: Panning) -> u8 {
-    let combined_goal = (u32::from(right) + u32::from(left)) / CGB_ENVELOPE_LEVELS;
+    let combined = right.wrapping_add(left);
+    let goal = combined / CGB_ENVELOPE_LEVELS;
     match panning {
-        Panning::Both => u8::try_from(combined_goal).unwrap_or(u8::MAX),
-        Panning::Left | Panning::Right => {
-            u8::try_from(combined_goal.min(u32::from(CGB_ENVELOPE_LEVEL_MAX)))
-                .unwrap_or(CGB_ENVELOPE_LEVEL_MAX)
-        }
+        Panning::Both => goal,
+        Panning::Left | Panning::Right => goal.min(CGB_ENVELOPE_LEVEL_MAX),
     }
 }
 
@@ -906,13 +908,22 @@ mod tests {
     }
 
     #[test]
-    fn centred_goal_can_exceed_a_hard_panned_goal() {
-        let centred = cgb_envelope_goal(255, 255, Panning::Both);
-        let panned = cgb_envelope_goal(255, 0, Panning::Right);
+    fn combined_goal_truncates_to_a_byte_before_dividing() {
+        // `CgbModVol` stores the stereo sum into a `u8` before dividing by 16
+        // (`m4a.c:910-911`, `m4a_internal.h:99`), so sums wrap at 256.
+        assert_eq!(cgb_envelope_goal(255, 0, Panning::Both), 15);
+        assert_eq!(cgb_envelope_goal(255, 1, Panning::Both), 0);
+        assert_eq!(cgb_envelope_goal(255, 255, Panning::Both), 15);
+        assert_eq!(cgb_envelope_goal(200, 100, Panning::Both), 2);
+        assert_eq!(cgb_envelope_goal(128, 128, Panning::Both), 0);
+    }
 
-        assert_eq!(centred, 31);
-        assert_eq!(panned, 15);
-        assert!(centred > panned);
+    #[test]
+    fn hard_panned_goal_truncates_before_the_fifteen_clamp() {
+        assert_eq!(cgb_envelope_goal(255, 0, Panning::Right), 15);
+        assert_eq!(cgb_envelope_goal(0, 255, Panning::Left), 15);
+        // 250 + 120 = 370 wraps to 114, so the goal is 7, not the clamped 15.
+        assert_eq!(cgb_envelope_goal(250, 120, Panning::Right), 7);
     }
 }
 

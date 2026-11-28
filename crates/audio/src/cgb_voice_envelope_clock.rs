@@ -129,7 +129,7 @@ fn a_period_zero_envelope_holds_its_level_through_every_event() {
         let next = clock.frame(&mut voice, false);
         assert_eq!(peak_magnitude(&next), peak_magnitude(&first));
     }
-    assert_eq!(voice.hardware_volume(), 14);
+    assert_eq!(voice.hardware_volume(), 15);
 }
 
 /// A square an event saturates at zero stops running its duty from that
