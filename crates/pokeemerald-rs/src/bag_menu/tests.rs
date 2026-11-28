@@ -723,6 +723,7 @@ fn a_held_down_repeats_while_swapping_items() {
     assert!(screen.swap().is_some(), "the swap is still under way");
 }
 
+mod background;
 mod move_data;
 mod palette;
 mod pocket_arrows;
