@@ -25,7 +25,8 @@
 //! [`battle_factory_styles`]), the Battle Pike wild Pokémon rosters (see
 //! [`battle_pike_wild_mons`]), the Battle Pike room hint and Queen-healing
 //! tables (see [`battle_pike_rooms`]), the Battle Pyramid floor-item and Pickup
-//! distributions (see [`battle_pyramid_items`]), the Trainer Hill prize
+//! distributions (see [`battle_pyramid_items`]), the Battle Pyramid square
+//! adjacency table (see [`pyramid_adjacency`]), the Trainer Hill prize
 //! lists (see [`trainer_hill_prizes`]), the slot-machine reel strips and
 //! starting positions (see [`slot_machine_reels`]), the region-map section
 //! grid (see [`region_map_layout`]), the Battle Palace per-nature
@@ -101,6 +102,7 @@ pub mod pickup;
 pub mod pokeblock_flavors;
 pub mod pokedex;
 pub mod pokenav_city_maps;
+pub mod pyramid_adjacency;
 pub mod region_map_layout;
 pub mod ribbon_descriptions;
 pub mod script_refs;
@@ -206,6 +208,9 @@ pub use new_game_flags::{
     TRUCK_INTRO_VARS_MALE, WALL_CLOCK_VIGOROTH_HIDE_FLAGS,
 };
 pub use pokenav_city_maps::{CityMapCatalog, CityMapEntry, CityMapId, CITY_MAP_COUNT};
+pub use pyramid_adjacency::{
+    pyramid_square_neighbors, PyramidSquareError, PYRAMID_SQUARES, PYRAMID_SQUARE_NEIGHBOR_SLOTS,
+};
 pub use region_map_layout::{
     map_section_at, map_section_layout, RegionMapLayoutError, MAPSEC_NONE, REGION_MAP_HEIGHT,
     REGION_MAP_WIDTH,
